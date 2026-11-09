@@ -323,6 +323,8 @@ pub struct Engine {
     thumbs_at: Option<f64>,
     /// Passes in the last frame; tests use it to catch work creeping into every frame.
     last_passes: usize,
+    /// Whether this frame's preview was already drawn from a clip on screen.
+    previewed: bool,
 }
 
 const TRANSPARENT: wgpu::Color = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
@@ -453,6 +455,7 @@ impl Engine {
             shared: None,
             thumbs_at: None,
             last_passes: 0,
+            previewed: false,
         }
     }
 
@@ -881,6 +884,38 @@ impl Engine {
         Some(out)
     }
 
+    /// Draws a clip into `target` through its Transform and effects, and copies the result
+    /// into the preview when it is the previewed clip. `slot` is as for `clip_passes`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_clip(
+        &mut self,
+        passes: &mut Vec<Pass>,
+        t: &Targets,
+        clip: &Clip,
+        time: f64,
+        target: &Target,
+        now: f64,
+        inputs: &ModInputs,
+        preview: Option<ClipId>,
+        slot: u64,
+    ) {
+        self.clip_passes(passes, &t.fx, clip, time, inputs, target, slot);
+        if clip_has_fx(clip) {
+            let mut src = target.clone();
+            if !clip.transform.is_noop() {
+                src = self.effect_chain(passes, &t.fx, src, std::slice::from_ref(&clip.transform), now, inputs);
+            }
+            src = self.effect_chain(passes, &t.fx, src, &clip.effects, now, inputs);
+            if src.id != target.id {
+                passes.push(Self::blend_pass(target, &src, &src, MODE_MIX, 0.0));
+            }
+        }
+        if preview == Some(clip.id) && !self.previewed {
+            passes.push(Self::blend_pass(&t.preview, target, target, MODE_MIX, 0.0));
+            self.previewed = true;
+        }
+    }
+
     /// Runs a finished group mix through the group's effects and blends it into the
     /// composition. Returns the composition's new ping-pong slot.
     #[allow(clippy::too_many_arguments)]
@@ -933,6 +968,7 @@ impl Engine {
         self.fx_seen.clear();
         let beat = inputs.beat;
         let mut passes = vec![Pass::clear(&t.comp[0], wgpu::Color::BLACK)];
+        self.previewed = false;
         let mut cur = 0;
         // The group being mixed (index, ping-pong slot), if any. A group's layers are mixed
         // on their own, from transparent, then blended into the composition as one.
@@ -951,22 +987,26 @@ impl Engine {
             let layer_opacity = comp.layer_opacity(layer, inputs);
             let (src, opacity) = match (frame.incoming, frame.outgoing) {
                 (Some((clip, time)), None) => {
-                    self.clip_passes(&mut passes, &t.fx, clip, time, inputs, &t.clip_a, 0);
+                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, inputs, preview, 0);
                     (&t.clip_a, layer_opacity * frame.mix)
                 }
                 (None, Some((clip, time))) => {
-                    self.clip_passes(&mut passes, &t.fx, clip, time, inputs, &t.clip_a, 0);
+                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, inputs, preview, 0);
                     (&t.clip_a, layer_opacity * (1.0 - frame.mix))
                 }
                 (Some((inc, inc_t)), Some((out, out_t))) => {
-                    self.clip_passes(&mut passes, &t.fx, out, out_t, inputs, &t.clip_a, 0);
-                    self.clip_passes(&mut passes, &t.fx, inc, inc_t, inputs, &t.clip_b, 0);
+                    self.draw_clip(&mut passes, &t, out, out_t, &t.clip_a, now, inputs, preview, 0);
+                    self.draw_clip(&mut passes, &t, inc, inc_t, &t.clip_b, now, inputs, preview, 0);
                     passes.push(Self::blend_pass(&t.layer_mix, &t.clip_a, &t.clip_b, MODE_MIX, frame.mix));
                     (&t.layer_mix, layer_opacity)
                 }
                 (None, None) => continue,
             };
-            let src = &self.effect_chain(&mut passes, &t.fx, src.clone(), &layer.effects, now, inputs);
+            let mut src = src.clone();
+            if !layer.transform.is_noop() {
+                src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.transform), now, inputs);
+            }
+            let src = &self.effect_chain(&mut passes, &t.fx, src, &layer.effects, now, inputs);
             let mode = layer.blend.shader_id();
             match &mut open {
                 Some((_, slot)) => {
@@ -987,12 +1027,21 @@ impl Engine {
         if let Some(shared) = &self.shared {
             passes.push(Self::blend_pass(shared, &t.output, &t.output, MODE_MIX, 0.0));
         }
-        match preview.and_then(|id| comp.find_clip(id)).and_then(|(l, c)| comp.clip(l, c)) {
-            Some(clip) => {
-                let time = clip_time(comp, clip, now, inputs.beat);
-                self.clip_passes(&mut passes, &t.fx, clip, time, inputs, &t.preview, 1);
+        // A clip that is on screen was copied into the preview, with its effects, as it was
+        // drawn. Any other previewed clip is drawn here, through its own effects.
+        if !self.previewed {
+            match preview.and_then(|id| comp.find_clip(id)).and_then(|(l, c)| comp.clip(l, c)) {
+                Some(clip) => {
+                    let time = clip_time(comp, clip, now, inputs.beat);
+                    if clip_has_fx(clip) {
+                        self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, inputs, None, 1);
+                        passes.push(Self::blend_pass(&t.preview, &t.clip_a, &t.clip_a, MODE_MIX, 0.0));
+                    } else {
+                        self.clip_passes(&mut passes, &t.fx, clip, time, inputs, &t.preview, 1);
+                    }
+                }
+                None => passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK)),
             }
-            None => passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK)),
         }
         for clip in comp.all_clips().filter(|_| refresh_thumbs) {
             if let Some(thumb) = self.thumbs.get(&clip.id).cloned() {
@@ -1174,6 +1223,11 @@ impl Engine {
 
 /// Local time of a clip: its playing position if it's live on its layer, otherwise
 /// free-running from the start of the composition clock.
+/// Whether a clip's Transform or effects change what it draws.
+fn clip_has_fx(clip: &Clip) -> bool {
+    !clip.transform.is_noop() || clip.effects.iter().any(|fx| fx.enabled)
+}
+
 fn clip_time(comp: &Composition, clip: &Clip, now: f64, beat: f64) -> f64 {
     match comp.layers.iter().find_map(|l| l.active.filter(|p| p.clip_id == clip.id)) {
         Some(p) => p.time(clip, now, beat).secs,
@@ -1567,6 +1621,74 @@ mod tests {
         e.render(&comp, 0.1, &inputs(0.1), None);
         let m = mean(&e.read_target(e.output()));
         assert!(m.iter().all(|c| (c - 127.5).abs() < 2.0), "half-inverted cyan: {m:?}");
+    }
+
+    #[test]
+    fn clip_effects_and_transform() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let px = |e: &Engine, t: &Target, x: usize, y: usize| {
+            let p = e.read_target(t);
+            let i = (y * 32 + x) * 4;
+            [p[i], p[i + 1], p[i + 2]]
+        };
+        let mut comp = Composition::new(32, 32, 1, 2);
+        let red = comp.set_clip(0, 0, ClipSource::Image { path: "r.png".into() }).unwrap();
+        e.set_media_frame(red, 1, 1, &[255, 0, 0, 255]);
+        comp.trigger(0, 0, 0.0);
+        e.render(&comp, 0.1, &inputs(0.1), Some(red));
+        let plain = e.last_pass_count();
+
+        // A Transform at its defaults costs nothing.
+        comp.layers[0].clips[0].as_mut().unwrap().transform.param_mut("scale").unwrap().value = 0.1;
+        comp.layers[0].clips[0].as_mut().unwrap().transform = openvj_core::default_transform();
+        e.render(&comp, 0.1, &inputs(0.1), Some(red));
+        assert_eq!(e.last_pass_count(), plain);
+
+        // A clip effect applies to that clip only, and the preview shows it.
+        comp.layers[0].clips[0].as_mut().unwrap().effects.push(Effect::new("invert"));
+        e.render(&comp, 0.1, &inputs(0.1), Some(red));
+        assert_eq!(px(&e, e.output(), 16, 16), [0, 255, 255]);
+        assert_eq!(px(&e, e.preview(), 16, 16), [0, 255, 255]);
+        let other = comp.set_clip(0, 1, ClipSource::Image { path: "g.png".into() }).unwrap();
+        e.set_media_frame(other, 1, 1, &[0, 255, 0, 255]);
+        comp.trigger(0, 1, 0.2);
+        e.render(&comp, 0.3, &inputs(0.3), Some(red));
+        assert_eq!(px(&e, e.output(), 16, 16), [0, 255, 0], "the other clip plays unprocessed");
+        assert_eq!(px(&e, e.preview(), 16, 16), [0, 255, 255], "a clip off screen previews with its effects");
+
+        // Position X moves right by pixels, Y up; the uncovered part is empty.
+        comp.trigger(0, 0, 0.4);
+        let clip = comp.layers[0].clips[0].as_mut().unwrap();
+        clip.effects.clear();
+        let tf = clip.transform.ty().unwrap();
+        let x = tf.def.inputs.iter().position(|i| i.name == "position_x").unwrap();
+        clip.transform.param_mut("position_x").unwrap().value = tf.def.inputs[x].norm(0, 16.0);
+        e.render(&comp, 0.5, &inputs(0.5), None);
+        assert_eq!(px(&e, e.output(), 4, 16), [0, 0, 0]);
+        assert_eq!(px(&e, e.output(), 28, 16), [255, 0, 0]);
+        let clip = comp.layers[0].clips[0].as_mut().unwrap();
+        clip.transform = openvj_core::default_transform();
+        clip.transform.param_mut("position_y").unwrap().value = tf.def.inputs[x + 1].norm(0, 16.0);
+        e.render(&comp, 0.6, &inputs(0.6), None);
+        assert_eq!(px(&e, e.output(), 16, 4), [255, 0, 0], "moved up");
+        assert_eq!(px(&e, e.output(), 16, 28), [0, 0, 0]);
+
+        // A layer Transform at half scale leaves a border; a quarter turn in X hides the card.
+        comp.layers[0].clips[0].as_mut().unwrap().transform = openvj_core::default_transform();
+        comp.layers[0].transform.param_mut("scale").unwrap().value = 0.05;
+        e.render(&comp, 0.7, &inputs(0.7), None);
+        assert_eq!(px(&e, e.output(), 16, 16), [255, 0, 0]);
+        assert_eq!(px(&e, e.output(), 2, 2), [0, 0, 0]);
+        comp.layers[0].transform = openvj_core::default_transform();
+        comp.layers[0].transform.param_mut("rotation_x").unwrap().value = 0.75;
+        e.render(&comp, 0.8, &inputs(0.8), None);
+        assert_eq!(px(&e, e.output(), 16, 16), [0, 0, 0], "edge-on");
+        comp.layers[0].transform.param_mut("rotation_x").unwrap().value = 0.6;
+        e.render(&comp, 0.9, &inputs(0.9), None);
+        assert_eq!(px(&e, e.output(), 16, 16), [255, 0, 0], "tilted, still covering the centre");
     }
 
     #[test]

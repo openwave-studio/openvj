@@ -7,8 +7,13 @@
 //! * top level `"OPENVJ": {"ID": "blur", "NAME": "Blur", "RESOLUME": ["Blur", "FastBlur"]}`:
 //!   a stable id saved in compositions, the display name, and the Resolume effect types
 //!   this effect stands in for when importing `.avc` files.
+//!   `"HIDDEN": true` keeps an effect out of the Effects tab (the fixed clip and layer
+//!   Transform is one).
 //! * per input `"UNIT": "°"` (shown after the value) and `"WRAP": true` (angles and hues:
 //!   modulation wraps around instead of stopping at the ends).
+//! * per input `"RESOLUME": "Strength"`: the Resolume parameter it imports from, in this
+//!   input's own units, or `{"NAME": "In / Out", "RANGE": [0, 1]}` when Resolume's value
+//!   runs over another range (mapped linearly onto `MIN`..`MAX`).
 //!
 //! Every input except images is exposed as one or more *channels*, each a normalised
 //! 0..1 [`Param`](crate::Param) that modulation drives. A float or a choice is one channel,
@@ -29,6 +34,8 @@ pub struct EffectDef {
     pub passes: Vec<PassDef>,
     /// Resolume effect types this one replaces on import.
     pub resolume: Vec<String>,
+    /// Not listed in the Effects tab.
+    pub hidden: bool,
     /// The GLSL after the header.
     pub glsl: String,
 }
@@ -43,6 +50,16 @@ pub struct InputDef {
     pub unit: String,
     /// Angles and hues: modulation wraps around.
     pub wrap: bool,
+    /// The Resolume parameter this input imports from.
+    pub resolume: Option<ResolumeParam>,
+}
+
+/// Where an input's value comes from in a Resolume `.avc`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolumeParam {
+    pub name: String,
+    /// Resolume's own range, mapped onto the input's `MIN`..`MAX`. `None`: same units.
+    pub range: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +146,39 @@ impl InputDef {
 
     /// The value a shader sees for normalised channel value `v`, as a float. Choices give the
     /// selected entry of `VALUES`, bools 0 or 1.
+    /// Normalised channel value for a value in real units (the inverse of [`InputDef::real`]).
+    pub fn norm(&self, component: usize, r: f32) -> f32 {
+        match &self.ty {
+            InputType::Float { min, max, .. } => unlerp(*min, *max, r),
+            InputType::Long { values, .. } => {
+                let i = values
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| (**a as f32 - r).abs().total_cmp(&(**b as f32 - r).abs()))
+                    .map_or(0, |(i, _)| i);
+                choice_norm(i, values.len())
+            }
+            InputType::Bool { .. } | InputType::Event => (r >= 0.5) as u8 as f32,
+            InputType::Color { .. } => r.clamp(0.0, 1.0),
+            InputType::Point2D { min, max, .. } => unlerp(min[component], max[component], r),
+            InputType::Image => 0.0,
+        }
+    }
+
+    /// Normalised value for a value saved by Resolume for this input, if it maps one.
+    pub fn from_resolume(&self, component: usize, v: f32) -> Option<f32> {
+        let rp = self.resolume.as_ref()?;
+        let real = match (rp.range, &self.ty) {
+            (Some([a, b]), InputType::Float { min, max, .. }) => min + (max - min) * unlerp(a, b, v),
+            (Some([a, b]), InputType::Point2D { min, max, .. }) => {
+                min[component] + (max[component] - min[component]) * unlerp(a, b, v)
+            }
+            (Some([a, b]), _) => unlerp(a, b, v),
+            (None, _) => v,
+        };
+        Some(self.norm(component, real))
+    }
+
     pub fn real(&self, component: usize, v: f32) -> f32 {
         match &self.ty {
             InputType::Float { min, max, .. } => min + (max - min) * v,
@@ -229,6 +279,7 @@ impl EffectDef {
             inputs,
             passes,
             resolume,
+            hidden: ovj.and_then(|o| o.get("HIDDEN")).and_then(Value::as_bool).unwrap_or(false),
             glsl: glsl.to_owned(),
         })
     }
@@ -333,6 +384,14 @@ fn parse_input(v: &Value) -> Result<InputDef, String> {
         ty,
         unit: v.get("UNIT").and_then(Value::as_str).unwrap_or_default().to_owned(),
         wrap: v.get("WRAP").and_then(Value::as_bool).unwrap_or(false),
+        resolume: match v.get("RESOLUME") {
+            Some(Value::String(s)) => Some(ResolumeParam { name: s.clone(), range: None }),
+            Some(Value::Object(o)) => o
+                .get("NAME")
+                .and_then(Value::as_str)
+                .map(|n| ResolumeParam { name: n.to_owned(), range: vec_n::<2>(o.get("RANGE")) }),
+            _ => None,
+        },
     })
 }
 

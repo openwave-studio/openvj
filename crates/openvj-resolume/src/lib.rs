@@ -19,7 +19,7 @@ use std::path::Path;
 
 use openvj_core::{
     BlendMode, Clip, ClipSource, Column, Composition, CrossfadeCurve, CrossfadeSide, Effect, GeneratorKind, LayerGroup,
-    Param, PlayMode, library,
+    Param, PlayMode, default_transform, library,
 };
 use roxmltree::{Document, Node};
 
@@ -151,7 +151,7 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
         if let Some(master) = param_f64(vt, "Opacity").or_else(|| mixer_opacity(vt)) {
             comp.master = master.clamp(0.0, 1.0) as f32;
         }
-        comp.effects = effect_chain(vt, width, height, "composition", &mut report, &mut |name, i| {
+        comp.effects = effect_chain(vt, width, height, "composition", None, &mut report, &mut |name, i| {
             refs.effects.insert((None, name), i);
         });
     }
@@ -164,7 +164,7 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
         if let Some(name) = param_str(node, "Name").filter(|n| !n.trim().is_empty() && *n != "Group") {
             group.name = name.trim().to_owned();
         }
-        let track = track_settings(node, width, height, &label, &mut report, &mut |_, _| {});
+        let track = track_settings(node, width, height, &label, false, &mut report, &mut |_, _| {});
         (group.opacity, group.blend, group.effects) = (track.opacity, track.blend, track.effects);
         group.bypass = track.bypass;
         group.solo = track.solo;
@@ -190,10 +190,11 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
         if let Some(secs) = child(*node, "ClipTransition").and_then(|t| param_f64(t, "Duration")) {
             layer.transition_secs = secs.max(0.0) as f32;
         }
-        let track = track_settings(*node, width, height, &label, &mut report, &mut |name, i| {
+        let track = track_settings(*node, width, height, &label, true, &mut report, &mut |name, i| {
             refs.effects.insert((Some(idx), name), i);
         });
         (layer.opacity, layer.blend, layer.effects) = (track.opacity, track.blend, track.effects);
+        layer.transform = track.transform;
         layer.bypass = track.bypass;
         layer.solo = track.solo;
         layer.group = attr_usize(*node, "layerGroup").filter(|&g| g < comp.groups.len());
@@ -209,7 +210,6 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
         + comp.groups.iter().map(|g| g.effects.len()).sum::<usize>();
     import_crossfader(&mut comp, root, &mut report);
 
-    let mut clip_fx = ClipEffects::default();
     let saved_open = attr_usize(root, "currentDeckIndex");
     let mut open_after = 0;
     for (i, (deck, cols)) in decks.into_iter().enumerate() {
@@ -235,7 +235,7 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
             }
         }
         for clip in children(deck, "Clip") {
-            import_clip(&mut comp, clip, &mut clip_fx, &mut report);
+            import_clip(&mut comp, clip, &mut report);
         }
         if saved_open.is_some() && attr_usize(deck, "deckIndex") == saved_open {
             open_after = i;
@@ -244,48 +244,11 @@ pub fn import_str(xml: &str) -> Result<Imported, String> {
     }
     // Open the deck that was open in Resolume when the file was saved.
     comp.switch_deck(open_after);
-    clip_fx.report(&mut report);
     playback_note(&comp, &mut report);
     Ok(Imported { composition: comp, report, refs })
 }
 
-/// Clip effects openVJ can't apply yet, collected into one note instead of one per clip.
-#[derive(Default)]
-struct ClipEffects {
-    clips: usize,
-    names: Vec<(String, usize)>,
-}
-
-impl ClipEffects {
-    fn add(&mut self, names: Vec<String>) {
-        if names.is_empty() {
-            return;
-        }
-        self.clips += 1;
-        for name in names {
-            match self.names.iter_mut().find(|(n, _)| *n == name) {
-                Some((_, count)) => *count += 1,
-                None => self.names.push((name, 1)),
-            }
-        }
-    }
-
-    fn report(self, report: &mut ImportReport) {
-        if self.clips == 0 {
-            return;
-        }
-        let list: Vec<String> =
-            self.names.iter().map(|(n, c)| if *c > 1 { format!("{n} ×{c}") } else { n.clone() }).collect();
-        report.note(format!(
-            "Clip effects aren't supported yet, so they were dropped from {} clip{} ({})",
-            self.clips,
-            plural(self.clips),
-            list.join(", ")
-        ));
-    }
-}
-
-fn import_clip(comp: &mut Composition, node: Node, fx: &mut ClipEffects, report: &mut ImportReport) {
+fn import_clip(comp: &mut Composition, node: Node, report: &mut ImportReport) {
     let (Some(layer), Some(col)) = (attr_usize(node, "layerIndex"), attr_usize(node, "columnIndex")) else {
         return;
     };
@@ -347,7 +310,12 @@ fn import_clip(comp: &mut Composition, node: Node, fx: &mut ClipEffects, report:
     transport(clip, node, &label, report);
     report.clips += 1;
     if let Some(vt) = child(node, "VideoTrack") {
-        fx.add(chain(vt).filter(|e| !e.is_default_transform()).map(|e| e.display_name().to_owned()).collect());
+        let (width, height) = (comp.width, comp.height);
+        let clip = comp.clip_mut(layer, col).expect("clip was just placed");
+        let mut transform = default_transform();
+        clip.effects = effect_chain(vt, width, height, &label, Some(&mut transform), report, &mut |_, _| {});
+        clip.transform = transform;
+        report.effects += clip.effects.len();
     }
 }
 
@@ -421,13 +389,17 @@ struct Track {
     bypass: bool,
     solo: bool,
     effects: Vec<Effect>,
+    transform: Effect,
 }
 
+/// A layer's or group's mix settings and effects. With `fixed_transform`, Resolume's
+/// Transform goes into the track's fixed Transform rather than its chain.
 fn track_settings(
     node: Node,
     width: u32,
     height: u32,
     label: &str,
+    fixed_transform: bool,
     report: &mut ImportReport,
     imported: &mut dyn FnMut(String, usize),
 ) -> Track {
@@ -437,6 +409,7 @@ fn track_settings(
         bypass: param_bool(node, "Bypassed").unwrap_or(false),
         solo: param_bool(node, "Solo").unwrap_or(false),
         effects: Vec::new(),
+        transform: default_transform(),
     };
     let master = param_f64(node, "Master").unwrap_or(1.0);
     let Some(vt) = child(node, "VideoTrack") else {
@@ -455,7 +428,8 @@ fn track_settings(
     // used when the track has none, as in files from 7.22.
     let opacity = param_f64(vt, "Opacity").or_else(|| blend.and_then(|b| param_f64(b, "Opacity")));
     t.opacity = (opacity.unwrap_or(1.0) * master).clamp(0.0, 1.0) as f32;
-    t.effects = effect_chain(vt, width, height, label, report, imported);
+    let transform = fixed_transform.then_some(&mut t.transform);
+    t.effects = effect_chain(vt, width, height, label, transform, report, imported);
     t
 }
 
@@ -667,12 +641,14 @@ fn chain<'a, 'i>(track: Node<'a, 'i>) -> impl Iterator<Item = RawEffect<'a, 'i>>
 }
 
 /// Imports a track's effect chain. `imported` is called with each imported effect's path
-/// name (see [`effect_path_names`]) and its index in the returned chain.
+/// name (see [`effect_path_names`]) and its index in the returned chain. When `transform`
+/// is given, Resolume's Transform is imported into it instead of into the chain.
 fn effect_chain(
     track: Node,
     width: u32,
     height: u32,
     label: &str,
+    mut transform: Option<&mut Effect>,
     report: &mut ImportReport,
     imported: &mut dyn FnMut(String, usize),
 ) -> Vec<Effect> {
@@ -682,6 +658,14 @@ fn effect_chain(
     let names = effect_path_names(raws.iter().map(|r| r.display_name()));
     for (raw, path_name) in raws.into_iter().zip(names) {
         if raw.is_default_transform() {
+            continue;
+        }
+        if raw.ty() == "TransformEffect"
+            && let Some(fixed) = transform.take()
+        {
+            *fixed = default_transform();
+            fixed.enabled = raw.enabled;
+            note_unmapped(label, "Transform", import_settings(fixed, raw.node), report);
             continue;
         }
         let Some(mut effect) = map_effect(&raw, width, height, label, report) else {
@@ -713,14 +697,53 @@ fn map_effect(raw: &RawEffect, width: u32, height: u32, label: &str, report: &mu
     let lib = library();
     let ty = lib.for_resolume(raw.ty()).or_else(|| lib.for_resolume(raw.display_name()))?;
     let mut effect = Effect::new(ty.id());
-    // Carry over the settings that line up directly. Both apps use 0..1 here.
-    if ty.id() == "color"
-        && let Some(hue) = param_f64(node, "Hue Rotate")
-        && let Some(p) = effect.param_mut("hue")
-    {
-        p.value = hue.rem_euclid(1.0) as f32;
-    }
+    let name = effect.name();
+    note_unmapped(label, &name, import_settings(&mut effect, node), report);
     Some(effect)
+}
+
+/// Copies the parameter values Resolume saved for an effect into the inputs that name them
+/// (see `RESOLUME` in [`openvj_core::isf`]). Returns the changed parameters nothing maps.
+fn import_settings(effect: &mut Effect, node: Node) -> Vec<String> {
+    let Some(ty) = effect.ty() else { return Vec::new() };
+    let mut unmapped = Vec::new();
+    for p in param_nodes(node) {
+        let Some(name) = p.attribute("name") else { continue };
+        let Some(value) = p.attribute("value") else { continue };
+        let channels: Vec<_> =
+            ty.channels.iter().filter(|ch| ty.input(ch).resolume.as_ref().is_some_and(|r| r.name == name)).collect();
+        if channels.is_empty() {
+            if p.attribute("default") != Some(value) {
+                unmapped.push(name.to_owned());
+            }
+            continue;
+        }
+        // Colours are saved as one ARGB integer; everything else as a number.
+        let components: Vec<f32> = match (p.has_tag_name("ParamColor"), value.trim().parse::<f64>()) {
+            (true, Ok(argb)) => {
+                let c = argb as u32;
+                [16, 8, 0, 24].iter().map(|shift| ((c >> shift) & 0xff) as f32 / 255.0).collect()
+            }
+            (false, Ok(v)) => vec![v as f32],
+            _ => continue,
+        };
+        for ch in channels {
+            let input = ty.input(ch);
+            let v = components.get(ch.component).or(components.first()).copied().unwrap_or(0.0);
+            if let Some(norm) = input.from_resolume(ch.component, v)
+                && let Some(param) = effect.param_mut(&ch.key)
+            {
+                param.value = norm;
+            }
+        }
+    }
+    unmapped
+}
+
+fn note_unmapped(label: &str, effect: &str, unmapped: Vec<String>, report: &mut ImportReport) {
+    if !unmapped.is_empty() {
+        report.note(format!("{label}: {effect} settings openVJ doesn't have were left out ({})", unmapped.join(", ")));
+    }
 }
 
 /// Resolume's transform maps to openVJ's: scale (percent) to zoom, Z rotation (degrees) to

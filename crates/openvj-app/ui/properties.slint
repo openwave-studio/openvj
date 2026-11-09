@@ -11,6 +11,8 @@ component EffectCard inherits Rectangle {
     in property <EffectData> data;
     in property <int> index;
     in property <int> count;
+    /// The fixed Transform: no number, and it can't be moved or removed.
+    in property <bool> fixed;
     callback toggle();
     callback remove();
     callback move(int);
@@ -39,24 +41,24 @@ component EffectCard inherits Rectangle {
                 clicked => { root.toggle(); }
             }
             Text {
-                text: (root.index + 1) + "  " + root.data.name;
+                text: root.fixed ? root.data.name : (root.index + 1) + "  " + root.data.name;
                 color: root.data.enabled ? Theme.text : Theme.text-faint;
                 font-size: 12px;
                 font-weight: 600;
                 vertical-alignment: center;
                 overflow: elide;
             }
-            ToggleButton {
+            if !root.fixed: ToggleButton {
                 text: "◀";
                 opacity: root.index > 0 ? 1 : 0.3;
                 clicked => { root.move(-1); }
             }
-            ToggleButton {
+            if !root.fixed: ToggleButton {
                 text: "▶";
                 opacity: root.index < root.count - 1 ? 1 : 0.3;
                 clicked => { root.move(1); }
             }
-            ToggleButton {
+            if !root.fixed: ToggleButton {
                 text: "✕";
                 clicked => { root.remove(); }
             }
@@ -76,6 +78,9 @@ component EffectCard inherits Rectangle {
 component EffectChain inherits Rectangle {
     in property <int> scope;
     in property <[EffectData]> effects;
+    /// The owner's fixed Transform (empty when it has none), shown first.
+    in property <[EffectData]> transform;
+    in property <int> transform-scope;
     in property <string> owner;
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
@@ -99,7 +104,7 @@ component EffectChain inherits Rectangle {
                 font-size: 10px;
             }
         }
-        if root.effects.length == 0: Rectangle {
+        if root.effects.length == 0 && root.transform.length == 0: Rectangle {
             border-radius: Theme.radius;
             border-width: 1px;
             border-color: Theme.separator;
@@ -110,13 +115,29 @@ component EffectChain inherits Rectangle {
                 font-size: 11px;
             }
         }
-        if root.effects.length > 0: ScrollView {
-            content-width: root.effects.length * (Theme.card-w + 6px);
+        if root.effects.length > 0 || root.transform.length > 0: ScrollView {
+            content-width: (root.effects.length + root.transform.length + (root.effects.length == 0 ? 1 : 0)) * (Theme.card-w + 6px);
             HorizontalLayout {
                 x: 0;
                 y: 0;
                 spacing: 6px;
                 alignment: start;
+                for fx in root.transform: EffectCard {
+                    data: fx;
+                    fixed: true;
+                    toggle => { root.effect-toggle(root.transform-scope, 0); }
+                    set(p, v) => { root.param-set(root.transform-scope, 0, p, v); }
+                    mod-source(p, s) => { root.param-mod(root.transform-scope, 0, p, s); }
+                    mod-amount(p, a) => { root.param-mod-amount(root.transform-scope, 0, p, a); }
+                    mod-rate(p, r) => { root.param-mod-rate(root.transform-scope, 0, p, r); }
+                }
+                if root.effects.length == 0: Text {
+                    width: Theme.card-w;
+                    text: "No effects on " + root.owner + ". Add one from the Effects tab of the browser.";
+                    wrap: word-wrap;
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                }
                 for fx[i] in root.effects: EffectCard {
                     data: fx;
                     index: i;
@@ -196,6 +217,7 @@ export component PropertiesPanel inherits Rectangle {
     in property <int> layer-blend-value;
     in property <[ParamData]> layer-params;
     in property <[EffectData]> layer-effects;
+    in property <[EffectData]> layer-transform;
     // "A", "" or "B".
     in property <string> layer-side;
     // "No group", the groups, then "New group".
@@ -220,6 +242,8 @@ export component PropertiesPanel inherits Rectangle {
     in property <string> clip-path;
     in-out property <string> clip-name;
     in property <[ParamData]> clip-params;
+    in property <[EffectData]> clip-effects;
+    in property <[EffectData]> clip-transform;
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
     in property <bool> clip-synced;
@@ -531,6 +555,8 @@ export component PropertiesPanel inherits Rectangle {
             EffectChain {
                 scope: Scope.layer-fx;
                 effects: root.layer-effects;
+                transform: root.layer-transform;
+                transform-scope: Scope.layer-tf;
                 owner: root.layer-name == "" ? "this layer" : root.layer-name;
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
@@ -614,6 +640,7 @@ export component PropertiesPanel inherits Rectangle {
                 }
             }
             ScrollView {
+                width: 320px;
                 VerticalLayout {
                     spacing: 6px;
                     alignment: start;
@@ -629,6 +656,21 @@ export component PropertiesPanel inherits Rectangle {
                         mod-rate(i, r) => { root.param-mod-rate(Scope.clip, 0, i, r); }
                     }
                 }
+            }
+            EffectChain {
+                horizontal-stretch: 1;
+                scope: Scope.clip-fx;
+                effects: root.clip-effects;
+                transform: root.clip-transform;
+                transform-scope: Scope.clip-tf;
+                owner: "this clip";
+                param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
+                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                effect-toggle(s, i) => { root.effect-toggle(s, i); }
+                effect-remove(s, i) => { root.effect-remove(s, i); }
+                effect-move(s, i, d) => { root.effect-move(s, i, d); }
             }
         }
         // Group: the selected layer's group, with its own mix settings and effect chain.
