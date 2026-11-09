@@ -1,0 +1,16 @@
+[package]
+name = "openvj-audio"
+description = "openVJ audio analysis: input capture and FFT band levels for audio-reactive parameters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["input"]
+# Live capture from an input device via cpal. Without it only the analyser is built.
+input = ["dep:cpal"]
+
+[dependencies]
+anyhow.workspace = true
+rustfft = "6.4"
+cpal = { version = "0.18", optional = true }

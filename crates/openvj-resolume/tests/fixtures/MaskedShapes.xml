@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XmlState name="Masked Shapes">
+	<versionInfo name="Resolume Arena" majorVersion="7" minorVersion="15" microVersion="0" revision="1"/>
+	<ScreenSetup name="ScreenSetup">
+		<Params name="ScreenSetupParams"/>
+		<CurrentCompositionTextureSize width="1920" height="1080"/>
+		<screens>
+			<Screen name="Screen 1" uniqueId="100">
+				<Params name="Params">
+					<Param name="Name" T="STRING" default="" value="Screen 1"/>
+					<Param name="Enabled" T="BOOL" default="1" value="1"/>
+				</Params>
+				<layers>
+					<Slice uniqueId="101">
+						<Params name="Common">
+							<Param name="Name" T="STRING" default="Layer" value="Slice 1"/>
+							<Param name="Enabled" T="BOOL" default="1" value="1"/>
+						</Params>
+						<Params name="Input">
+							<ParamChoice name="Input Source" default="0:1" value="0:1" storeChoices="0"/>
+							<Param name="SoftEdgeEnable" T="BOOL" default="0" value="0"/>
+						</Params>
+						<Params name="Output">
+							<Param name="Flip" T="UINT8" default="0" value="0"/>
+						</Params>
+						<InputRect orientation="0">
+							<v x="0" y="0"/>
+							<v x="1920" y="0"/>
+							<v x="1920" y="1080"/>
+							<v x="0" y="1080"/>
+						</InputRect>
+						<OutputRect orientation="0">
+							<v x="0" y="0"/>
+							<v x="1920" y="0"/>
+							<v x="1920" y="1080"/>
+							<v x="0" y="1080"/>
+						</OutputRect>
+						<Warper>
+							<Params name="Warper">
+								<ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+								<Param name="Flip" T="UINT8" default="0" value="0"/>
+							</Params>
+							<BezierWarper controlWidth="4" controlHeight="4">
+								<vertices>
+									<v x="0" y="0"/>
+									<v x="640" y="0"/>
+									<v x="1280" y="0"/>
+									<v x="1920" y="0"/>
+									<v x="0" y="360"/>
+									<v x="640" y="360"/>
+									<v x="1280" y="360"/>
+									<v x="1920" y="360"/>
+									<v x="0" y="720"/>
+									<v x="640" y="720"/>
+									<v x="1280" y="720"/>
+									<v x="1920" y="720"/>
+									<v x="0" y="1080"/>
+									<v x="640" y="1080"/>
+									<v x="1280" y="1080"/>
+									<v x="1920" y="1080"/>
+								</vertices>
+							</BezierWarper>
+							<Homography>
+								<src>
+									<v x="0" y="0"/>
+									<v x="1920" y="0"/>
+									<v x="1920" y="1080"/>
+									<v x="0" y="1080"/>
+								</src>
+								<dst>
+									<v x="0" y="0"/>
+									<v x="1920" y="0"/>
+									<v x="1920" y="1080"/>
+									<v x="0" y="1080"/>
+								</dst>
+							</Homography>
+						</Warper>
+					</Slice>
+					<Mask uniqueId="102">
+						<Params name="Common">
+							<Param name="Name" T="STRING" default="Layer" value="Left"/>
+							<Param name="Enabled" T="BOOL" default="1" value="1"/>
+						</Params>
+						<Params name="Input">
+							<Param name="Invert" T="BOOL" default="1" value="1"/>
+						</Params>
+						<InputRect orientation="0">
+							<v x="-0.5" y="-0.5"/>
+							<v x="0.5" y="-0.5"/>
+							<v x="0.5" y="0.5"/>
+							<v x="-0.5" y="0.5"/>
+						</InputRect>
+						<OutputRect orientation="0">
+							<v x="100" y="700"/>
+							<v x="500" y="700"/>
+							<v x="500" y="1000"/>
+							<v x="100" y="1000"/>
+						</OutputRect>
+						<ShapeObject>
+							<Params name="Shape">
+								<ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+							</Params>
+							<Rect orientation="0">
+								<v x="100" y="700"/>
+								<v x="500" y="700"/>
+								<v x="500" y="1000"/>
+								<v x="100" y="1000"/>
+							</Rect>
+							<Shape>
+								<Contour closed="1">
+									<points>
+										<v x="300" y="700"/>
+										<v x="500" y="1000"/>
+										<v x="100" y="1000"/>
+									</points>
+									<segments>LLL</segments>
+								</Contour>
+							</Shape>
+						</ShapeObject>
+					</Mask>
+					<Mask uniqueId="103">
+						<Params name="Common">
+							<Param name="Name" T="STRING" default="Layer" value="Hexagon"/>
+							<Param name="Enabled" T="BOOL" default="1" value="1"/>
+						</Params>
+						<Params name="Input">
+							<Param name="Invert" T="BOOL" default="1" value="1"/>
+						</Params>
+						<InputRect orientation="0">
+							<v x="-0.5" y="-0.5"/>
+							<v x="0.5" y="-0.5"/>
+							<v x="0.5" y="0.5"/>
+							<v x="-0.5" y="0.5"/>
+						</InputRect>
+						<OutputRect orientation="0">
+							<v x="660" y="314.833"/>
+							<v x="1260" y="314.833"/>
+							<v x="1260" y="765.167"/>
+							<v x="660" y="765.167"/>
+						</OutputRect>
+						<ShapeObject>
+							<Params name="Shape">
+								<ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+							</Params>
+							<Rect orientation="0">
+								<v x="660" y="314.833"/>
+								<v x="1260" y="314.833"/>
+								<v x="1260" y="765.167"/>
+								<v x="660" y="765.167"/>
+							</Rect>
+							<Shape>
+								<Contour closed="1">
+									<points>
+										<v x="1260" y="540"/>
+										<v x="1110" y="765.167"/>
+										<v x="810" y="765.167"/>
+										<v x="660" y="540"/>
+										<v x="810" y="314.833"/>
+										<v x="1110" y="314.833"/>
+									</points>
+									<segments>LLLLLL</segments>
+								</Contour>
+							</Shape>
+						</ShapeObject>
+					</Mask>
+					<Mask uniqueId="104">
+						<Params name="Common">
+							<Param name="Name" T="STRING" default="Layer" value="Right"/>
+							<Param name="Enabled" T="BOOL" default="1" value="1"/>
+						</Params>
+						<Params name="Input">
+							<Param name="Invert" T="BOOL" default="1" value="1"/>
+						</Params>
+						<InputRect orientation="0">
+							<v x="-0.5" y="-0.5"/>
+							<v x="0.5" y="-0.5"/>
+							<v x="0.5" y="0.5"/>
+							<v x="-0.5" y="0.5"/>
+						</InputRect>
+						<OutputRect orientation="0">
+							<v x="1420" y="700"/>
+							<v x="1820" y="700"/>
+							<v x="1820" y="1000"/>
+							<v x="1420" y="1000"/>
+						</OutputRect>
+						<ShapeObject>
+							<Params name="Shape">
+								<ParamChoice name="Point Mode" default="PM_LINEAR" value="PM_LINEAR" storeChoices="0"/>
+							</Params>
+							<Rect orientation="0">
+								<v x="1420" y="700"/>
+								<v x="1820" y="700"/>
+								<v x="1820" y="1000"/>
+								<v x="1420" y="1000"/>
+							</Rect>
+							<Shape>
+								<Contour closed="1">
+									<points>
+										<v x="1620" y="700"/>
+										<v x="1820" y="1000"/>
+										<v x="1420" y="1000"/>
+									</points>
+									<segments>LLL</segments>
+								</Contour>
+							</Shape>
+						</ShapeObject>
+					</Mask>
+				</layers>
+				<OutputDevice>
+					<OutputDeviceDisplay name="Display 2" deviceId="Display 2" idHash="1" fullscreen="1" width="1920" height="1080"/>
+				</OutputDevice>
+			</Screen>
+		</screens>
+	</ScreenSetup>
+</XmlState>

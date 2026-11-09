@@ -1,0 +1,16 @@
+[package]
+name = "openvj-render"
+description = "openVJ GPU engine: generators, layer mixing, blend modes and ISF effects on wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+openvj-core.workspace = true
+wgpu = { workspace = true, features = ["naga-ir"] }
+# Same version as wgpu's. `wgsl-in` is only there because naga 30's GLSL front end needs it to build.
+naga = { version = "30", features = ["glsl-in", "wgsl-in"] }
+bytemuck.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"

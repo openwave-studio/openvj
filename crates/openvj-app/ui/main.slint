@@ -1,0 +1,1669 @@
+import { LineEdit, ScrollView, ListView } from "std-widgets.slint";
+import { Theme, CloseIcon } from "theme.slint";
+import { Scope, ModNames, AudioLevels, ParamData, EffectData, CellData, LayerData, ColumnData, DeckData, BrowserItem } from "state.slint";
+import { Fader, ToggleButton, FlatButton, BlendPicker, PanelTitle, Monitor, BandMeters } from "controls.slint";
+import { PropertiesPanel } from "properties.slint";
+import { TabButton } from "controls.slint";
+import { SettingsOverlay, GearIcon } from "settings.slint";
+import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
+export { MappingWindow, MapLayer, MapHandle, MapCorner }
+
+export { Theme, Scope, ModNames, AudioLevels }
+
+component ClipCell inherits Rectangle {
+    in property <CellData> data;
+    in property <bool> armed;
+    callback clicked();
+    callback right-clicked();
+
+    width: Theme.cell-w;
+    height: Theme.cell-h;
+    border-radius: Theme.radius-small;
+    background: root.data.filled ? Theme.panel-2 : (ta.has-hover && root.armed ? Theme.accent-dim : ta.has-hover ? #ffffff08 : Theme.track);
+    border-width: root.data.selected ? 2px : root.data.playing ? 2px : 1px;
+    border-color: root.data.playing ? Theme.playing : root.data.selected ? Theme.selected : (ta.has-hover ? Theme.border : Theme.separator);
+
+    if root.data.filled: VerticalLayout {
+        padding: root.data.playing || root.data.selected ? 2px : 1px;
+        spacing: 0;
+        Rectangle {
+            background: #000;
+            clip: true;
+            if root.data.has-thumb: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.data.thumb;
+                image-fit: cover;
+            }
+            if root.data.loading: Text {
+                text: "loading…";
+                color: Theme.text-dim;
+                font-size: 10px;
+            }
+            if root.data.error: Text {
+                text: "⚠ can't open";
+                color: Theme.warn;
+                font-size: 10px;
+            }
+            // Kind badge.
+            Rectangle {
+                x: 4px;
+                y: 4px;
+                width: badge.preferred-width + 8px;
+                height: 13px;
+                border-radius: 3px;
+                background: Theme.kind-color(root.data.kind).with-alpha(0.9);
+                badge := Text {
+                    text: Theme.kind-label(root.data.kind);
+                    color: #000;
+                    font-size: 8px;
+                    font-weight: 800;
+                }
+            }
+            if root.data.modulated: Rectangle {
+                x: 4px;
+                y: parent.height - 17px;
+                width: 26px;
+                height: 13px;
+                border-radius: 2px;
+                background: Theme.tempo.with-alpha(0.85);
+                Text {
+                    text: "MOD";
+                    color: #000;
+                    font-size: 8px;
+                    font-weight: 800;
+                }
+            }
+            if root.data.playing: Rectangle {
+                x: parent.width - 14px;
+                y: 5px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.playing;
+            }
+        }
+        Rectangle {
+            height: 20px;
+            background: root.data.playing ? Theme.playing.with-alpha(0.14) : Theme.panel-2;
+            Text {
+                x: 6px;
+                width: parent.width - 12px;
+                text: root.data.name;
+                color: root.data.playing ? Theme.playing : Theme.text;
+                font-size: Theme.font-body;
+                font-weight: root.data.playing ? 600 : 400;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // Empty slots show a + like openDJ's empty pads.
+    if !root.data.filled && !root.armed: Text {
+        text: "+";
+        color: ta.has-hover || root.data.selected ? Theme.text-dim : Theme.tick;
+        font-size: 16px;
+        font-weight: 300;
+    }
+    if !root.data.filled && root.armed && ta.has-hover: Text {
+        text: "place here";
+        color: Theme.accent;
+        font-size: Theme.font-small;
+        font-weight: 600;
+    }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.right-clicked();
+            }
+        }
+    }
+}
+
+component LayerStrip inherits Rectangle {
+    in property <LayerData> data;
+    in property <[string]> blend-modes;
+    callback select();
+    callback opacity-changed(float);
+    callback blend(int);
+    callback bypass();
+    callback solo();
+    callback clear();
+
+    width: Theme.strip-w;
+    height: Theme.cell-h;
+    border-radius: Theme.radius-small;
+    background: root.data.selected ? Theme.raised : Theme.panel;
+    border-width: 1px;
+    border-color: root.data.selected ? Theme.accent : Theme.separator;
+
+    TouchArea {
+        clicked => { root.select(); }
+    }
+
+    // Layers in a group share a coloured edge and show the group's name.
+    if root.data.group != "": Rectangle {
+        x: 0;
+        width: 3px;
+        height: parent.height;
+        border-radius: 1px;
+        background: Theme.link;
+    }
+    if root.data.group != "": Text {
+        x: parent.width - self.width - 8px;
+        y: parent.height - self.height - 2px;
+        text: root.data.group;
+        color: Theme.link;
+        font-size: 8px;
+        font-weight: 700;
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: root.data.live && !root.data.bypass ? Theme.playing : Theme.text-faint;
+            }
+            Text {
+                text: root.data.name;
+                color: root.data.bypass ? Theme.text-faint : Theme.text;
+                font-size: 12px;
+                font-weight: 600;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            if root.data.side != "": Rectangle {
+                width: 14px;
+                height: 14px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                background: Theme.tempo.with-alpha(0.14);
+                border-width: 1px;
+                border-color: Theme.tempo;
+                Text {
+                    text: root.data.side;
+                    color: Theme.tempo;
+                    font-size: 9px;
+                    font-weight: 700;
+                }
+            }
+            if root.data.fx-count > 0: Rectangle {
+                width: 30px;
+                height: 14px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                border-width: 1px;
+                border-color: Theme.border;
+                Text {
+                    text: "FX " + root.data.fx-count;
+                    color: Theme.text-dim;
+                    font-size: 8px;
+                    font-weight: 700;
+                }
+            }
+            ToggleButton {
+                text: "B";
+                checked: root.data.bypass;
+                on-color: Theme.warn;
+                clicked => { root.bypass(); }
+            }
+            ToggleButton {
+                text: "S";
+                checked: root.data.solo;
+                on-color: Theme.accent;
+                clicked => { root.solo(); }
+            }
+            ToggleButton {
+                text: "X";
+                clicked => { root.clear(); }
+            }
+        }
+        Fader {
+            label: "Opacity";
+            value: root.data.opacity;
+            live: root.data.live-opacity;
+            changed(v) => { root.opacity-changed(v); }
+        }
+        BlendPicker {
+            modes: root.blend-modes;
+            current: root.data.blend;
+            picked(i) => { root.blend(i); }
+        }
+    }
+}
+
+/// A centred A/B fader in openDJ's crossfader style: ticks either side of a dark
+/// slot and a grey metal cap. Drag or scroll to move it, double-click recentres it.
+component Crossfader inherits Rectangle {
+    in property <float> value;
+    in property <float> live;
+    callback changed(float);
+
+    property <length> side-w: 18px;
+    property <length> handle: 12px;
+    property <length> slot-w: root.width - 2 * root.side-w;
+    property <length> travel: root.slot-w - root.handle;
+    property <float> drag-start;
+
+    height: 24px;
+
+    Text {
+        x: 0;
+        width: root.side-w;
+        text: "A";
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+    }
+    Text {
+        x: root.width - root.side-w;
+        width: root.side-w;
+        text: "B";
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    for i in 9: Rectangle {
+        x: root.side-w + root.handle / 2 + root.travel * i / 8;
+        y: 2px;
+        width: 1px;
+        height: root.height - 4px;
+        background: i == 0 || i == 4 || i == 8 ? #55555a : Theme.tick;
+    }
+    Rectangle {
+        x: root.side-w + root.handle / 2;
+        y: (root.height - 4px) / 2;
+        width: root.travel;
+        height: 4px;
+        border-radius: 2px;
+        background: #050506;
+        border-width: 1px;
+        border-color: #2a2a2d;
+    }
+    // Where modulation has moved it, as a ghost cap.
+    if abs(root.live - root.value) > 0.002: Rectangle {
+        x: root.side-w + root.travel * clamp(root.live, 0, 1);
+        y: 2px;
+        width: root.handle;
+        height: root.height - 4px;
+        border-radius: 3px;
+        border-width: 1.5px;
+        border-color: Theme.tempo;
+        background: Theme.tempo.with-alpha(0.12);
+    }
+    Rectangle {
+        x: root.side-w + root.travel * clamp(root.value, 0, 1);
+        y: 1px;
+        width: root.handle;
+        height: root.height - 2px;
+        border-radius: 3px;
+        background: Theme.fader-cap;
+        border-width: 1px;
+        border-color: ta.pressed ? Theme.accent : #2a2a2d;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #000000a0;
+        Rectangle {
+            width: 1px;
+            height: parent.height - 8px;
+            background: #2a2a2d;
+        }
+    }
+    ta := TouchArea {
+        x: root.side-w;
+        width: root.slot-w;
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                let at = (self.mouse-x - root.handle / 2) / root.travel;
+                let grab = abs(at - root.value) <= root.handle / root.travel;
+                root.drag-start = grab ? root.value : clamp(at, 0, 1);
+                if (!grab) {
+                    root.changed(clamp(at, 0, 1));
+                }
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.changed(clamp(root.drag-start + (self.mouse-x - self.pressed-x) / root.travel, 0, 1));
+            }
+        }
+        double-clicked => {
+            root.changed(0.5);
+        }
+        scroll-event(e) => {
+            root.changed(clamp(root.value + max(-0.05, min(0.05, e.delta-y / 400px)), 0, 1));
+            accept
+        }
+    }
+}
+
+component ClipGrid inherits Rectangle {
+    in property <[LayerData]> layers;
+    in property <[ColumnData]> columns;
+    in property <[string]> blend-modes;
+    in property <bool> armed;
+    in property <float> master;
+    callback cell-clicked(int, int);
+    callback cell-right-clicked(int, int);
+    callback column-clicked(int);
+    callback layer-selected(int);
+    callback layer-opacity(int, float);
+    callback layer-blend(int, int);
+    callback layer-bypass(int);
+    callback layer-solo(int);
+    callback layer-clear(int);
+    callback clear-all();
+    callback add-layer();
+    callback add-column();
+
+    background: Theme.bg;
+
+    ScrollView {
+        content-width: Theme.strip-w + Theme.gap + root.columns.length * (Theme.cell-w + Theme.gap) + 60px;
+        content-height: Theme.header-h + Theme.gap + root.layers.length * (Theme.cell-h + Theme.gap) + 40px;
+
+        VerticalLayout {
+            x: 0;
+            y: 0;
+            spacing: Theme.gap;
+            alignment: start;
+
+            // Column headers.
+            HorizontalLayout {
+                spacing: Theme.gap;
+                alignment: start;
+                height: Theme.header-h;
+                Rectangle {
+                    width: Theme.strip-w;
+                    border-radius: Theme.radius-small;
+                    background: clear-ta.pressed ? Theme.pressed : clear-ta.has-hover ? #1d1d20 : Theme.panel-2;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    Text {
+                        text: "CLEAR ALL  (Esc×2)";
+                        color: clear-ta.has-hover ? Theme.text : Theme.text-dim;
+                        font-size: Theme.font-small;
+                        font-weight: 600;
+                        letter-spacing: 0.4px;
+                    }
+                    clear-ta := TouchArea {
+                        clicked => { root.clear-all(); }
+                    }
+                }
+                for col[c] in root.columns: Rectangle {
+                    width: Theme.cell-w;
+                    border-radius: Theme.radius-small;
+                    background: col-ta.pressed ? Theme.pressed : col.active ? Theme.accent.with-alpha(0.14) : col-ta.has-hover ? #1d1d20 : Theme.panel;
+                    border-width: 1px;
+                    border-color: col.active ? Theme.accent : Theme.separator;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+                        Path {
+                            width: 7px;
+                            height: 8px;
+                            y: (parent.height - self.height) / 2;
+                            viewbox-width: 7;
+                            viewbox-height: 8;
+                            commands: "M 0 0 L 7 4 L 0 8 Z";
+                            fill: col.active ? Theme.accent : Theme.text-dim;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: col.name;
+                            color: col.active ? Theme.accent : Theme.text;
+                            font-size: Theme.font-small;
+                            font-weight: 600;
+                            letter-spacing: 0.4px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if c < 9: Text {
+                            text: c + 1;
+                            color: col.active ? Theme.accent : Theme.text-faint;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+                    col-ta := TouchArea {
+                        clicked => { root.column-clicked(c); }
+                    }
+                }
+                FlatButton {
+                    text: "+";
+                    width: 28px;
+                    height: Theme.header-h;
+                    clicked => { root.add-column(); }
+                }
+            }
+
+            // Layers, top of the mix first.
+            for layer in root.layers: HorizontalLayout {
+                spacing: Theme.gap;
+                alignment: start;
+                height: Theme.cell-h;
+                LayerStrip {
+                    data: layer;
+                    blend-modes: root.blend-modes;
+                    select => { root.layer-selected(layer.index); }
+                    opacity-changed(v) => { root.layer-opacity(layer.index, v); }
+                    blend(i) => { root.layer-blend(layer.index, i); }
+                    bypass => { root.layer-bypass(layer.index); }
+                    solo => { root.layer-solo(layer.index); }
+                    clear => { root.layer-clear(layer.index); }
+                }
+                for cell[c] in layer.cells: ClipCell {
+                    data: cell;
+                    armed: root.armed;
+                    clicked => { root.cell-clicked(layer.index, c); }
+                    right-clicked => { root.cell-right-clicked(layer.index, c); }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                FlatButton {
+                    text: "+ Layer";
+                    width: Theme.strip-w;
+                    clicked => { root.add-layer(); }
+                }
+            }
+        }
+    }
+}
+
+/// Deck tabs under the grid. Click to open a deck, double-click to rename it.
+component DeckTabs inherits Rectangle {
+    in property <[DeckData]> decks;
+    callback clicked(int);
+    callback add();
+    callback renamed(int, string);
+    callback remove(int);
+    property <int> editing: -1;
+
+    height: 28px;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+        alignment: start;
+        for deck[i] in root.decks: Rectangle {
+            width: 130px;
+            border-radius: Theme.radius;
+            background: deck.active ? Theme.accent.with-alpha(0.14) : tab-ta.has-hover ? #1d1d20 : Theme.panel-2;
+            border-width: 1px;
+            border-color: deck.active ? Theme.accent : Theme.border;
+
+            tab-ta := TouchArea {
+                clicked => { root.clicked(i); }
+                double-clicked => { root.editing = i; }
+            }
+            if root.editing != i: Text {
+                x: 10px;
+                width: parent.width - (deck.active && root.decks.length > 1 ? 34px : 20px);
+                text: deck.name;
+                color: deck.active ? Theme.accent : Theme.text;
+                font-size: 12px;
+                font-weight: deck.active ? 600 : 500;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.editing == i: LineEdit {
+                x: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                font-size: 11px;
+                text: deck.name;
+                init => { self.focus(); self.select-all(); }
+                accepted(t) => { root.renamed(i, t); root.editing = -1; }
+            }
+            if deck.active && root.decks.length > 1 && root.editing != i: Rectangle {
+                x: parent.width - 22px;
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: close-ta.has-hover ? Theme.chosen : transparent;
+                CloseIcon {
+                    size: 8px;
+                    color: close-ta.has-hover ? Theme.text : Theme.accent;
+                }
+                close-ta := TouchArea {
+                    clicked => { root.remove(i); }
+                }
+            }
+        }
+        FlatButton {
+            text: "+ Deck";
+            height: 28px;
+            clicked => { root.add(); }
+        }
+    }
+}
+
+component Toolbar inherits Rectangle {
+    in property <string> comp-name;
+    in property <float> bpm;
+    in property <float> beat;
+    in property <bool> output-open;
+    in property <int> missing-media;
+    in property <bool> audio-on;
+    in property <bool> link-available;
+    in property <bool> link-on;
+    in property <int> link-peers;
+    in property <bool> midi-on;
+    callback audio-toggle();
+    callback link-toggle();
+    callback midi-toggle();
+    callback tap();
+    callback nudge-bpm(float);
+    callback toggle-output();
+    callback fullscreen-output();
+    callback open-mapping();
+    callback new-comp();
+    callback open-comp();
+    callback save-comp();
+    callback relink-media();
+    callback open-settings();
+
+    height: 48px;
+    background: Theme.bg;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.separator;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: stretch;
+
+        // Wordmark, in openDJ's typeface with the mark in the accent.
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 8px;
+            Path {
+                width: 26px;
+                height: 18px;
+                y: (parent.height - self.height) / 2;
+                viewbox-width: 26;
+                viewbox-height: 18;
+                stroke: Theme.accent;
+                stroke-width: 2px;
+                fill: transparent;
+                commands: "M 3 1 L 23 1 Q 25 1 25 3 L 25 15 Q 25 17 23 17 L 3 17 Q 1 17 1 15 L 1 3 Q 1 1 3 1 Z M 10.5 5.5 L 17 9 L 10.5 12.5 Z";
+            }
+            Text {
+                text: "openVJ";
+                color: Theme.text;
+                font-family: Theme.brand-font;
+                font-size: 19px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "alpha";
+                color: Theme.text-faint;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+
+        Text {
+            horizontal-stretch: 0;
+            text: root.comp-name;
+            color: Theme.text-dim;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // Audio input.
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 6px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            FlatButton {
+                text: root.audio-on ? "AUDIO ●" : "AUDIO";
+                active: root.audio-on;
+                clicked => { root.audio-toggle(); }
+            }
+            BandMeters {
+                bar-height: 24px;
+                opacity: root.audio-on ? 1 : 0.4;
+            }
+            FlatButton {
+                text: root.midi-on ? "MIDI ●" : "MIDI";
+                active: root.midi-on;
+                clicked => { root.midi-toggle(); }
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+
+        // Tempo.
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 6px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            Rectangle {
+                width: link-label.preferred-width + 16px;
+                border-radius: Theme.radius;
+                background: root.link-on ? Theme.link.with-alpha(0.14) : link-ta.has-hover && root.link-available ? #1d1d20 : Theme.panel-2;
+                border-width: 1px;
+                border-color: root.link-on ? Theme.link : Theme.border;
+                opacity: root.link-available ? 1 : 0.4;
+                link-label := Text {
+                    text: root.link-on ? "LINK " + root.link-peers : "LINK";
+                    color: root.link-on ? Theme.link : Theme.text;
+                    font-size: Theme.font-body;
+                    font-weight: 700;
+                }
+                link-ta := TouchArea {
+                    enabled: root.link-available;
+                    clicked => { root.link-toggle(); }
+                }
+            }
+            FlatButton {
+                text: "−";
+                width: 24px;
+                clicked => { root.nudge-bpm(-1); }
+            }
+            Rectangle {
+                width: 78px;
+                border-radius: Theme.radius;
+                background: Theme.track;
+                border-width: 1px;
+                border-color: Theme.separator;
+                Text {
+                    text: (round(root.bpm * 10) / 10) + " BPM";
+                    color: Theme.text;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+            }
+            FlatButton {
+                text: "+";
+                width: 24px;
+                clicked => { root.nudge-bpm(1); }
+            }
+            FlatButton {
+                text: "TAP";
+                width: 44px;
+                clicked => { root.tap(); }
+            }
+            for i in 4: Rectangle {
+                width: 8px;
+                height: 8px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: mod(floor(root.beat), 4) == i ? Theme.accent.with-alpha(1 - 0.7 * (root.beat - floor(root.beat))) : Theme.chosen;
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 6px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            FlatButton {
+                text: "New";
+                clicked => { root.new-comp(); }
+            }
+            FlatButton {
+                text: "Open…";
+                clicked => { root.open-comp(); }
+            }
+            FlatButton {
+                text: "Save";
+                clicked => { root.save-comp(); }
+            }
+            if root.missing-media > 0: FlatButton {
+                text: "Find media (\{root.missing-media} missing)…";
+                clicked => { root.relink-media(); }
+            }
+            Rectangle {
+                width: 6px;
+            }
+            FlatButton {
+                text: root.output-open ? "Output window ●" : "Output window";
+                active: root.output-open;
+                clicked => { root.toggle-output(); }
+            }
+            FlatButton {
+                text: "Fullscreen";
+                clicked => { root.fullscreen-output(); }
+            }
+            FlatButton {
+                text: "Mapping";
+                clicked => { root.open-mapping(); }
+            }
+            // Settings (also Ctrl/Cmd + ,).
+            Rectangle {
+                width: 28px;
+                border-radius: Theme.radius;
+                background: gear-ta.pressed ? Theme.pressed : gear-ta.has-hover ? #1d1d20 : Theme.panel-2;
+                border-width: 1px;
+                border-color: Theme.border;
+                GearIcon {
+                    color: gear-ta.has-hover ? Theme.text : Theme.text-dim;
+                }
+                gear-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-settings(); }
+                }
+            }
+        }
+    }
+}
+
+component SourceCard inherits Rectangle {
+    in property <BrowserItem> item;
+    callback clicked();
+    callback double-clicked();
+    height: 50px;
+    // Equal thirds whatever the text length.
+    preferred-width: 1px;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius;
+    background: item.armed ? Theme.accent-dim : ta.has-hover ? Theme.raised : Theme.panel-2;
+    border-width: 1px;
+    border-color: item.armed ? Theme.accent : Theme.separator;
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 8px;
+        Rectangle {
+            width: 6px;
+            border-radius: 3px;
+            background: Theme.kind-color(item.kind);
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: item.name;
+                color: Theme.text;
+                font-size: 12px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: item.detail;
+                color: Theme.text-dim;
+                font-size: 10px;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
+    }
+}
+
+component Browser inherits Rectangle {
+    in property <[BrowserItem]> generators;
+    in property <[BrowserItem]> inputs;
+    in property <string> inputs-hint;
+    in property <[BrowserItem]> files;
+    in property <[BrowserItem]> effects;
+    in property <string> effects-hint;
+    in property <string> layer-name;
+    in property <string> group-name;
+    in property <string> path;
+    in-out property <int> tab;
+    callback generator-clicked(int);
+    callback generator-double-clicked(int);
+    callback input-clicked(int);
+    callback input-double-clicked(int);
+    callback refresh-inputs();
+    callback file-clicked(int);
+    callback file-double-clicked(int);
+    callback effect-add(int, int);
+    callback open-effects-folder();
+    callback go-up();
+    callback choose-folder();
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.separator;
+    border-radius: Theme.radius;
+
+    // Hairline under the tabs, edge to edge.
+    Rectangle {
+        y: 38px;
+        height: 1px;
+        background: Theme.separator;
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        padding-top: 0;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 2px;
+            height: 38px;
+            TabButton {
+                text: "Sources";
+                height: 38px;
+                active: root.tab == 0;
+                clicked => { root.tab = 0; }
+            }
+            TabButton {
+                text: "Effects";
+                height: 38px;
+                active: root.tab == 2;
+                clicked => { root.tab = 2; }
+            }
+            TabButton {
+                text: "Files";
+                height: 38px;
+                active: root.tab == 1;
+                clicked => { root.tab = 1; }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.tab == 2 ? "add to the selected layer or the whole composition" : "click to pick · click a slot to place";
+                color: Theme.text-faint;
+                font-size: 10px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if root.tab == 0: ScrollView {
+            property <int> gen-rows: ceil(root.generators.length / 3);
+            property <int> input-rows: max(1, ceil(root.inputs.length / 3));
+            content-height: (gen-rows + input-rows) * 54px + 64px;
+            VerticalLayout {
+                alignment: start;
+                spacing: 4px;
+                Text {
+                    height: 20px;
+                    text: "GENERATORS";
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                for row in gen-rows: HorizontalLayout {
+                    spacing: 4px;
+                    for col in 3: SourceCard {
+                        property <int> idx: row * 3 + col;
+                        item: idx < root.generators.length ? root.generators[idx] : { name: "" };
+                        visible: idx < root.generators.length;
+                        clicked => { root.generator-clicked(idx); }
+                        double-clicked => { root.generator-double-clicked(idx); }
+                    }
+                }
+                HorizontalLayout {
+                    height: 30px;
+                    padding-top: 6px;
+                    spacing: 8px;
+                    PanelTitle {
+                        text: "INPUTS";
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "cameras and Syphon";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                    FlatButton {
+                        text: "Refresh";
+                        clicked => { root.refresh-inputs(); }
+                    }
+                }
+                if root.inputs.length == 0: Text {
+                    height: 50px;
+                    text: root.inputs-hint;
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                for row in ceil(root.inputs.length / 3): HorizontalLayout {
+                    spacing: 4px;
+                    for col in 3: SourceCard {
+                        property <int> idx: row * 3 + col;
+                        item: idx < root.inputs.length ? root.inputs[idx] : { name: "" };
+                        visible: idx < root.inputs.length;
+                        clicked => { root.input-clicked(idx); }
+                        double-clicked => { root.input-double-clicked(idx); }
+                    }
+                }
+            }
+        }
+
+        if root.tab == 2: VerticalLayout {
+            spacing: 4px;
+            ListView {
+                for fx[i] in root.effects: Rectangle {
+                    property <bool> broken: fx.kind == "fx-error";
+                    height: 30px;
+                    border-radius: Theme.radius-small;
+                    background: fx-ta.has-hover && !broken ? Theme.raised : transparent;
+                    fx-ta := TouchArea {}
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 4px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 4px;
+                            height: 16px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 2px;
+                            background: broken ? Theme.danger : Theme.text-faint;
+                        }
+                        Text {
+                            width: 74px;
+                            text: fx.name;
+                            color: broken ? Theme.text-faint : Theme.text;
+                            font-size: 12px;
+                            font-weight: 600;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: fx.detail;
+                            color: broken ? Theme.danger : Theme.text-dim;
+                            font-size: 10px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        if !broken: FlatButton {
+                            y: 3px;
+                            width: 62px;
+                            horizontal-stretch: 0;
+                            text: "+ Layer";
+                            clicked => { root.effect-add(Scope.layer-fx, i); }
+                        }
+                        if !broken && root.group-name != "": FlatButton {
+                            y: 3px;
+                            width: 62px;
+                            horizontal-stretch: 0;
+                            text: "+ Group";
+                            clicked => { root.effect-add(Scope.group-fx, i); }
+                        }
+                        if !broken: FlatButton {
+                            y: 3px;
+                            width: 62px;
+                            horizontal-stretch: 0;
+                            text: "+ Comp";
+                            clicked => { root.effect-add(Scope.comp-fx, i); }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                padding-left: 6px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.effects-hint;
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                FlatButton {
+                    width: 90px;
+                    horizontal-stretch: 0;
+                    text: "Open folder";
+                    clicked => { root.open-effects-folder(); }
+                }
+            }
+        }
+
+        if root.tab == 1: VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 4px;
+                FlatButton {
+                    text: "↑";
+                    width: 28px;
+                    clicked => { root.go-up(); }
+                }
+                Rectangle {
+                    border-radius: Theme.radius;
+                    background: Theme.track;
+                    border-width: 1px;
+                    border-color: Theme.separator;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: root.path;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+                FlatButton {
+                    text: "Folder…";
+                    clicked => { root.choose-folder(); }
+                }
+            }
+            if root.files.length == 0: Text {
+                text: "No folders or media files here. Images: png jpg gif webp bmp · Video: mov mp4 mkv webm avi…";
+                color: Theme.text-faint;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            ListView {
+                for item[i] in root.files: Rectangle {
+                    height: 26px;
+                    border-radius: Theme.radius-small;
+                    background: item.armed ? Theme.accent-dim : file-ta.has-hover ? Theme.raised : mod(i, 2) == 0 ? #161819 : transparent;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 30px;
+                            height: 14px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 3px;
+                            background: item.kind == "dir" ? Theme.raised : Theme.kind-color(item.kind);
+                            Text {
+                                text: Theme.kind-label(item.kind);
+                                color: item.kind == "dir" ? Theme.text-dim : #000;
+                                font-size: 8px;
+                                font-weight: 800;
+                            }
+                        }
+                        Text {
+                            text: item.name;
+                            color: Theme.text;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 0;
+                            text: item.detail;
+                            color: Theme.text-faint;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    file-ta := TouchArea {
+                        clicked => { root.file-clicked(i); }
+                        double-clicked => { root.file-double-clicked(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "openVJ";
+    preferred-width: 1600px;
+    preferred-height: 960px;
+    min-width: 1180px;
+    min-height: 760px;
+    background: Theme.bg;
+    default-font-size: 12px;
+    default-font-family: Theme.font-family;
+
+    // Grid.
+    in property <[LayerData]> layers;
+    in property <[ColumnData]> columns;
+    in property <[DeckData]> decks;
+    callback deck-clicked(int);
+    callback deck-add();
+    callback deck-renamed(int, string);
+    callback deck-remove(int);
+    in property <[string]> blend-modes;
+    in property <bool> armed;
+    in property <string> armed-label;
+
+    // Monitors and transport.
+    in property <image> output-image;
+    in property <image> preview-image;
+    in property <string> preview-label;
+    in property <string> comp-name;
+    in property <string> comp-info;
+    in property <float> bpm;
+    in property <float> beat;
+    in property <float> master;
+    in property <float> live-master;
+    in property <bool> output-open;
+    in property <string> mapping-status;
+    in property <bool> mapped;
+    in property <bool> test-card;
+    in property <bool> syphon-available;
+    in property <bool> syphon-on;
+    in property <bool> syphon-receiving;
+    in property <string> syphon-error;
+    callback syphon-toggle();
+    in property <int> missing-media;
+    in property <string> status;
+    in property <string> fps;
+
+    // Audio and tempo sync.
+    in property <bool> audio-on;
+    in property <[string]> audio-devices;
+    in property <int> audio-device-index;
+    in property <string> audio-status;
+    in property <bool> link-available;
+    in property <bool> link-on;
+    in property <int> link-peers;
+    in property <bool> midi-on;
+    in property <string> midi-status;
+    in property <string> midi-preset;
+    in property <bool> midi-has-mappings;
+    in property <string> midi-last;
+
+    // Browser.
+    in property <[BrowserItem]> generators;
+    in property <[BrowserItem]> inputs;
+    in property <string> inputs-hint;
+    in property <[BrowserItem]> files;
+    in property <[BrowserItem]> effects;
+    in property <string> effects-hint;
+    in property <string> browser-path;
+    in-out property <int> browser-tab;
+
+    // Properties dock.
+    in-out property <int> props-tab;
+    in property <[ParamData]> comp-params;
+    in property <[ParamData]> audio-params;
+    in property <[EffectData]> comp-effects;
+    in property <bool> layer-valid;
+    in property <string> layer-title;
+    in-out property <string> layer-name;
+    in property <int> layer-blend-value;
+    in property <[ParamData]> layer-params;
+    in property <[EffectData]> layer-effects;
+    in property <string> layer-side;
+    in property <[string]> group-choices;
+    in property <int> layer-group-choice;
+    in property <bool> group-valid;
+    in-out property <string> group-name;
+    in property <string> group-title;
+    in property <int> group-blend-value;
+    in property <bool> group-bypass;
+    in property <bool> group-solo;
+    in property <[ParamData]> group-params;
+    in property <[EffectData]> group-effects;
+    in property <[string]> crossfade-curves;
+    in property <int> crossfade-curve;
+    in property <float> crossfader;
+    in property <float> live-crossfader;
+    in property <[string]> play-modes;
+    in property <int> clip-play-mode;
+    in property <bool> clip-synced;
+    in property <bool> clip-valid;
+    in property <string> clip-title;
+    in property <string> clip-kind;
+    in property <string> clip-detail;
+    in property <string> clip-path;
+    in-out property <string> clip-name;
+    in property <[ParamData]> clip-params;
+
+    callback cell-clicked(int, int);
+    callback cell-right-clicked(int, int);
+    callback column-clicked(int);
+    callback layer-selected(int);
+    callback layer-opacity(int, float);
+    callback layer-blend(int, int);
+    callback layer-bypass(int);
+    callback layer-solo(int);
+    callback layer-clear(int);
+    callback clear-all();
+    callback add-layer();
+    callback add-column();
+    callback remove-layer();
+
+    callback tap();
+    callback nudge-bpm(float);
+    callback master-changed(float);
+    callback toggle-output();
+    callback fullscreen-output();
+    callback open-mapping();
+    callback import-mapping();
+    callback clear-mapping();
+    callback toggle-test-card();
+    callback new-comp();
+    callback open-comp();
+    callback save-comp();
+    callback relink-media();
+    callback audio-toggle();
+    callback audio-pick(int);
+    callback link-toggle();
+    callback midi-toggle();
+    callback midi-import();
+    callback midi-clear();
+
+    callback generator-clicked(int);
+    callback generator-double-clicked(int);
+    callback input-clicked(int);
+    callback input-double-clicked(int);
+    callback refresh-inputs();
+    callback file-clicked(int);
+    callback file-double-clicked(int);
+    callback browser-up();
+    callback browser-choose-folder();
+
+    // Parameters are addressed by (scope, owner, index); see Scope and app.rs.
+    callback param-set(int, int, int, float);
+    callback param-mod(int, int, int, int);
+    callback param-mod-amount(int, int, int, float);
+    callback param-mod-rate(int, int, int, int);
+    callback effect-add(int, int);
+    callback open-effects-folder();
+    callback effect-toggle(int, int);
+    callback effect-remove(int, int);
+    callback effect-move(int, int, int);
+
+    callback clip-renamed(string);
+    callback clip-remove();
+    callback clip-restart();
+    callback layer-renamed(string);
+    callback clip-play-mode-picked(int);
+    callback clip-synced-picked(bool);
+    callback layer-side-picked(int);
+    callback layer-group-picked(int);
+    callback group-renamed(string);
+    callback group-blend(int);
+    callback group-bypass-toggled();
+    callback group-solo-toggled();
+    callback group-ungroup();
+    callback crossfade-curve-picked(int);
+
+    // Returns true if the key was handled.
+    callback key(string) -> bool;
+
+    public function focus-keys() {
+        keys.focus();
+    }
+
+    // Settings window (settings.slint).
+    in-out property <bool> settings-open;
+    in-out property <int> settings-page;
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == "," && (e.modifiers.control || e.modifiers.meta)) {
+                if (root.settings-open) {
+                    root.settings-open = false;
+                } else {
+                    root.settings-open = true;
+                }
+                return accept;
+            }
+            if (root.settings-open && e.text == Key.Escape) {
+                root.settings-open = false;
+                return accept;
+            }
+            if (root.key(e.text)) {
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            Toolbar {
+                comp-name: root.comp-name;
+                bpm: root.bpm;
+                beat: root.beat;
+                output-open: root.output-open;
+                missing-media: root.missing-media;
+                audio-on: root.audio-on;
+                link-available: root.link-available;
+                link-on: root.link-on;
+                link-peers: root.link-peers;
+                midi-on: root.midi-on;
+                audio-toggle => { root.audio-toggle(); }
+                link-toggle => { root.link-toggle(); }
+                midi-toggle => { root.midi-toggle(); }
+                tap => { root.tap(); }
+                nudge-bpm(d) => { root.nudge-bpm(d); }
+                toggle-output => { root.toggle-output(); }
+                fullscreen-output => { root.fullscreen-output(); }
+                open-mapping => { root.open-mapping(); }
+                new-comp => { root.new-comp(); }
+                open-comp => { root.open-comp(); }
+                save-comp => { root.save-comp(); }
+                relink-media => { root.relink-media(); }
+                open-settings => { root.settings-open = true; }
+            }
+
+            // Clip grid, with the monitors on the right.
+            HorizontalLayout {
+                vertical-stretch: 1;
+                padding: 8px;
+                spacing: 8px;
+
+                VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 6px;
+                ClipGrid {
+                    vertical-stretch: 1;
+                    layers: root.layers;
+                    columns: root.columns;
+                    blend-modes: root.blend-modes;
+                    armed: root.armed;
+                    cell-clicked(l, c) => { root.cell-clicked(l, c); keys.focus(); }
+                    cell-right-clicked(l, c) => { root.cell-right-clicked(l, c); keys.focus(); }
+                    column-clicked(c) => { root.column-clicked(c); keys.focus(); }
+                    layer-selected(l) => { root.layer-selected(l); keys.focus(); }
+                    layer-opacity(l, v) => { root.layer-opacity(l, v); }
+                    layer-blend(l, b) => { root.layer-blend(l, b); }
+                    layer-bypass(l) => { root.layer-bypass(l); }
+                    layer-solo(l) => { root.layer-solo(l); }
+                    layer-clear(l) => { root.layer-clear(l); }
+                    clear-all => { root.clear-all(); }
+                    add-layer => { root.add-layer(); }
+                    add-column => { root.add-column(); }
+                }
+                DeckTabs {
+                    decks: root.decks;
+                    clicked(i) => { root.deck-clicked(i); keys.focus(); }
+                    add => { root.deck-add(); keys.focus(); }
+                    renamed(i, t) => { root.deck-renamed(i, t); keys.focus(); }
+                    remove(i) => { root.deck-remove(i); keys.focus(); }
+                }
+                }
+
+                Rectangle {
+                    width: 360px;
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.separator;
+                    border-radius: Theme.radius;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+                        alignment: start;
+                        Monitor {
+                            title: "PREVIEW";
+                            caption: root.preview-label;
+                            source: root.preview-image;
+                        }
+                        Monitor {
+                            title: "OUTPUT";
+                            title-color: Theme.accent;
+                            caption: root.comp-info;
+                            source: root.output-image;
+                        }
+                        Fader {
+                            height: 24px;
+                            label: "MASTER";
+                            label-width: 60px;
+                            value: root.master;
+                            live: root.live-master;
+                            fill: Theme.accent;
+                            changed(v) => { root.master-changed(v); }
+                        }
+                        // A/B crossfader for layers assigned to a side.
+                        Crossfader {
+                            value: root.crossfader;
+                            live: root.live-crossfader;
+                            changed(v) => { root.param-set(Scope.comp, 0, 3, v); }
+                        }
+                    }
+                }
+            }
+
+            // Properties dock and browser.
+            HorizontalLayout {
+                height: 318px;
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+
+                PropertiesPanel {
+                    horizontal-stretch: 1;
+                    tab <=> root.props-tab;
+                    blend-modes: root.blend-modes;
+                    comp-name: root.comp-name;
+                    comp-params: root.comp-params;
+                    audio-params: root.audio-params;
+                    comp-effects: root.comp-effects;
+                    audio-devices: root.audio-devices;
+                    audio-device-index: root.audio-device-index;
+                    audio-on: root.audio-on;
+                    audio-status: root.audio-status;
+                    link-available: root.link-available;
+                    link-on: root.link-on;
+                    link-peers: root.link-peers;
+                    midi-on: root.midi-on;
+                    midi-status: root.midi-status;
+                    midi-preset: root.midi-preset;
+                    midi-has-mappings: root.midi-has-mappings;
+                    midi-last: root.midi-last;
+                    layer-valid: root.layer-valid;
+                    layer-title: root.layer-title;
+                    layer-name <=> root.layer-name;
+                    layer-blend-value: root.layer-blend-value;
+                    layer-params: root.layer-params;
+                    layer-effects: root.layer-effects;
+                    layer-side: root.layer-side;
+                    group-choices: root.group-choices;
+                    layer-group-choice: root.layer-group-choice;
+                    group-valid: root.group-valid;
+                    group-name <=> root.group-name;
+                    group-title: root.group-title;
+                    group-blend-value: root.group-blend-value;
+                    group-bypass: root.group-bypass;
+                    group-solo: root.group-solo;
+                    group-params: root.group-params;
+                    group-effects: root.group-effects;
+                    crossfade-curves: root.crossfade-curves;
+                    crossfade-curve: root.crossfade-curve;
+                    play-modes: root.play-modes;
+                    clip-play-mode: root.clip-play-mode;
+                    clip-synced: root.clip-synced;
+                    clip-valid: root.clip-valid;
+                    clip-title: root.clip-title;
+                    clip-kind: root.clip-kind;
+                    clip-detail: root.clip-detail;
+                    clip-path: root.clip-path;
+                    clip-name <=> root.clip-name;
+                    clip-params: root.clip-params;
+                    param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                    param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                    param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
+                    param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                    effect-toggle(s, i) => { root.effect-toggle(s, i); }
+                    effect-remove(s, i) => { root.effect-remove(s, i); }
+                    effect-move(s, i, d) => { root.effect-move(s, i, d); }
+                    audio-toggle => { root.audio-toggle(); }
+                    audio-pick(i) => { root.audio-pick(i); }
+                    link-toggle => { root.link-toggle(); }
+                    midi-toggle => { root.midi-toggle(); }
+                    midi-import => { root.midi-import(); }
+                    midi-clear => { root.midi-clear(); }
+                    layer-blend(l, b) => { root.layer-blend(l, b); }
+                    layer-renamed(t) => { root.layer-renamed(t); }
+                    layer-clear(l) => { root.layer-clear(l); }
+                    remove-layer => { root.remove-layer(); }
+                    clip-renamed(t) => { root.clip-renamed(t); }
+                    clip-remove => { root.clip-remove(); }
+                    clip-restart => { root.clip-restart(); }
+                    clip-play-mode-picked(i) => { root.clip-play-mode-picked(i); }
+                    clip-synced-picked(b) => { root.clip-synced-picked(b); }
+                    layer-side-picked(i) => { root.layer-side-picked(i); }
+                    layer-group-picked(i) => { root.layer-group-picked(i); }
+                    group-renamed(t) => { root.group-renamed(t); }
+                    group-blend(i) => { root.group-blend(i); }
+                    group-bypass-toggled => { root.group-bypass-toggled(); }
+                    group-solo-toggled => { root.group-solo-toggled(); }
+                    group-ungroup => { root.group-ungroup(); }
+                    crossfade-curve-picked(i) => { root.crossfade-curve-picked(i); }
+                    done-editing => { keys.focus(); }
+                }
+
+                Browser {
+                    width: 480px;
+                    generators: root.generators;
+                    inputs: root.inputs;
+                    inputs-hint: root.inputs-hint;
+                    files: root.files;
+                    effects: root.effects;
+                    effects-hint: root.effects-hint;
+                    path: root.browser-path;
+                    group-name: root.group-valid ? root.group-name : "";
+                    tab <=> root.browser-tab;
+                    generator-clicked(i) => { root.generator-clicked(i); keys.focus(); }
+                    generator-double-clicked(i) => { root.generator-double-clicked(i); keys.focus(); }
+                    input-clicked(i) => { root.input-clicked(i); keys.focus(); }
+                    input-double-clicked(i) => { root.input-double-clicked(i); keys.focus(); }
+                    refresh-inputs => { root.refresh-inputs(); keys.focus(); }
+                    file-clicked(i) => { root.file-clicked(i); keys.focus(); }
+                    file-double-clicked(i) => { root.file-double-clicked(i); keys.focus(); }
+                    effect-add(s, k) => { root.effect-add(s, k); keys.focus(); }
+                    open-effects-folder => { root.open-effects-folder(); }
+                    go-up => { root.browser-up(); }
+                    choose-folder => { root.browser-choose-folder(); }
+                }
+            }
+
+            // Status bar.
+            Rectangle {
+                height: 24px;
+                background: Theme.bg;
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.separator;
+                }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 16px;
+                    Text {
+                        text: root.armed ? "● " + root.armed-label + " — click a slot to place it (Esc cancels)" : root.status;
+                        color: root.armed ? Theme.accent : Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        horizontal-stretch: 0;
+                        text: "1–9 columns · double-click a deck to rename it · right-click selects · map ▾ links a parameter to audio or tempo · Esc×2 clears all";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        horizontal-stretch: 0;
+                        text: root.fps;
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Only built while open, so it costs nothing the rest of the time.
+        if root.settings-open: SettingsOverlay {
+            page <=> root.settings-page;
+            audio-on: root.audio-on;
+            audio-devices: root.audio-devices;
+            audio-device-index: root.audio-device-index;
+            audio-status: root.audio-status;
+            audio-params: root.audio-params;
+            link-available: root.link-available;
+            link-on: root.link-on;
+            link-peers: root.link-peers;
+            bpm: root.bpm;
+            output-open: root.output-open;
+            mapping-status: root.mapping-status;
+            mapped: root.mapped;
+            test-card: root.test-card;
+            syphon-available: root.syphon-available;
+            syphon-on: root.syphon-on;
+            syphon-receiving: root.syphon-receiving;
+            syphon-error: root.syphon-error;
+            media-folder: root.browser-path;
+            missing-media: root.missing-media;
+            audio-toggle => { root.audio-toggle(); }
+            audio-pick(i) => { root.audio-pick(i); }
+            param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+            link-toggle => { root.link-toggle(); }
+            toggle-output => { root.toggle-output(); }
+            fullscreen-output => { root.fullscreen-output(); }
+            import-mapping => { root.import-mapping(); }
+            clear-mapping => { root.clear-mapping(); }
+            toggle-test-card => { root.toggle-test-card(); }
+            syphon-toggle => { root.syphon-toggle(); }
+            choose-folder => { root.browser-choose-folder(); }
+            relink-media => { root.relink-media(); }
+            closed => { root.settings-open = false; keys.focus(); }
+        }
+    }
+}
+
+export component OutputWindow inherits Window {
+    title: "openVJ Output";
+    preferred-width: 960px;
+    preferred-height: 540px;
+    background: #000;
+    in property <image> frame;
+    callback toggle-fullscreen();
+    callback exit-fullscreen();
+
+    FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.exit-fullscreen();
+                return accept;
+            }
+            if (e.text == "f" || e.text == "F") {
+                root.toggle-fullscreen();
+                return accept;
+            }
+            return reject;
+        }
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.frame;
+            image-fit: contain;
+        }
+        TouchArea {
+            double-clicked => { root.toggle-fullscreen(); }
+        }
+    }
+}

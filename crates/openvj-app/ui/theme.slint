@@ -1,0 +1,127 @@
+// Colors, fonts and sizes, matched to openDJ (github.com/openwave-studio/opendj) so the
+// two apps look like one family: near-black panels, flat dark controls with thin
+// borders, Inter Tabular, Apple system colors for states, and one accent color.
+// openDJ's accent is Electric Lilac; openVJ's is cyan.
+//
+// Restyle the app here rather than in the components: they read every color and
+// size from this file.
+import "fonts/InterTabular-Regular.otf";
+import "fonts/InterTabular-Medium.otf";
+import "fonts/InterTabular-SemiBold.otf";
+import "fonts/InterTabular-Bold.otf";
+import "fonts/ZenDots-Regular.ttf";
+
+export global Theme {
+    // Typefaces: the interface (Inter with tabular digits, so BPM and timecodes
+    // don't jitter) and the wordmark.
+    out property <string> font-family: "Inter Tabular";
+    out property <string> brand-font: "Zen Dots";
+
+    // The accent: the logo, active and selected things, the output.
+    out property <color> accent: #4fe6da;
+    out property <color> accent-dim: root.accent.with-alpha(0.22);
+    // A darker cyan for highlights that carry white text (openDJ's selection).
+    out property <color> selection: #149c93;
+    // Text drawn on the accent.
+    out property <color> on-accent: #04201e;
+
+    // Surfaces, darkest to lightest.
+    out property <color> bg: #0e0e10;
+    // Recessed wells: fader slots, text fields, monitors' surrounds.
+    out property <color> track: #0d0d0e;
+    // Buttons and other controls at rest.
+    out property <color> panel-2: #161618;
+    out property <color> panel: #1a1a1c;
+    // Hovered or selected controls and raised cards.
+    out property <color> raised: #232326;
+    // A pressed control.
+    out property <color> pressed: #2c2c2f;
+    // The chosen segment of a segmented control, and the selected settings page.
+    out property <color> chosen: #3a3a3d;
+    out property <color> border: #353538;
+    // Hairlines between areas inside a panel.
+    out property <color> separator: #28282b;
+
+    out property <color> text: #f2f2f7;
+    out property <color> text-dim: #8e8e93;
+    // Captions and hints: quieter than the controls they name.
+    out property <color> text-faint: #6e6e73;
+
+    // States, in Apple system colors as in openDJ. A playing clip lights in the accent.
+    out property <color> playing: root.accent;
+    out property <color> selected: #ffffff;
+    out property <color> warn: #ff9f0a;
+    out property <color> danger: #ff453a;
+    // Source kinds.
+    out property <color> gen: #bf5af2;
+    out property <color> image: #ff375f;
+    out property <color> video: #ff9f0a;
+    out property <color> camera: #ff6961;
+    out property <color> syphon: #5e5ce6;
+    // Modulation sources: audio bands and tempo-synced shapes.
+    out property <color> audio: #0a84ff;
+    out property <color> tempo: #ffd60a;
+    out property <color> link: #30d158;
+
+    // Fader caps: grey metal, as on openDJ's mixer.
+    out property <brush> fader-cap: @linear-gradient(90deg, #b0b0b5 0%, #8a8a8f 45%, #5f5f64 100%);
+    out property <color> tick: #3e3e42;
+
+    // Corners, and the type scale.
+    out property <length> radius: 6px;
+    out property <length> radius-small: 4px;
+    out property <length> font-tiny: 9px;
+    out property <length> font-small: 10px;
+    out property <length> font-body: 11px;
+    out property <length> font-normal: 13px;
+    out property <length> font-large: 17px;
+    out property <length> font-xl: 20px;
+
+    out property <length> cell-w: 132px;
+    out property <length> cell-h: 96px;
+    out property <length> strip-w: 220px;
+    out property <length> header-h: 30px;
+    out property <length> gap: 4px;
+    out property <length> label-w: 74px;
+    out property <length> card-w: 300px;
+
+    /// Colour of a modulation source index (see ModSource::ALL): 0 off, 1–4 audio, 5–8 tempo.
+    public pure function mod-color(source: int) -> color {
+        if (source >= 1 && source <= 4) { return self.audio; }
+        if (source >= 5) { return self.tempo; }
+        return self.text-faint;
+    }
+
+    public pure function kind-color(kind: string) -> color {
+        if (kind == "gen") { return self.gen; }
+        if (kind == "image") { return self.image; }
+        if (kind == "video") { return self.video; }
+        if (kind == "camera") { return self.camera; }
+        if (kind == "syphon") { return self.syphon; }
+        return self.text-faint;
+    }
+
+    public pure function kind-label(kind: string) -> string {
+        if (kind == "gen") { return "GEN"; }
+        if (kind == "image") { return "IMG"; }
+        if (kind == "video") { return "VID"; }
+        if (kind == "camera") { return "CAM"; }
+        if (kind == "syphon") { return "SYP"; }
+        if (kind == "dir") { return "DIR"; }
+        return "";
+    }
+}
+
+// Close / clear cross, drawn (✕ is missing from some fonts).
+export component CloseIcon inherits Path {
+    in property <length> size: 10px;
+    in property <color> color: Theme.text-dim;
+    width: size;
+    height: size;
+    viewbox-width: 10;
+    viewbox-height: 10;
+    commands: "M 1 1 L 9 9 M 9 1 L 1 9";
+    stroke: color;
+    stroke-width: 1.5px;
+    fill: transparent;
+}

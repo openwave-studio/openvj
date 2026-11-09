@@ -1,0 +1,135 @@
+name: macOS app
+
+# Builds OpenVJ.app with scripts/bundle-macos.sh. Runs when packaging changes, on demand
+# (Actions → macOS app → Run workflow), and on version tags, where it attaches the zip to a
+# draft GitHub release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: &packaging
+      - scripts/bundle-macos.sh
+      - scripts/build-ffmpeg-macos.sh
+      - packaging/macos/**
+      - .github/workflows/macos-app.yml
+  pull_request:
+    paths: *packaging
+  workflow_dispatch:
+
+concurrency:
+  group: macos-app-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  bundle:
+    runs-on: macos-latest
+    permissions:
+      contents: write # create draft releases
+      pull-requests: read # name dev builds after their PR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Release builds don't share artifacts with CI's debug builds.
+          shared-key: macos-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # With the Developer ID secrets set (see packaging/macos/README.md), manual runs and tags
+      # are signed with Developer ID and notarized. Without them, and on PRs, the app is
+      # signed ad hoc.
+      - name: Set up Developer ID signing
+        if: github.event_name != 'pull_request'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -z "$CERT_P12" ]]; then
+            echo "No Developer ID secrets: signing ad hoc."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$CERT_P12" | base64 --decode >"$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "OPENVJ_SIGN_IDENTITY=Developer ID Application" >>"$GITHUB_ENV"
+          if [[ -n "$NOTARY_KEY_P8" ]]; then
+            printf '%s\n' "$NOTARY_KEY_P8" >"$RUNNER_TEMP/notary.p8"
+            {
+              echo "OPENVJ_NOTARY_KEY=$RUNNER_TEMP/notary.p8"
+              echo "OPENVJ_NOTARY_KEY_ID=$NOTARY_KEY_ID"
+              echo "OPENVJ_NOTARY_ISSUER=$NOTARY_ISSUER"
+            } >>"$GITHUB_ENV"
+          fi
+      # The bundled FFmpeg only changes with its build script, so it's built once and cached.
+      - name: Restore FFmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: target/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+      - name: Build FFmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: scripts/build-ffmpeg-macos.sh
+      - name: Build OpenVJ.app
+        env:
+          OPENVJ_REQUIRE_FFMPEG: "1"
+        run: scripts/bundle-macos.sh
+      # Starting the app proves the bundled Syphon.framework loads. OPENVJ_SNAPSHOT makes it
+      # save a screenshot after 120 frames and quit; perl's alarm stops it if it hangs.
+      - name: Launch the app
+        run: |
+          OPENVJ_SNAPSHOT="$RUNNER_TEMP/openvj.png" perl -e 'alarm shift; exec @ARGV' 180 \
+            target/macos/OpenVJ.app/Contents/MacOS/openvj
+          test -s "$RUNNER_TEMP/openvj.png"
+      # The bundled FFmpeg runs from inside the signed app, and decodes and scales a frame to raw
+      # RGBA the way openVJ asks for it.
+      - name: Check the bundled FFmpeg
+        run: |
+          macos=target/macos/OpenVJ.app/Contents/MacOS
+          "$macos/ffprobe" -hide_banner -version | head -1
+          bytes="$("$macos/ffmpeg" -nostdin -loglevel error -f lavfi -i testsrc2=size=320x240:rate=30 \
+            -frames:v 1 -an -vf scale=160:120:flags=bilinear -f rawvideo -pix_fmt rgba - | wc -c)"
+          test "$bytes" -eq $((160 * 120 * 4))
+      # Manual runs put the zip on a draft "dev" release (visible only to people with push
+      # access). Releases don't count against the private repo's small artifact storage.
+      # Each branch keeps one dev draft, tagged dev-<branch>--<sha>: a new run replaces that
+      # branch's previous draft and leaves other branches' test builds alone.
+      - name: Draft a dev build release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          slug="$(tr '[:upper:]' '[:lower:]' <<<"$GITHUB_REF_NAME" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+          short="${GITHUB_SHA::7}"
+          gh release list --limit 200 --json tagName,isDraft \
+            --jq ".[] | select(.isDraft and (.tagName | test(\"^dev-${slug}--[0-9a-f]{7}\$\"))) | .tagName" |
+            while read -r old; do gh release delete "$old" --yes; done
+          pr="$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number // empty')"
+          title="OpenVJ dev build: $GITHUB_REF_NAME${pr:+ (PR #$pr)} at $short"
+          gh release create "dev-$slug--$short" target/macos/*.zip --draft --prerelease --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes "Built from \`$GITHUB_REF_NAME\`${pr:+ (#$pr)} at $GITHUB_SHA by run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+      - name: Draft a release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" target/macos/*.zip --clobber
+          else
+            gh release create "$tag" target/macos/*.zip --draft --generate-notes --title "OpenVJ $tag"
+          fi

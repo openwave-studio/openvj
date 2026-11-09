@@ -1,0 +1,704 @@
+// The tabbed properties dock: Composition, Layer and Clip, each with its parameters
+// and (for composition and layers) an effect chain laid out left to right.
+
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Scope, ParamData, EffectData, AudioLevels } from "state.slint";
+import { FlatButton, ToggleButton, TabButton, BlendPicker, PanelTitle, ModParam, ParamBar, BandMeters } from "controls.slint";
+
+/// One effect in a chain: header with bypass, reorder and remove, then its parameters.
+component EffectCard inherits Rectangle {
+    in property <EffectData> data;
+    in property <int> index;
+    in property <int> count;
+    callback toggle();
+    callback remove();
+    callback move(int);
+    callback set(int, float);
+    callback mod-source(int, int);
+    callback mod-amount(int, float);
+    callback mod-rate(int, int);
+
+    width: Theme.card-w;
+    border-radius: Theme.radius;
+    background: Theme.panel-2;
+    border-width: 1px;
+    border-color: root.data.enabled ? Theme.separator : Theme.track;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        alignment: start;
+        HorizontalLayout {
+            spacing: 4px;
+            height: 20px;
+            ToggleButton {
+                text: "●";
+                checked: root.data.enabled;
+                on-color: Theme.accent;
+                clicked => { root.toggle(); }
+            }
+            Text {
+                text: (root.index + 1) + "  " + root.data.name;
+                color: root.data.enabled ? Theme.text : Theme.text-faint;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            ToggleButton {
+                text: "◀";
+                opacity: root.index > 0 ? 1 : 0.3;
+                clicked => { root.move(-1); }
+            }
+            ToggleButton {
+                text: "▶";
+                opacity: root.index < root.count - 1 ? 1 : 0.3;
+                clicked => { root.move(1); }
+            }
+            ToggleButton {
+                text: "✕";
+                clicked => { root.remove(); }
+            }
+        }
+        for p in root.data.params: ModParam {
+            opacity: root.data.enabled ? 1 : 0.5;
+            data: p;
+            set(i, v) => { root.set(i, v); }
+            mod-source(i, s) => { root.mod-source(i, s); }
+            mod-amount(i, a) => { root.mod-amount(i, a); }
+            mod-rate(i, r) => { root.mod-rate(i, r); }
+        }
+    }
+}
+
+/// A horizontal chain of effect cards, or a hint when it's empty.
+component EffectChain inherits Rectangle {
+    in property <int> scope;
+    in property <[EffectData]> effects;
+    in property <string> owner;
+    callback param-set(int, int, int, float);
+    callback param-mod(int, int, int, int);
+    callback param-mod-amount(int, int, int, float);
+    callback param-mod-rate(int, int, int, int);
+    callback effect-toggle(int, int);
+    callback effect-remove(int, int);
+    callback effect-move(int, int, int);
+
+    VerticalLayout {
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            height: 14px;
+            PanelTitle {
+                text: "EFFECTS";
+            }
+            Text {
+                text: root.effects.length == 0 ? "" : root.effects.length + " on " + root.owner + ", applied left to right";
+                color: Theme.text-faint;
+                font-size: 10px;
+            }
+        }
+        if root.effects.length == 0: Rectangle {
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.separator;
+            background: Theme.track;
+            Text {
+                text: "No effects on " + root.owner + ". Add one from the Effects tab of the browser.";
+                color: Theme.text-faint;
+                font-size: 11px;
+            }
+        }
+        if root.effects.length > 0: ScrollView {
+            content-width: root.effects.length * (Theme.card-w + 6px);
+            HorizontalLayout {
+                x: 0;
+                y: 0;
+                spacing: 6px;
+                alignment: start;
+                for fx[i] in root.effects: EffectCard {
+                    data: fx;
+                    index: i;
+                    count: root.effects.length;
+                    toggle => { root.effect-toggle(root.scope, i); }
+                    remove => { root.effect-remove(root.scope, i); }
+                    move(d) => { root.effect-move(root.scope, i, d); }
+                    set(p, v) => { root.param-set(root.scope, i, p, v); }
+                    mod-source(p, s) => { root.param-mod(root.scope, i, p, s); }
+                    mod-amount(p, a) => { root.param-mod-amount(root.scope, i, p, a); }
+                    mod-rate(p, r) => { root.param-mod-rate(root.scope, i, p, r); }
+                }
+            }
+        }
+    }
+}
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    spacing: 4px;
+    PanelTitle {
+        text: root.title;
+        height: 14px;
+    }
+    @children
+}
+
+/// A label followed by a control, lined up with the parameter rows.
+component LabelledRow inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 6px;
+    height: 22px;
+    Text {
+        width: Theme.label-w;
+        text: root.label;
+        color: Theme.text-dim;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+component Tab inherits TabButton {
+    in property <string> title;
+    text: root.title;
+    height: 34px;
+}
+
+export component PropertiesPanel inherits Rectangle {
+    in-out property <int> tab;
+    in property <[string]> blend-modes;
+
+    // Composition.
+    in property <string> comp-name;
+    in property <[ParamData]> comp-params;
+    in property <[string]> crossfade-curves;
+    in property <int> crossfade-curve;
+    in property <[ParamData]> audio-params;
+    in property <[EffectData]> comp-effects;
+    in property <[string]> audio-devices;
+    in property <int> audio-device-index;
+    in property <bool> audio-on;
+    in property <string> audio-status;
+    in property <bool> link-available;
+    in property <bool> link-on;
+    in property <int> link-peers;
+    in property <bool> midi-on;
+    in property <string> midi-status;
+    in property <string> midi-preset;
+    in property <bool> midi-has-mappings;
+    in property <string> midi-last;
+
+    // Layer.
+    in property <bool> layer-valid;
+    in property <string> layer-title;
+    in-out property <string> layer-name;
+    in property <int> layer-blend-value;
+    in property <[ParamData]> layer-params;
+    in property <[EffectData]> layer-effects;
+    // "A", "" or "B".
+    in property <string> layer-side;
+    // "No group", the groups, then "New group".
+    in property <[string]> group-choices;
+    in property <int> layer-group-choice;
+
+    // Group (of the selected layer).
+    in property <bool> group-valid;
+    in-out property <string> group-name;
+    in property <string> group-title;
+    in property <int> group-blend-value;
+    in property <bool> group-bypass;
+    in property <bool> group-solo;
+    in property <[ParamData]> group-params;
+    in property <[EffectData]> group-effects;
+
+    // Clip.
+    in property <bool> clip-valid;
+    in property <string> clip-title;
+    in property <string> clip-kind;
+    in property <string> clip-detail;
+    in property <string> clip-path;
+    in-out property <string> clip-name;
+    in property <[ParamData]> clip-params;
+    in property <[string]> play-modes;
+    in property <int> clip-play-mode;
+    in property <bool> clip-synced;
+
+    callback param-set(int, int, int, float);
+    callback param-mod(int, int, int, int);
+    callback param-mod-amount(int, int, int, float);
+    callback param-mod-rate(int, int, int, int);
+    callback effect-toggle(int, int);
+    callback effect-remove(int, int);
+    callback effect-move(int, int, int);
+
+    callback audio-toggle();
+    callback audio-pick(int);
+    callback link-toggle();
+    callback midi-toggle();
+    callback midi-import();
+    callback midi-clear();
+    callback layer-blend(int, int);
+    callback layer-renamed(string);
+    callback layer-clear(int);
+    callback remove-layer();
+    callback clip-renamed(string);
+    callback clip-remove();
+    callback clip-restart();
+    callback clip-play-mode-picked(int);
+    callback clip-synced-picked(bool);
+    callback layer-side-picked(int);
+    callback layer-group-picked(int);
+    callback group-renamed(string);
+    callback group-blend(int);
+    callback group-bypass-toggled();
+    callback group-solo-toggled();
+    callback group-ungroup();
+    callback crossfade-curve-picked(int);
+    callback done-editing();
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.separator;
+    border-radius: Theme.radius;
+
+    // Hairline under the tabs, edge to edge.
+    Rectangle {
+        y: 34px;
+        height: 1px;
+        background: Theme.separator;
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        padding-top: 0;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 2px;
+            height: 34px;
+            alignment: start;
+            Tab {
+                title: "Composition";
+                subtitle: root.comp-name;
+                active: root.tab == 0;
+                clicked => { root.tab = 0; }
+            }
+            Tab {
+                title: "Layer";
+                subtitle: root.layer-valid ? root.layer-name : "";
+                active: root.tab == 1;
+                clicked => { root.tab = 1; }
+            }
+            Tab {
+                title: "Clip";
+                subtitle: root.clip-valid ? root.clip-name : "none";
+                active: root.tab == 2;
+                clicked => { root.tab = 2; }
+            }
+            if root.group-valid: Tab {
+                title: "Group";
+                subtitle: root.group-name;
+                active: root.tab == 3;
+                clicked => { root.tab = 3; }
+            }
+        }
+
+        // Composition: master, audio input, tempo sync and the composition effect chain.
+        if root.tab == 0: HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                width: 330px;
+                spacing: 10px;
+                alignment: start;
+                Section {
+                    title: "MASTER & CROSSFADER";
+                    for p in root.comp-params: ModParam {
+                        data: p;
+                        set(i, v) => { root.param-set(Scope.comp, 0, i, v); }
+                        mod-source(i, s) => { root.param-mod(Scope.comp, 0, i, s); }
+                        mod-amount(i, a) => { root.param-mod-amount(Scope.comp, 0, i, a); }
+                        mod-rate(i, r) => { root.param-mod-rate(Scope.comp, 0, i, r); }
+                    }
+                    LabelledRow {
+                        label: "Curve";
+                        BlendPicker {
+                            height: 22px;
+                            modes: root.crossfade-curves;
+                            current: root.crossfade-curve;
+                            picked(i) => { root.crossfade-curve-picked(i); }
+                        }
+                    }
+                }
+                Section {
+                    title: "AUDIO INPUT";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: 22px;
+                        FlatButton {
+                            text: root.audio-on ? "On" : "Off";
+                            active: root.audio-on;
+                            width: 44px;
+                            clicked => { root.audio-toggle(); }
+                        }
+                        BlendPicker {
+                            height: 22px;
+                            modes: root.audio-devices.length > 0 ? root.audio-devices : ["No input devices"];
+                            current: max(0, root.audio-device-index);
+                            picked(i) => { root.audio-pick(i); }
+                        }
+                    }
+                    for p in root.audio-params: ModParam {
+                        data: p;
+                        set(i, v) => { root.param-set(Scope.comp, 0, i, v); }
+                    }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        BandMeters {
+                            labels: true;
+                            bar-height: 34px;
+                        }
+                        Text {
+                            text: root.audio-status;
+                            color: Theme.text-faint;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                width: 250px;
+                spacing: 10px;
+                alignment: start;
+                Section {
+                    title: "MIDI";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 22px;
+                        FlatButton {
+                            text: root.midi-on ? "On" : "Off";
+                            active: root.midi-on;
+                            width: 44px;
+                            clicked => { root.midi-toggle(); }
+                        }
+                        Text {
+                            text: root.midi-status;
+                            color: Theme.text-faint;
+                            font-size: 10px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: root.midi-preset;
+                        color: root.midi-has-mappings ? Theme.text : Theme.text-faint;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: 22px;
+                        alignment: start;
+                        FlatButton {
+                            text: "Import Resolume preset…";
+                            clicked => { root.midi-import(); }
+                        }
+                        FlatButton {
+                            text: "Clear";
+                            enabled: root.midi-has-mappings;
+                            clicked => { root.midi-clear(); }
+                        }
+                    }
+                    if root.midi-last != "": Text {
+                        text: "Last: " + root.midi-last;
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        overflow: elide;
+                    }
+                }
+                Section {
+                    title: "TEMPO SYNC";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 22px;
+                        FlatButton {
+                            text: root.link-on ? "Ableton Link on" : "Ableton Link off";
+                            active: root.link-on;
+                            enabled: root.link-available;
+                            clicked => { root.link-toggle(); }
+                        }
+                        Text {
+                            text: !root.link-available ? "built without Link" : root.link-on ? root.link-peers + (root.link-peers == 1 ? " peer" : " peers") : "tempo from BPM / TAP";
+                            color: root.link-on ? Theme.link : Theme.text-faint;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            EffectChain {
+                scope: Scope.comp-fx;
+                effects: root.comp-effects;
+                owner: "the composition";
+                param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
+                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                effect-toggle(s, i) => { root.effect-toggle(s, i); }
+                effect-remove(s, i) => { root.effect-remove(s, i); }
+                effect-move(s, i, d) => { root.effect-move(s, i, d); }
+            }
+        }
+
+        // Layer: name, video settings and the layer effect chain.
+        if root.tab == 1 && root.layer-valid: HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                width: 330px;
+                spacing: 6px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 6px;
+                    LineEdit {
+                        text <=> root.layer-name;
+                        accepted(t) => { root.layer-renamed(t); root.done-editing(); }
+                    }
+                    Text {
+                        horizontal-stretch: 0;
+                        text: root.layer-title;
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                }
+                for p in root.layer-params: ModParam {
+                    data: p;
+                    set(i, v) => { root.param-set(Scope.layer, -1, i, v); }
+                    mod-source(i, s) => { root.param-mod(Scope.layer, -1, i, s); }
+                    mod-amount(i, a) => { root.param-mod-amount(Scope.layer, -1, i, a); }
+                    mod-rate(i, r) => { root.param-mod-rate(Scope.layer, -1, i, r); }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 22px;
+                    Text {
+                        width: Theme.label-w;
+                        text: "Blend";
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.blend-modes;
+                        current: root.layer-blend-value;
+                        picked(i) => { root.layer-blend(-1, i); }
+                    }
+                }
+                LabelledRow {
+                    label: "Crossfader";
+                    for side[i] in ["A", "", "B"]: FlatButton {
+                        height: 22px;
+                        text: side == "" ? "none" : side;
+                        active: root.layer-side == side;
+                        clicked => { root.layer-side-picked(i); }
+                    }
+                }
+                LabelledRow {
+                    label: "Group";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.group-choices;
+                        current: root.layer-group-choice;
+                        picked(i) => { root.layer-group-picked(i); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    FlatButton {
+                        text: "Clear";
+                        clicked => { root.layer-clear(-1); }
+                    }
+                    FlatButton {
+                        text: "Remove layer";
+                        clicked => { root.remove-layer(); }
+                    }
+                }
+            }
+            EffectChain {
+                scope: Scope.layer-fx;
+                effects: root.layer-effects;
+                owner: root.layer-name == "" ? "this layer" : root.layer-name;
+                param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
+                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                effect-toggle(s, i) => { root.effect-toggle(s, i); }
+                effect-remove(s, i) => { root.effect-remove(s, i); }
+                effect-move(s, i, d) => { root.effect-move(s, i, d); }
+            }
+        }
+
+        // Clip: info and its source parameters.
+        if root.tab == 2 && !root.clip-valid: Text {
+            text: "Select a clip in the grid (right-click selects without launching).";
+            color: Theme.text-faint;
+            font-size: 11px;
+        }
+        if root.tab == 2 && root.clip-valid: HorizontalLayout {
+            spacing: 16px;
+            VerticalLayout {
+                width: 300px;
+                spacing: 6px;
+                alignment: start;
+                Text {
+                    text: root.clip-title;
+                    color: Theme.kind-color(root.clip-kind);
+                    font-size: 11px;
+                    overflow: elide;
+                }
+                LineEdit {
+                    text <=> root.clip-name;
+                    accepted(t) => { root.clip-renamed(t); root.done-editing(); }
+                }
+                Text {
+                    text: root.clip-detail;
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                }
+                if root.clip-path != "": Text {
+                    text: root.clip-path;
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    overflow: elide;
+                }
+                LabelledRow {
+                    label: "Play mode";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.play-modes;
+                        current: root.clip-play-mode;
+                        picked(i) => { root.clip-play-mode-picked(i); }
+                    }
+                }
+                LabelledRow {
+                    label: "Timing";
+                    FlatButton {
+                        height: 22px;
+                        text: "Own speed";
+                        active: !root.clip-synced;
+                        clicked => { root.clip-synced-picked(false); }
+                    }
+                    FlatButton {
+                        height: 22px;
+                        text: "Beat sync";
+                        active: root.clip-synced;
+                        clicked => { root.clip-synced-picked(true); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    FlatButton {
+                        text: "Restart";
+                        clicked => { root.clip-restart(); }
+                    }
+                    FlatButton {
+                        text: "Remove clip";
+                        clicked => { root.clip-remove(); }
+                    }
+                }
+            }
+            ScrollView {
+                VerticalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    PanelTitle {
+                        text: "SOURCE & PLAYBACK";
+                        height: 14px;
+                    }
+                    for p in root.clip-params: ModParam {
+                        data: p;
+                        set(i, v) => { root.param-set(Scope.clip, 0, i, v); }
+                        mod-source(i, s) => { root.param-mod(Scope.clip, 0, i, s); }
+                        mod-amount(i, a) => { root.param-mod-amount(Scope.clip, 0, i, a); }
+                        mod-rate(i, r) => { root.param-mod-rate(Scope.clip, 0, i, r); }
+                    }
+                }
+            }
+        }
+        // Group: the selected layer's group, with its own mix settings and effect chain.
+        if root.tab == 3 && root.group-valid: HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                width: 330px;
+                spacing: 6px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 6px;
+                    LineEdit {
+                        text <=> root.group-name;
+                        accepted(t) => { root.group-renamed(t); root.done-editing(); }
+                    }
+                    Text {
+                        horizontal-stretch: 0;
+                        text: root.group-title;
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                }
+                for p in root.group-params: ModParam {
+                    data: p;
+                    set(i, v) => { root.param-set(Scope.group, -1, i, v); }
+                    mod-source(i, s) => { root.param-mod(Scope.group, -1, i, s); }
+                    mod-amount(i, a) => { root.param-mod-amount(Scope.group, -1, i, a); }
+                    mod-rate(i, r) => { root.param-mod-rate(Scope.group, -1, i, r); }
+                }
+                LabelledRow {
+                    label: "Blend";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.blend-modes;
+                        current: root.group-blend-value;
+                        picked(i) => { root.group-blend(i); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    FlatButton {
+                        text: "Bypass";
+                        active: root.group-bypass;
+                        clicked => { root.group-bypass-toggled(); }
+                    }
+                    FlatButton {
+                        text: "Solo";
+                        active: root.group-solo;
+                        clicked => { root.group-solo-toggled(); }
+                    }
+                    FlatButton {
+                        text: "Ungroup";
+                        clicked => { root.group-ungroup(); }
+                    }
+                }
+            }
+            EffectChain {
+                scope: Scope.group-fx;
+                effects: root.group-effects;
+                owner: root.group-name == "" ? "this group" : root.group-name;
+                param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
+                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                effect-toggle(s, i) => { root.effect-toggle(s, i); }
+                effect-remove(s, i) => { root.effect-remove(s, i); }
+                effect-move(s, i, d) => { root.effect-move(s, i, d); }
+            }
+        }
+    }
+}

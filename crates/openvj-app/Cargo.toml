@@ -1,0 +1,43 @@
+[package]
+name = "openvj-app"
+description = "openVJ desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openvj"
+path = "src/main.rs"
+
+[features]
+default = ["link", "camera", "syphon"]
+# Ableton Link tempo sync. Builds the Link C++ SDK, which needs CMake and a C++ compiler.
+link = ["dep:rusty_link"]
+# Camera and capture-device input.
+camera = ["openvj-media/camera"]
+# Syphon input and output (macOS only; Syphon.framework comes with the syphon-core crate).
+syphon = ["openvj-media/syphon", "dep:syphon-core", "dep:objc2", "dep:objc2-metal"]
+
+[dependencies]
+openvj-audio.workspace = true
+openvj-core.workspace = true
+openvj-media.workspace = true
+openvj-render.workspace = true
+openvj-resolume.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "compat-1-2", "unstable-wgpu-30", "accessibility"] }
+pollster = "0.4"
+rfd = "0.17"
+midir = "0.11"
+rusty_link = { version = "0.4.9", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Syphon output publishes wgpu's Metal textures; same versions as syphon-core and wgpu-hal use.
+syphon-core = { version = "0.4", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-metal = { version = "0.3", optional = true, default-features = false, features = ["std", "MTLCommandQueue", "MTLCommandBuffer"] }
+
+[build-dependencies]
+slint-build = "1.18"

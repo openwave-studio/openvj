@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="openVJ Diamond Pulse">
+<rect width="256" height="256" rx="58" fill="#151329"/>
+<g fill="none" stroke-linecap="round">
+  <rect x="-70.5" y="-70.5" width="141" height="141" rx="23.97" transform="translate(128 128) rotate(45)" stroke="#4FE6DA" stroke-width="12"/>
+  <rect x="-47.5" y="-47.5" width="95" height="95" rx="16.15" transform="translate(128 128) rotate(30)" stroke="#4FE6DA" stroke-width="10"/>
+  <rect x="-29.5" y="-29.5" width="59" height="59" rx="10.03" transform="translate(128 128) rotate(15)" stroke="#4FE6DA" stroke-width="9"/>
+  <rect x="-13.5" y="-13.5" width="27" height="27" rx="4.59" transform="translate(128 128) rotate(0)" stroke="#4FE6DA" stroke-width="8"/>
+</g>
+</svg>

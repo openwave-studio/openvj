@@ -1,0 +1,96 @@
+// Data shared between the Rust app and the UI.
+
+/// Parameter scopes; must match `Scope` in app.rs.
+export global Scope {
+    out property <int> comp: 0;
+    out property <int> comp-fx: 1;
+    out property <int> layer: 2;
+    out property <int> layer-fx: 3;
+    out property <int> clip: 4;
+    out property <int> group: 5;
+    out property <int> group-fx: 6;
+}
+
+/// Names for modulation menus, filled in from Rust.
+export global ModNames {
+    // ModSource::ALL names.
+    in property <[string]> sources;
+    // MOD_RATES labels.
+    in property <[string]> rates;
+}
+
+/// Live audio levels, updated every frame.
+export global AudioLevels {
+    in property <[float]> bands: [0, 0, 0, 0];
+    in property <[string]> band-names: ["Bass", "Low mid", "High mid", "Treble"];
+    in property <float> level;
+}
+
+/// One parameter row. `value` is the base the user sets, `live` is the value after
+/// modulation this frame. Both are normalised 0..1.
+export struct ParamData {
+    index: int,
+    name: string,
+    value: float,
+    live: float,
+    reset: float,
+    display: string,
+    modulatable: bool,
+    mod-source: int,
+    mod-amount: float,
+    mod-rate: int,
+}
+
+export struct EffectData {
+    name: string,
+    enabled: bool,
+    params: [ParamData],
+}
+
+export struct CellData {
+    name: string,
+    kind: string,
+    thumb: image,
+    has-thumb: bool,
+    filled: bool,
+    playing: bool,
+    selected: bool,
+    loading: bool,
+    error: bool,
+    modulated: bool,
+}
+
+export struct LayerData {
+    index: int,
+    name: string,
+    opacity: float,
+    live-opacity: float,
+    blend: int,
+    bypass: bool,
+    solo: bool,
+    selected: bool,
+    live: bool,
+    fx-count: int,
+    // Crossfader side: "A", "B" or "".
+    side: string,
+    // Name of the layer's group, or "".
+    group: string,
+    cells: [CellData],
+}
+
+export struct ColumnData {
+    name: string,
+    active: bool,
+}
+
+export struct DeckData {
+    name: string,
+    active: bool,
+}
+
+export struct BrowserItem {
+    name: string,
+    detail: string,
+    kind: string,
+    armed: bool,
+}

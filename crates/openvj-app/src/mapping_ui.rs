@@ -1,0 +1,226 @@
+//! The output mapping window: what it shows and what its controls do.
+
+use std::rc::Rc;
+
+use openvj_core::{OutputSetup, ScreenLayer};
+use slint::{ComponentHandle, Image, ModelRc, VecModel};
+
+use super::App;
+use crate::mapping::{CORNER_NAMES, Stage, path_commands};
+use crate::{MapCorner, MapHandle, MapLayer, MappingWindow};
+
+/// How close to a corner a press grabs it, as a share of the canvas's longer side.
+const REACH: f32 = 0.015;
+
+impl App {
+    pub fn attach_mapping(&mut self, win: &MappingWindow) {
+        self.mapping_ui = win.as_weak();
+    }
+
+    /// The mapping window was opened or closed.
+    pub fn mapping_shown(&mut self, open: bool) {
+        self.mapping_window_open = open;
+        if open {
+            self.ensure_setup();
+            self.mapping_dirty = true;
+            self.images_dirty = true;
+        } else {
+            self.mapping.editor.release();
+        }
+        self.mapping_view_dirty = true;
+    }
+
+    /// Editing starts from a passthrough screen when nothing is mapped yet, with the inputs laid out
+    /// for the current composition.
+    fn ensure_setup(&mut self) {
+        let (w, h) = (self.comp.width, self.comp.height);
+        let setup = self.mapping.setup.get_or_insert_with(|| OutputSetup::passthrough(w, h));
+        if setup.composition_size != [w, h] {
+            setup.rescale_inputs(w, h);
+        }
+    }
+
+    /// Runs an edit on the setup; `save` writes it to disk when it changed.
+    fn edit_mapping(&mut self, save: bool, f: impl FnOnce(&mut crate::mapping::Editor, &mut OutputSetup) -> bool) {
+        self.ensure_setup();
+        let Some(setup) = self.mapping.setup.as_mut() else { return };
+        let mut editor = self.mapping.editor;
+        let changed = f(&mut editor, setup);
+        self.mapping.editor = editor;
+        if changed && save {
+            self.mapping.save();
+            self.grid_dirty = true; // The settings page's summary.
+        }
+        self.mapping_view_dirty = true;
+    }
+
+    fn reach(&self) -> f32 {
+        let [w, h] = self.canvas_size();
+        w.max(h) * REACH
+    }
+
+    fn canvas_size(&self) -> [f32; 2] {
+        let setup = self.mapping.setup.as_ref();
+        match self.mapping.editor.stage {
+            Stage::Input => [self.comp.width as f32, self.comp.height as f32],
+            Stage::Output => setup
+                .and_then(|s| s.screens.first())
+                .map_or([self.comp.width as f32, self.comp.height as f32], |s| s.size().map(|v| v as f32)),
+        }
+    }
+
+    pub fn map_stage(&mut self, stage: i32) {
+        self.mapping.editor.stage = if stage == 0 { Stage::Input } else { Stage::Output };
+        self.mapping.editor.release();
+        self.mapping_view_dirty = true;
+        self.images_dirty = true;
+    }
+
+    pub fn map_layer_picked(&mut self, i: i32) {
+        self.mapping.editor.selected = usize::try_from(i).ok();
+        self.mapping_view_dirty = true;
+    }
+
+    pub fn map_pressed(&mut self, x: f32, y: f32) {
+        let reach = self.reach();
+        self.edit_mapping(false, |e, s| e.press(s, [x, y], reach));
+    }
+
+    pub fn map_dragged(&mut self, x: f32, y: f32) {
+        self.edit_mapping(false, |e, s| e.drag_to(s, [x, y]));
+    }
+
+    pub fn map_released(&mut self) {
+        self.edit_mapping(true, |e, _| e.release());
+    }
+
+    pub fn map_nudge(&mut self, dx: f32, dy: f32) {
+        self.edit_mapping(true, |e, s| e.nudge(s, [dx, dy]));
+    }
+
+    pub fn map_next_corner(&mut self) {
+        if let Some(setup) = &self.mapping.setup {
+            self.mapping.editor.next_corner(setup);
+        }
+        self.mapping_view_dirty = true;
+    }
+
+    pub fn map_corner_edited(&mut self, corner: i32, axis: i32, text: &str) {
+        let Ok(v) = text.trim().replace(',', ".").parse::<f32>() else {
+            self.mapping_view_dirty = true; // Put the old value back.
+            return;
+        };
+        self.edit_mapping(true, |e, s| e.set_corner(s, corner.max(0) as usize, axis.max(0) as usize, v));
+    }
+
+    pub fn map_reset(&mut self) {
+        self.edit_mapping(true, |e, s| e.reset(s));
+    }
+
+    pub fn map_add_slice(&mut self) {
+        self.edit_mapping(true, |e, s| e.add_slice(s));
+    }
+
+    pub fn map_add_mask(&mut self) {
+        self.edit_mapping(true, |e, s| e.add_mask(s));
+        self.images_dirty = true; // The stage may have changed.
+    }
+
+    pub fn map_add_point(&mut self) {
+        self.edit_mapping(true, |e, s| e.add_mask_point(s));
+    }
+
+    pub fn map_toggle_invert(&mut self) {
+        self.edit_mapping(true, |e, s| e.toggle_invert(s));
+    }
+
+    pub fn map_layer_toggled(&mut self, i: i32) {
+        self.edit_mapping(true, |e, s| e.toggle_enabled(s, i.max(0) as usize));
+    }
+
+    pub fn map_rename(&mut self, name: &str) {
+        self.edit_mapping(true, |e, s| e.rename_selected(s, name));
+    }
+
+    pub fn map_move(&mut self, delta: i32) {
+        self.edit_mapping(true, |e, s| e.move_selected(s, delta));
+    }
+
+    pub fn map_remove(&mut self) {
+        self.edit_mapping(true, |e, s| e.remove_selected(s));
+    }
+
+    /// Pushes the setup to the mapping window. `images`: fetch the canvas picture again.
+    pub(super) fn sync_mapping_window(&mut self, images: bool) {
+        self.mapping_view_dirty = false;
+        let Some(win) = self.mapping_ui.upgrade() else { return };
+        let ed = self.mapping.editor;
+        let stage = ed.stage;
+        win.set_stage(if stage == Stage::Input { 0 } else { 1 });
+        win.set_test_card(self.mapping.test_card);
+        let [cw, ch] = self.canvas_size();
+        win.set_canvas_w(cw);
+        win.set_canvas_h(ch);
+        if images {
+            let target = match stage {
+                Stage::Input => Some(self.engine.output()),
+                Stage::Output => self.engine.screen(0),
+            };
+            if let Some(t) = target {
+                win.set_picture(Image::try_from(t.texture.clone()).expect("texture is importable"));
+            }
+        }
+
+        let screen = self.mapping.setup.as_ref().and_then(|s| s.screens.first());
+        win.set_screen_name(screen.map_or("Screen 1".into(), |s| s.name.clone()).into());
+        win.set_screen_info(screen.map_or(String::new(), |s| format!("{}×{}", s.size()[0], s.size()[1])).into());
+
+        let mut layers = Vec::new();
+        let mut handles = Vec::new();
+        let mut corners = Vec::new();
+        let mut selected_name = String::new();
+        let mut selected_mask: Option<bool> = None;
+        for (i, layer) in screen.map(|s| s.layers.as_slice()).unwrap_or_default().iter().enumerate() {
+            let selected = ed.selected == Some(i);
+            let (name, is_mask, enabled) = match layer {
+                ScreenLayer::Slice(s) => (&s.name, false, s.enabled),
+                ScreenLayer::Mask(m) => (&m.name, true, m.enabled),
+            };
+            let outline = ed.layer_outline(layer).iter().map(|o| path_commands(o)).collect::<Vec<_>>().join(" ");
+            layers.push(MapLayer { name: name.clone().into(), is_mask, enabled, selected, outline: outline.into() });
+            if !selected {
+                continue;
+            }
+            selected_name = name.clone();
+            if let ScreenLayer::Mask(m) = layer {
+                selected_mask = Some(m.invert);
+            }
+            for (c, p) in ed.points(layer).iter().enumerate() {
+                handles.push(MapHandle { x: p[0], y: p[1], selected: c == ed.corner });
+                let label = if is_mask { format!("Point {}", c + 1) } else { CORNER_NAMES[c % 4].to_string() };
+                corners.push(MapCorner {
+                    name: label.into(),
+                    x: format!("{:.0}", p[0]).into(),
+                    y: format!("{:.0}", p[1]).into(),
+                    selected: c == ed.corner,
+                });
+            }
+        }
+        win.set_selected_is_mask(selected_mask.is_some());
+        win.set_selected_invert(selected_mask.unwrap_or(false));
+        win.set_has_selection(!handles.is_empty());
+        win.set_selected_name(selected_name.into());
+        win.set_layers(ModelRc::from(Rc::new(VecModel::from(layers))));
+        win.set_handles(ModelRc::from(Rc::new(VecModel::from(handles))));
+        win.set_corners(ModelRc::from(Rc::new(VecModel::from(corners))));
+        win.set_hint(
+            match stage {
+                Stage::Input => "Drag a slice to move what it takes from the composition, or a corner to reshape it",
+                Stage::Output => {
+                    "Drag a corner to pin it · arrows nudge 1 px, Shift+arrows 10 px · Tab picks the next corner"
+                }
+            }
+            .into(),
+        );
+    }
+}

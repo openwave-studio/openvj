@@ -1,0 +1,47 @@
+schema: spec-driven
+
+# Constraints that guide every openVJ proposal, spec, design and task list.
+# Read CONTRIBUTING.md for when to use OpenSpec at all (features, not small fixes).
+context: |
+  openVJ is an open-source, layer-based VJ mixer in Rust (wgpu + Slint), modelled on Resolume Arena.
+  Several agents work on the repo in parallel, each in its own branch and PR.
+
+  Standing decisions (from the maintainer). Don't reopen them in a proposal; ask the maintainer if a change needs to:
+  - Resolume compatibility is a top goal: anything Resolume stores (.avc compositions, Advanced Output
+    presets, MIDI shortcut presets) should import, and new features follow Resolume's model and names
+    unless the maintainer chose otherwise.
+  - The maintainer performs on macOS (Apple Silicon) with Syphon (Synesthesia) and cameras. NDI is not needed.
+  - Hand-written generators (Waveform, Line Scape, Metaballs, text) are planned for v0.4, not before.
+    ISF generators (from files, incl. the bundled Ghost Arcade pack) come before v0.1 (the maintainer, 2026-11-09).
+  - Effects are ISF shader files on a 16-bit float pipeline, with multi-pass and feedback buffers,
+    and a fixed Transform on clips and layers.
+  - Parameter animation: one driver per parameter for now (stacking later), Resolume's model.
+  - UI follows openDJ's look with one cyan accent (#4fe6da); colours and sizes come from theme.slint.
+    Resolume-style elements stay only where the maintainer confirmed them (parameter bars, spaced clip grid).
+  - Varda (github.com/im-knots/varda, MIT) is the reference to borrow projection mapping and shader code from.
+  - Ask the maintainer at real design points (formats, UX, scope) instead of going deep on a guess.
+  - The maintainer's own files (sample .avc, presets) must not be added as fixtures without asking: the repo is public.
+
+  Shared hot spots, where parallel changes collide: crates/openvj-core/src/composition.rs, crates/openvj-app/src/app.rs,
+  crates/openvj-app/ui/main.slint, crates/openvj-app/ui/theme.slint, crates/openvj-render/src/lib.rs,
+  crates/openvj-resolume/src/lib.rs, README.md.
+
+rules:
+  proposal:
+    - Keep it under one page. State what is out of scope.
+    - End with a "Touches" section listing the crates, files and specs the change will edit, and naming any of the shared hot spots from the context.
+    - Add a "Conflicts" section naming other changes in openspec/changes/ (and open PRs) that touch the same files or specs, with a suggested merge order. Write "None known" if there are none.
+    - List the questions for the maintainer, if any, under "Open questions".
+  specs:
+    - Describe what a VJ sees and what files import as, not Rust types or crate internals.
+    - When behaviour copies Resolume, say so and name the Resolume feature, so reviewers can compare.
+  design:
+    - Only write design.md when there is a real choice to record (format, data model, threading, GPU pipeline).
+  tasks:
+    - Group tasks so each group can land as its own small PR if needed.
+    - Include updating README.md's "What works" list when user-visible behaviour changes.
+
+operations:
+  archive:
+    guidance:
+      - Archive a change in the same PR that finishes it, so main's specs always describe main's code.

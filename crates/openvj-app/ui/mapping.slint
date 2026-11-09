@@ -1,0 +1,534 @@
+// The Output mapping window, modelled on Resolume's Advanced Output: screens, slices and masks on
+// the left, the screen in the middle, the selected slice on the right, and two stages: Input
+// selection (what each slice takes from the composition) and Output transformation (where it goes).
+//
+// Geometry lives in Rust (app/mapping.rs). The canvas only reports presses, drags and keys in
+// screen (or composition) pixels and draws what Rust sends back.
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { FlatButton } from "controls.slint";
+import { Switch } from "settings.slint";
+
+/// A slice or mask in the list, with its outline on the canvas as SVG path commands in pixels.
+export struct MapLayer {
+    name: string,
+    is-mask: bool,
+    enabled: bool,
+    selected: bool,
+    outline: string,
+}
+
+/// A draggable point on the canvas, in pixels.
+export struct MapHandle {
+    x: float,
+    y: float,
+    selected: bool,
+}
+
+/// A row of the corner table: its name and its position in pixels.
+export struct MapCorner {
+    name: string,
+    x: string,
+    y: string,
+    selected: bool,
+}
+
+component StageTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 28px;
+    min-width: label.preferred-width + 28px;
+    border-radius: Theme.radius-small;
+    background: root.active ? Theme.chosen : ta.has-hover ? Theme.raised : transparent;
+    label := Text {
+        text: root.text;
+        color: root.active ? Theme.text : Theme.text-dim;
+        font-size: 12px;
+        font-weight: root.active ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Heading inherits Text {
+    color: Theme.text-dim;
+    font-size: Theme.font-small;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+}
+
+export component MappingWindow inherits Window {
+    title: "openVJ Output mapping";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 900px;
+    min-height: 560px;
+    background: Theme.bg;
+    default-font-family: Theme.font-family;
+
+    /// 0 Input selection, 1 Output transformation.
+    in-out property <int> stage: 1;
+    /// What the canvas shows: the composition (input stage) or the mapped screen.
+    in property <image> picture;
+    /// Size of the canvas in pixels: the composition or the screen.
+    in property <float> canvas-w: 1920;
+    in property <float> canvas-h: 1080;
+    in property <string> screen-name;
+    in property <string> screen-info;
+    in property <[MapLayer]> layers;
+    in property <[MapHandle]> handles;
+    in property <[MapCorner]> corners;
+    in property <string> selected-name;
+    in property <bool> has-selection;
+    in property <bool> selected-is-mask;
+    /// The selected mask shows its inside (Resolume's Invert).
+    in property <bool> selected-invert;
+    in property <bool> test-card;
+    in property <string> hint;
+
+    callback stage-picked(int);
+    callback layer-picked(int);
+    callback layer-toggled(int);
+    callback add-mask();
+    callback renamed(string);
+    callback move-layer(int);
+    callback add-point();
+    callback toggle-invert();
+    // Canvas pointer, in canvas pixels.
+    callback canvas-pressed(float, float);
+    callback canvas-dragged(float, float);
+    callback canvas-released();
+    // Arrow keys: dx, dy in pixels. Tab: next corner.
+    callback nudge(float, float);
+    callback next-corner();
+    callback corner-edited(int, int, string);
+    callback reset-selected();
+    callback add-slice();
+    callback remove-selected();
+    callback import-preset();
+    callback toggle-test-card();
+    callback done();
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            let step = e.modifiers.shift ? 10 : 1;
+            if (e.text == Key.LeftArrow) { root.nudge(-step, 0); return accept; }
+            if (e.text == Key.RightArrow) { root.nudge(step, 0); return accept; }
+            if (e.text == Key.UpArrow) { root.nudge(0, -step); return accept; }
+            if (e.text == Key.DownArrow) { root.nudge(0, step); return accept; }
+            if (e.text == Key.Tab) { root.next-corner(); return accept; }
+            if (e.text == Key.Escape) { root.done(); return accept; }
+            return reject;
+        }
+
+        VerticalLayout {
+            // Title bar.
+            Rectangle {
+                height: 52px;
+                background: #121214;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+                    Text {
+                        text: "Output mapping";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        width: 210px;
+                    }
+                    Rectangle {
+                        width: tabs.preferred-width + 6px;
+                        height: 34px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: Theme.radius;
+                        background: Theme.track;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        tabs := HorizontalLayout {
+                            padding: 3px;
+                            spacing: 2px;
+                            StageTab {
+                                text: "Input selection";
+                                active: root.stage == 0;
+                                clicked => { root.stage-picked(0); }
+                            }
+                            StageTab {
+                                text: "Output transformation";
+                                active: root.stage == 1;
+                                clicked => { root.stage-picked(1); }
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    FlatButton {
+                        y: (parent.height - self.height) / 2;
+                        height: 28px;
+                        text: "Import Resolume preset…";
+                        clicked => { root.import-preset(); }
+                    }
+                    FlatButton {
+                        y: (parent.height - self.height) / 2;
+                        height: 28px;
+                        text: "Done";
+                        primary: true;
+                        clicked => { root.done(); }
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.separator;
+                }
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                // Screens, slices and masks.
+                Rectangle {
+                    width: 240px;
+                    background: #121214;
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 2px;
+                        Heading { text: "SCREENS"; height: 28px; vertical-alignment: center; x: 6px; }
+                        Rectangle {
+                            height: 34px;
+                            border-radius: Theme.radius;
+                            background: Theme.panel;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                Text {
+                                    text: root.screen-name;
+                                    color: Theme.text;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: root.screen-info;
+                                    color: Theme.text-dim;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        for l[i] in root.layers: Rectangle {
+                            height: 30px;
+                            border-radius: Theme.radius;
+                            background: l.selected ? Theme.raised : row-ta.has-hover ? Theme.panel : transparent;
+                            border-width: l.selected ? 1px : 0;
+                            border-color: Theme.accent;
+                            row-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.layer-picked(i); keys.focus(); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 20px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                // The dot turns the layer on or off.
+                                Rectangle {
+                                    width: 14px;
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 8px;
+                                        border-radius: 2px;
+                                        background: l.enabled ? (l.is-mask ? Theme.warn : Theme.accent) : transparent;
+                                        border-width: 1px;
+                                        border-color: l.is-mask ? Theme.warn : Theme.accent;
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.layer-toggled(i); keys.focus(); }
+                                    }
+                                }
+                                Text {
+                                    text: l.name;
+                                    color: l.enabled ? Theme.text : Theme.text-faint;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: l.is-mask ? "mask" : "slice";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            FlatButton {
+                                height: 28px;
+                                horizontal-stretch: 1;
+                                text: "+ Slice";
+                                clicked => { root.add-slice(); keys.focus(); }
+                            }
+                            FlatButton {
+                                height: 28px;
+                                horizontal-stretch: 1;
+                                text: "+ Mask";
+                                clicked => { root.add-mask(); keys.focus(); }
+                            }
+                            FlatButton {
+                                height: 28px;
+                                horizontal-stretch: 1;
+                                text: "Remove";
+                                enabled: root.has-selection;
+                                clicked => { root.remove-selected(); keys.focus(); }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        background: Theme.separator;
+                    }
+                }
+
+                // Canvas.
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Rectangle {
+                        height: 44px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            Text {
+                                text: root.stage == 0
+                                    ? "Composition · \{round(root.canvas-w)}×\{round(root.canvas-h)}"
+                                    : root.selected-is-mask ? "Mask" : "Corner pin";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: "Test card";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                on: root.test-card;
+                                toggled => { root.toggle-test-card(); keys.focus(); }
+                            }
+                        }
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.separator;
+                        }
+                    }
+                    canvas := Rectangle {
+                        vertical-stretch: 1;
+                        background: #0b0b0c;
+                        clip: true;
+                        property <float> scale: min((self.width - 64px) / 1px / root.canvas-w, (self.height - 64px) / 1px / root.canvas-h);
+                        property <length> ox: (self.width - root.canvas-w * self.scale * 1px) / 2;
+                        property <length> oy: (self.height - root.canvas-h * self.scale * 1px) / 2;
+
+                        // The screen (or composition) itself.
+                        Rectangle {
+                            x: canvas.ox;
+                            y: canvas.oy;
+                            width: root.canvas-w * canvas.scale * 1px;
+                            height: root.canvas-h * canvas.scale * 1px;
+                            background: #000;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: root.picture;
+                                image-fit: fill;
+                                opacity: root.stage == 0 ? 0.6 : 1;
+                            }
+                        }
+                        for l in root.layers: Path {
+                            x: canvas.ox;
+                            y: canvas.oy;
+                            width: root.canvas-w * canvas.scale * 1px;
+                            height: root.canvas-h * canvas.scale * 1px;
+                            viewbox-x: 0;
+                            viewbox-y: 0;
+                            viewbox-width: root.canvas-w;
+                            viewbox-height: root.canvas-h;
+                            commands: l.outline;
+                            fill: transparent;
+                            stroke: l.is-mask ? Theme.warn : l.selected ? Theme.accent : Theme.text-dim;
+                            stroke-width: l.selected ? 2px : 1px;
+                            opacity: l.enabled ? 1 : 0.4;
+                        }
+                        TouchArea {
+                            property <float> px: (self.mouse-x - canvas.ox) / 1px / canvas.scale;
+                            property <float> py: (self.mouse-y - canvas.oy) / 1px / canvas.scale;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                    keys.focus();
+                                    root.canvas-pressed(self.px, self.py);
+                                } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+                                    root.canvas-released();
+                                }
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    root.canvas-dragged(self.px, self.py);
+                                }
+                            }
+                        }
+                        for h in root.handles: Rectangle {
+                            x: canvas.ox + h.x * canvas.scale * 1px - self.width / 2;
+                            y: canvas.oy + h.y * canvas.scale * 1px - self.height / 2;
+                            width: h.selected ? 16px : 12px;
+                            height: self.width;
+                            border-radius: self.width / 2;
+                            background: h.selected ? Theme.accent : Theme.on-accent;
+                            border-width: 2px;
+                            border-color: Theme.accent;
+                        }
+                    }
+                }
+
+                // Selected slice.
+                Rectangle {
+                    width: 300px;
+                    background: #121214;
+                    Rectangle {
+                        width: 1px;
+                        x: 0;
+                        background: Theme.separator;
+                    }
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        alignment: start;
+                        if !root.has-selection: Text {
+                            text: "Pick a slice on the left or click one on the canvas.";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        if root.has-selection: Heading {
+                            text: root.selected-is-mask ? "MASK POINTS (SCREEN PX)" : root.stage == 0 ? "INPUT (COMPOSITION PX)" : "CORNERS (SCREEN PX)";
+                        }
+                        if root.has-selection: HorizontalLayout {
+                            spacing: 6px;
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: root.selected-name;
+                                accepted(t) => { root.renamed(t); keys.focus(); }
+                            }
+                            FlatButton {
+                                width: 30px;
+                                height: 30px;
+                                text: "↑";
+                                clicked => { root.move-layer(-1); keys.focus(); }
+                            }
+                            FlatButton {
+                                width: 30px;
+                                height: 30px;
+                                text: "↓";
+                                clicked => { root.move-layer(1); keys.focus(); }
+                            }
+                        }
+                        for c[i] in root.corners: HorizontalLayout {
+                            spacing: 6px;
+                            height: 34px;
+                            Text {
+                                width: 86px;
+                                text: c.name;
+                                color: c.selected ? Theme.accent : Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                width: 80px;
+                                text: c.x;
+                                input-type: decimal;
+                                accepted(t) => { root.corner-edited(i, 0, t); keys.focus(); }
+                            }
+                            LineEdit {
+                                width: 80px;
+                                text: c.y;
+                                input-type: decimal;
+                                accepted(t) => { root.corner-edited(i, 1, t); keys.focus(); }
+                            }
+                        }
+                        if root.has-selection && !root.selected-is-mask: FlatButton {
+                            height: 28px;
+                            text: root.stage == 0 ? "Fill the composition" : "Reset corners";
+                            clicked => { root.reset-selected(); keys.focus(); }
+                        }
+                        if root.has-selection && root.selected-is-mask: FlatButton {
+                            height: 28px;
+                            text: "Add point after the selected one";
+                            clicked => { root.add-point(); keys.focus(); }
+                        }
+                        if root.has-selection && root.selected-is-mask: HorizontalLayout {
+                            spacing: 8px;
+                            height: 32px;
+                            Text {
+                                text: "Show only inside";
+                                color: Theme.text;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                on: root.selected-invert;
+                                toggled => { root.toggle-invert(); keys.focus(); }
+                            }
+                        }
+                        if root.has-selection && root.selected-is-mask: Text {
+                            text: root.selected-invert
+                                ? "On (Resolume's Invert): everything outside the mask is black."
+                                : "Off: the mask blacks out what is inside it.";
+                            color: Theme.text-dim;
+                            font-size: Theme.font-body;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // Status bar.
+            Rectangle {
+                height: 28px;
+                Rectangle {
+                    height: 1px;
+                    y: 0;
+                    background: Theme.separator;
+                }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    Text {
+                        text: root.hint;
+                        color: Theme.text-dim;
+                        font-size: Theme.font-body;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,629 @@
+// The settings window, laid out like openDJ's: a panel over the whole app, opened
+// from the gear in the toolbar or with Ctrl/Cmd + ,. Pages are listed down the left
+// with icons under a search box; each page is a list of rows with the setting's name
+// and a line on what it does on the left and its control on the right. Changes apply
+// at once: there is no OK or Apply.
+//
+// To add a page: add its name (and search words) to `pages`, an icon to PageIcon,
+// and an `if root.page == N` block in the page area.
+import { Theme, CloseIcon } from "theme.slint";
+import { Scope, ParamData } from "state.slint";
+import { BlendPicker, BandMeters, ModParam, FlatButton } from "controls.slint";
+
+/// The gear on the toolbar.
+export component GearIcon inherits Path {
+    in property <color> color: Theme.text-dim;
+    width: 16px;
+    height: 16px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: transparent;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    commands: "M 9 12 A 3 3 0 1 0 15 12 A 3 3 0 1 0 9 12 M 12 2 L 12 5 M 12 19 L 12 22 M 2 12 L 5 12 M 19 12 L 22 12 M 4.9 4.9 L 7 7 M 17 17 L 19.1 19.1 M 4.9 19.1 L 7 17 M 17 7 L 19.1 4.9 M 6 12 A 6 6 0 1 0 18 12 A 6 6 0 1 0 6 12";
+}
+
+// Line icons on a 24-unit grid, as openDJ's settings pages.
+component PageIcon inherits Path {
+    in property <int> kind;
+    in property <color> color;
+    width: 20px;
+    height: 20px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: transparent;
+    stroke: root.color;
+    stroke-width: 1.7px;
+    // Audio: a speaker. Tempo: a metronome. Output: a screen. Media: a folder.
+    // Keyboard: keys. About: a speech bubble.
+    commands: root.kind == 0 ? "M 3 9 L 7 9 L 12 5 L 12 19 L 7 15 L 3 15 Z M 15.5 9 Q 17.5 12 15.5 15 M 18 6.5 Q 21.5 12 18 17.5"
+        : root.kind == 1 ? "M 9 3 L 15 3 L 19 21 L 5 21 Z M 7 15 L 17 15 M 12 15 L 17 6"
+        : root.kind == 2 ? "M 3 4 L 21 4 L 21 16 L 3 16 Z M 8 20 L 16 20 M 12 16 L 12 20"
+        : root.kind == 3 ? "M 3 6 L 3 19 L 21 19 L 21 8 L 11 8 L 9 6 Z"
+        : root.kind == 4 ? "M 2 6 L 22 6 L 22 18 L 2 18 Z M 6 10 L 6.5 10 M 10 10 L 10.5 10 M 14 10 L 14.5 10 M 18 10 L 18.5 10 M 7 14 L 17 14"
+        : "M 4 5 L 20 5 L 20 16 L 11 16 L 6 20 L 6 16 L 4 16 Z M 8 9 L 16 9 M 8 12 L 13 12";
+}
+
+/// openDJ's switch.
+export component Switch inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    width: 38px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.on ? Theme.accent : Theme.chosen;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background { duration: 120ms; }
+    Rectangle {
+        x: root.on ? parent.width - self.width - 2px : 2px;
+        y: 2px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: #f2f2f7;
+        drop-shadow-blur: 2px;
+        drop-shadow-color: #00000060;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.on); }
+    }
+}
+
+/// openDJ's settings button: raised, with a thin border.
+export component SettingsButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    callback clicked();
+    height: 26px;
+    min-width: 72px;
+    border-radius: Theme.radius;
+    background: root.primary ? (ta.pressed ? Theme.accent.darker(0.3) : Theme.accent)
+        : ta.pressed ? Theme.pressed : ta.has-hover ? #2e2e32 : Theme.raised;
+    border-width: 1px;
+    border-color: root.primary ? Theme.accent : Theme.border;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            color: root.primary ? Theme.on-accent : Theme.text;
+            font-size: 12px;
+            font-weight: root.primary ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder: "Search";
+    height: 30px;
+    border-radius: 8px;
+    background: Theme.track;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.separator;
+    Path {
+        x: 9px;
+        width: 14px;
+        height: 14px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M 3 10 A 7 7 0 1 0 17 10 A 7 7 0 1 0 3 10 M 15 15 L 21 21";
+        stroke: Theme.text-dim;
+        stroke-width: 2.2px;
+        fill: transparent;
+    }
+    Text {
+        x: 30px;
+        text: root.text == "" ? root.placeholder : "";
+        color: Theme.text-dim;
+        font-size: Theme.font-normal;
+    }
+    input := TextInput {
+        x: 30px;
+        width: parent.width - 38px;
+        text <=> root.text;
+        color: Theme.text;
+        font-size: Theme.font-normal;
+        vertical-alignment: center;
+        single-line: true;
+    }
+    public function focus-input() {
+        input.focus();
+    }
+}
+
+component CloseButton inherits Rectangle {
+    callback clicked();
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    background: ta.has-hover ? Theme.chosen : transparent;
+    CloseIcon {
+        color: ta.has-hover ? Theme.text : Theme.text-dim;
+        stroke-width: 1.6px;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A heading between groups of rows: small, uppercase and dim.
+component PrefHeading inherits Text {
+    color: Theme.text-dim;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+}
+
+/// One setting: its name and a line on what it does on the left, the control
+/// (the row's children) on the right, and a hairline under it.
+component PrefRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    min-height: 52px;
+    HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 16px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.font-normal;
+                font-weight: 500;
+            }
+            if root.detail != "": Text {
+                text: root.detail;
+                color: Theme.text-dim;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            alignment: end;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+                    @children
+                }
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.separator;
+    }
+}
+
+/// A short line in a key cap, for the Keyboard page.
+component KeyCap inherits Rectangle {
+    in property <string> text;
+    height: 22px;
+    min-width: label.preferred-width + 14px;
+    border-radius: Theme.radius-small;
+    background: Theme.panel-2;
+    border-width: 1px;
+    border-color: Theme.border;
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: 11px;
+        font-weight: 600;
+    }
+}
+
+component Shortcut inherits PrefRow {
+    in property <string> key;
+    min-height: 40px;
+    KeyCap { text: root.key; }
+}
+
+export component SettingsOverlay inherits Rectangle {
+    in-out property <int> page;
+    in-out property <string> query;
+
+    // Audio.
+    in property <bool> audio-on;
+    in property <[string]> audio-devices;
+    in property <int> audio-device-index;
+    in property <string> audio-status;
+    in property <[ParamData]> audio-params;
+    // Tempo.
+    in property <bool> link-available;
+    in property <bool> link-on;
+    in property <int> link-peers;
+    in property <float> bpm;
+    // Output.
+    in property <bool> output-open;
+    in property <string> mapping-status;
+    in property <bool> mapped;
+    in property <bool> test-card;
+    in property <bool> syphon-available;
+    in property <bool> syphon-on;
+    in property <bool> syphon-receiving;
+    in property <string> syphon-error;
+    // Media.
+    in property <string> media-folder;
+    in property <int> missing-media;
+
+    callback audio-toggle();
+    callback audio-pick(int);
+    callback param-set(int, int, int, float);
+    callback link-toggle();
+    callback toggle-output();
+    callback fullscreen-output();
+    callback import-mapping();
+    callback clear-mapping();
+    callback toggle-test-card();
+    callback syphon-toggle();
+    callback choose-folder();
+    callback relink-media();
+    callback closed();
+
+    // Page names, and the words a search finds each page by.
+    property <[{name: string, words: string}]> pages: [
+        { name: "Audio", words: "audio input device microphone line analyser fft bands gain smoothing" },
+        { name: "Tempo", words: "tempo bpm ableton link sync tap beat" },
+        { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
+        { name: "Media", words: "media folder files browser relink missing" },
+        { name: "Keyboard", words: "keyboard shortcuts keys" },
+        { name: "About", words: "about version license fonts help" },
+    ];
+    property <bool> searching: root.query != "";
+
+    init => {
+        search.focus-input();
+    }
+
+    pure function matches(i: int) -> bool {
+        // Slint strings have no `contains`: a string contains q when removing q changes it.
+        let q = root.query.to-lowercase();
+        let hay = root.pages[i].name.to-lowercase() + " " + root.pages[i].words;
+        return !root.searching || hay.replace-all(q, "") != hay;
+    }
+
+    // The dimmed app behind; a click there closes settings.
+    background: #000000a0;
+    TouchArea {
+        clicked => { root.closed(); }
+    }
+    panel := Rectangle {
+        width: min(1000px, root.width - 96px);
+        height: min(700px, root.height - 96px);
+        border-radius: 12px;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #000000c0;
+        clip: true;
+        // Clicks inside the window stay there.
+        TouchArea { }
+        HorizontalLayout {
+            // The page list, with the search box above.
+            Rectangle {
+                width: 220px;
+                background: #141416;
+                VerticalLayout {
+                    padding: 14px;
+                    padding-top: 18px;
+                    spacing: 4px;
+                    Text {
+                        text: "Settings";
+                        color: Theme.text;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                    }
+                    Rectangle { height: 10px; }
+                    search := SearchField {
+                        text <=> root.query;
+                    }
+                    Rectangle { height: 10px; }
+                    for p[i] in root.pages: Rectangle {
+                        property <bool> selected: i == root.page;
+                        visible: root.matches(i);
+                        height: root.matches(i) ? 36px : 0px;
+                        border-radius: 8px;
+                        background: selected ? Theme.chosen : pta.has-hover ? #222225 : transparent;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                alignment: center;
+                                PageIcon {
+                                    kind: i;
+                                    color: selected ? Theme.accent : Theme.text-dim;
+                                }
+                            }
+                            Text {
+                                text: p.name;
+                                color: selected ? Theme.accent : Theme.text;
+                                font-size: 14px;
+                                font-weight: selected ? 600 : 400;
+                                vertical-alignment: center;
+                            }
+                        }
+                        pta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.page = i;
+                                root.query = "";
+                            }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.separator;
+            }
+            // The page.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                padding-left: 28px;
+                padding-right: 16px;
+                padding-top: 16px;
+                HorizontalLayout {
+                    height: 34px;
+                    Text {
+                        text: root.pages[root.page].name;
+                        color: Theme.text;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        CloseButton {
+                            clicked => { root.closed(); }
+                        }
+                    }
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    content-height: rows.preferred-height;
+                    rows := VerticalLayout {
+                        width: parent.width;
+                        padding-right: 12px;
+                        padding-bottom: 20px;
+                        alignment: start;
+
+                        if root.page == 0: VerticalLayout {
+                            alignment: start;
+                            PrefRow {
+                                title: "Audio input";
+                                detail: "Listen to an input so parameters can follow the music.";
+                                Switch {
+                                    on: root.audio-on;
+                                    toggled => { root.audio-toggle(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Input device";
+                                detail: root.audio-status;
+                                BlendPicker {
+                                    width: 260px;
+                                    height: 26px;
+                                    menu-width: 260px;
+                                    modes: root.audio-devices.length > 0 ? root.audio-devices : ["No input devices"];
+                                    current: max(0, root.audio-device-index);
+                                    picked(i) => { root.audio-pick(i); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Levels";
+                                detail: "The four bands parameters can be mapped to.";
+                                BandMeters {
+                                    labels: true;
+                                    bar-height: 28px;
+                                    opacity: root.audio-on ? 1 : 0.4;
+                                }
+                            }
+                            Rectangle { height: 14px; }
+                            PrefHeading { text: "ANALYSER"; }
+                            Rectangle { height: 6px; }
+                            for p in root.audio-params: ModParam {
+                                data: p;
+                                set(i, v) => { root.param-set(Scope.comp, 0, i, v); }
+                            }
+                        }
+
+                        if root.page == 1: VerticalLayout {
+                            alignment: start;
+                            PrefRow {
+                                title: "Ableton Link";
+                                detail: !root.link-available ? "This build of openVJ was made without Link."
+                                    : root.link-on ? "Sharing tempo with " + root.link-peers + (root.link-peers == 1 ? " peer." : " peers.")
+                                    : "Follow the tempo of other Link apps on the network.";
+                                Switch {
+                                    on: root.link-on;
+                                    enabled: root.link-available;
+                                    toggled => { root.link-toggle(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Tempo";
+                                detail: "Set it in the toolbar with − and +, or tap it in with TAP.";
+                                Text {
+                                    text: (round(root.bpm * 10) / 10) + " BPM";
+                                    color: Theme.text;
+                                    font-size: Theme.font-normal;
+                                    font-weight: 600;
+                                }
+                            }
+                        }
+
+                        if root.page == 2: VerticalLayout {
+                            alignment: start;
+                            PrefRow {
+                                title: "Output window";
+                                detail: "A second window showing the composition, for a projector or screen.";
+                                Switch {
+                                    on: root.output-open;
+                                    toggled => { root.toggle-output(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Fullscreen";
+                                detail: "Fill the screen the output window is on. F toggles it there, Esc leaves.";
+                                SettingsButton {
+                                    text: "Go fullscreen";
+                                    clicked => { root.fullscreen-output(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Mapping";
+                                detail: root.mapping-status;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    if root.mapped: SettingsButton {
+                                        text: "Clear";
+                                        clicked => { root.clear-mapping(); }
+                                    }
+                                    SettingsButton {
+                                        text: "Import Resolume preset…";
+                                        clicked => { root.import-mapping(); }
+                                    }
+                                }
+                            }
+                            PrefRow {
+                                title: "Test card";
+                                detail: "Show a grid in every slice instead of the composition, to line slices up.";
+                                Switch {
+                                    on: root.test-card;
+                                    enabled: root.mapped;
+                                    toggled => { root.toggle-test-card(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "Syphon output";
+                                detail: !root.syphon-available ? "Syphon is only available on macOS."
+                                    : root.syphon-error != "" ? "Syphon couldn't start: " + root.syphon-error
+                                    : !root.syphon-on ? "Off. Other apps can't see openVJ."
+                                    : root.syphon-receiving ? "An app is receiving the composition now."
+                                    : "Other Syphon apps can pick openVJ as a source. Nothing is sent until one does.";
+                                Switch {
+                                    on: root.syphon-on;
+                                    enabled: root.syphon-available;
+                                    toggled => { root.syphon-toggle(); }
+                                }
+                            }
+                        }
+
+                        if root.page == 3: VerticalLayout {
+                            alignment: start;
+                            PrefRow {
+                                title: "Media folder";
+                                detail: "Where the browser's Files tab starts.";
+                            }
+                            Rectangle {
+                                height: 40px;
+                                border-radius: Theme.radius;
+                                background: Theme.track;
+                                border-width: 1px;
+                                border-color: Theme.separator;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 6px;
+                                    spacing: 10px;
+                                    Path {
+                                        width: 18px;
+                                        height: 18px;
+                                        y: (parent.height - self.height) / 2;
+                                        viewbox-width: 24;
+                                        viewbox-height: 24;
+                                        fill: Theme.accent;
+                                        commands: "M 2 5 Q 2 4 3 4 L 9 4 L 11 6 L 21 6 Q 22 6 22 7 L 22 19 Q 22 20 21 20 L 3 20 Q 2 20 2 19 Z";
+                                    }
+                                    Text {
+                                        text: root.media-folder;
+                                        color: Theme.text;
+                                        font-size: Theme.font-normal;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        SettingsButton {
+                                            text: "Choose…";
+                                            clicked => { root.choose-folder(); }
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle { height: 8px; }
+                            PrefRow {
+                                title: "Missing media";
+                                detail: root.missing-media == 0 ? "Every clip in this composition has its file." : root.missing-media + " clips can't find their file. Point openVJ at a folder to look in.";
+                                SettingsButton {
+                                    text: "Find media…";
+                                    primary: root.missing-media > 0;
+                                    clicked => { root.relink-media(); }
+                                }
+                            }
+                        }
+
+                        if root.page == 4: VerticalLayout {
+                            alignment: start;
+                            PrefHeading { text: "CLIPS"; }
+                            Shortcut { title: "Trigger a column"; key: "1 – 9"; }
+                            Shortcut { title: "Select a clip without launching it"; key: "Right-click"; }
+                            Shortcut { title: "Cancel placing a source"; key: "Esc"; }
+                            Shortcut { title: "Clear everything"; key: "Esc Esc"; }
+                            Shortcut { title: "Remove the selected clip"; key: "Delete"; }
+                            Rectangle { height: 14px; }
+                            PrefHeading { text: "WINDOWS"; }
+                            Shortcut { title: "Settings"; key: "Ctrl ,"; }
+                            Shortcut { title: "Output fullscreen (in the output window)"; key: "F"; }
+                        }
+
+                        if root.page == 5: VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            Text {
+                                text: "openVJ";
+                                color: Theme.text;
+                                font-family: Theme.brand-font;
+                                font-size: 24px;
+                            }
+                            Text {
+                                text: "A free, open VJ app. GPL-3.0-or-later. github.com/openwave-studio/openvj";
+                                color: Theme.text-dim;
+                                font-size: Theme.font-normal;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: "Styled after openDJ. Typefaces: Inter (Inter Tabular) and Zen Dots, both under the SIL Open Font License.";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
