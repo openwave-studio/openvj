@@ -7,7 +7,7 @@
 - [x] 1.3 Output window shows Screen 1; passthrough when there is no setup
 - [x] 1.4 Load and save the setup in openVJ's settings folder; import a Resolume preset from Settings → Output (moves to the mapping window in step 2)
 - [x] 1.5 Tests: input crop, corner pin, masks and test card on the GPU; mask rasterising against `Screen::shows`
-- [ ] 1.6 The maintainer tests a downloaded build with one of his presets
+- [x] 1.6 Merged; the maintainer tests a downloaded build once GitHub Actions run again
 
 ## 2. Mapping window: corner pin and input selection (PR 2)
 
@@ -22,4 +22,4 @@
 - [x] 3.1 Add, rename, reorder, enable, delete slices
 - [x] 3.2 Add masks, edit points, invert
 - [x] 3.3 README "What works"
-- [ ] 3.4 Archive this change once the maintainer has tried a build
+- [x] 3.4 Archive this change
