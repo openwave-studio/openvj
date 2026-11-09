@@ -1,6 +1,6 @@
 name: macOS app
 
-# Builds OpenVJ.app with scripts/bundle-macos.sh. Runs when packaging changes, on demand
+# Builds openVJ.app with scripts/bundle-macos.sh. Runs when packaging changes, on demand
 # (Actions → macOS app → Run workflow), and on version tags, where it attaches the zip to a
 # draft GitHub release.
 on:
@@ -83,7 +83,7 @@ jobs:
       - name: Build FFmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: scripts/build-ffmpeg-macos.sh
-      - name: Build OpenVJ.app
+      - name: Build openVJ.app
         env:
           OPENVJ_REQUIRE_FFMPEG: "1"
         run: scripts/bundle-macos.sh
@@ -92,13 +92,13 @@ jobs:
       - name: Launch the app
         run: |
           OPENVJ_SNAPSHOT="$RUNNER_TEMP/openvj.png" perl -e 'alarm shift; exec @ARGV' 180 \
-            target/macos/OpenVJ.app/Contents/MacOS/openvj
+            target/macos/openVJ.app/Contents/MacOS/openvj
           test -s "$RUNNER_TEMP/openvj.png"
       # The bundled FFmpeg runs from inside the signed app, and decodes and scales a frame to raw
       # RGBA the way openVJ asks for it.
       - name: Check the bundled FFmpeg
         run: |
-          macos=target/macos/OpenVJ.app/Contents/MacOS
+          macos=target/macos/openVJ.app/Contents/MacOS
           "$macos/ffprobe" -hide_banner -version | head -1
           bytes="$("$macos/ffmpeg" -nostdin -loglevel error -f lavfi -i testsrc2=size=320x240:rate=30 \
             -frames:v 1 -an -vf scale=160:120:flags=bilinear -f rawvideo -pix_fmt rgba - | wc -c)"
@@ -118,7 +118,7 @@ jobs:
             --jq ".[] | select(.isDraft and (.tagName | test(\"^dev-${slug}--[0-9a-f]{7}\$\"))) | .tagName" |
             while read -r old; do gh release delete "$old" --yes; done
           pr="$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number // empty')"
-          title="OpenVJ dev build: $GITHUB_REF_NAME${pr:+ (PR #$pr)} at $short"
+          title="openVJ dev build: $GITHUB_REF_NAME${pr:+ (PR #$pr)} at $short"
           gh release create "dev-$slug--$short" target/macos/*.zip --draft --prerelease --target "$GITHUB_SHA" \
             --title "$title" \
             --notes "Built from \`$GITHUB_REF_NAME\`${pr:+ (#$pr)} at $GITHUB_SHA by run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
@@ -131,5 +131,5 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" target/macos/*.zip --clobber
           else
-            gh release create "$tag" target/macos/*.zip --draft --generate-notes --title "OpenVJ $tag"
+            gh release create "$tag" target/macos/*.zip --draft --generate-notes --title "openVJ $tag"
           fi

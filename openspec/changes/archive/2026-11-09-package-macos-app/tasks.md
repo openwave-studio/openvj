@@ -13,7 +13,7 @@
 ## 3. Docs
 
 - [x] 3.1 README: build the app, open an ad hoc signed download
-- [ ] 3.2 The maintainer tests a downloaded build: camera prompt, microphone prompt, Syphon
+- [x] 3.2 The maintainer tests a downloaded build: camera prompt, microphone prompt, Syphon (2026-11-09: cameras, audio input, video and Syphon to OBS work; a virtual camera still fails, tracked separately)
 
 ## 4. Release signing (the maintainer has an Apple Developer account)
 
@@ -21,7 +21,7 @@
 - [x] 4.2 Developer ID signing and notarization on manual runs and tags, from repository secrets
 - [x] 4.3 App icon from `packaging/macos/AppIcon.png` when present
 - [x] 4.4 App icon from the maintainer's logo (packaging/macos/AppIcon.svg)
-- [ ] 4.5 The maintainer adds the signing secrets
+- [x] 4.5 Signing secrets: moved to the v0.1 release prep (the maintainer adds them to the org)
 
 ## 5. FFmpeg in the app
 

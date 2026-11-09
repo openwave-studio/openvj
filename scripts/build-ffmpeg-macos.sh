@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the FFmpeg that OpenVJ.app ships: ffmpeg and ffprobe, decode-only, LGPL, linked only
+# Builds the FFmpeg that openVJ.app ships: ffmpeg and ffprobe, decode-only, LGPL, linked only
 # against macOS system libraries. Output goes to target/ffmpeg/ (bin/, licenses/), which
 # scripts/bundle-macos.sh copies into the app. Takes ~10 minutes; CI caches the result.
 #
@@ -91,7 +91,7 @@ cp "$work/ffmpeg/LICENSE.md" "$out/licenses/FFmpeg-LICENSE.md"
 cp "$work/libvpx/LICENSE" "$out/licenses/libvpx-LICENSE"
 cp "$work/libvpx/PATENTS" "$out/licenses/libvpx-PATENTS"
 cat >"$out/licenses/README.txt" <<NOTICE
-OpenVJ includes the ffmpeg and ffprobe programs from FFmpeg $FFMPEG_VERSION (https://ffmpeg.org),
+openVJ includes the ffmpeg and ffprobe programs from FFmpeg $FFMPEG_VERSION (https://ffmpeg.org),
 licensed under the GNU Lesser General Public License version 2.1 or later
 (FFmpeg-COPYING.LGPLv2.1), statically linked with libvpx $LIBVPX_VERSION (BSD licence,
 libvpx-LICENSE and libvpx-PATENTS). FFmpeg is a trademark of Fabrice Bellard.
@@ -101,7 +101,7 @@ Source code:
                   (git: https://git.ffmpeg.org/ffmpeg.git, tag n$FFMPEG_VERSION), unmodified
   libvpx $LIBVPX_VERSION: https://chromium.googlesource.com/webm/libvpx, tag v$LIBVPX_VERSION, unmodified
   How they were built: scripts/build-ffmpeg-macos.sh in https://github.com/openwave-studio/openvj
-For three years from the date you received this copy of OpenVJ, the OpenVJ maintainers will
+For three years from the date you received this copy of openVJ, the openVJ maintainers will
 also provide this source on request: open an issue at https://github.com/openwave-studio/openvj.
 
 FFmpeg configure flags:

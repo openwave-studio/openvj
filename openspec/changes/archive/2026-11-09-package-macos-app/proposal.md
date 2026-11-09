@@ -2,13 +2,13 @@
 
 ## Why
 
-openVJ runs as a bare `openvj` binary. macOS ties camera and microphone permission to whatever launched it (Terminal, iTerm, VS Code), and a binary without an Info.plist has no usage strings, so on the maintainer's Mac cameras failed with "camera access was denied". A real `OpenVJ.app` asks for camera and microphone access in its own name, can be started from Finder or the Dock, and is what v0.1 ships as.
+openVJ runs as a bare `openvj` binary. macOS ties camera and microphone permission to whatever launched it (Terminal, iTerm, VS Code), and a binary without an Info.plist has no usage strings, so on the maintainer's Mac cameras failed with "camera access was denied". A real `openVJ.app` asks for camera and microphone access in its own name, can be started from Finder or the Dock, and is what v0.1 ships as.
 
 ## What Changes
 
-- `scripts/bundle-macos.sh` builds a release binary and wraps it in `OpenVJ.app`: Info.plist with `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`, Syphon.framework in `Contents/Frameworks`, and the build machine's absolute rpath removed.
+- `scripts/bundle-macos.sh` builds a release binary and wraps it in `openVJ.app`: Info.plist with `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`, Syphon.framework in `Contents/Frameworks`, and the build machine's absolute rpath removed.
 - The app is signed ad hoc by default. When `OPENVJ_SIGN_IDENTITY` is set it signs with that identity and the hardened runtime, with entitlements for camera and audio input, ready for notarization later.
-- The script zips the app as `OpenVJ-<version>-macos-arm64.zip`.
+- The script zips the app as `openVJ-<version>-macos-arm64.zip`.
 - A `macOS app` GitHub workflow runs the script on PRs that change packaging, on demand, and on `v*` tags. On a tag it attaches the zip to a draft GitHub release.
 - README: how to build the app and how to open an ad hoc signed download (Gatekeeper's "Open Anyway").
 

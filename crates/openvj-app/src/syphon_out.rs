@@ -12,7 +12,7 @@ use openvj_render::Engine;
 /// True when this build can send Syphon (macOS with the `syphon` feature).
 pub const AVAILABLE: bool = cfg!(all(feature = "syphon", target_os = "macos"));
 
-/// The server name. Empty, so other apps list the server by the app's name alone ("OpenVJ").
+/// The server name. Empty, so other apps list the server by the app's name alone ("openVJ").
 #[cfg_attr(not(all(feature = "syphon", target_os = "macos")), allow(dead_code))]
 pub const SERVER_NAME: &str = "";
 

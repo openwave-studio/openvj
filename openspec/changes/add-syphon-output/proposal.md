@@ -6,7 +6,7 @@ The maintainer mixes openVJ with other Syphon apps on the same Mac (Synesthesia,
 
 ## What Changes
 
-- On macOS, openVJ publishes its composition output as a Syphon server listed as just **"OpenVJ"** (the maintainer's choice; Resolume lists "Arena - Composition").
+- On macOS, openVJ publishes its composition output as a Syphon server listed as just **"openVJ"** (the maintainer's choice; Resolume lists "Arena - Composition").
 - A **Syphon output** switch in Settings → Output, on by default. Frames are published only while at least one client is connected, so it costs nothing when nobody listens.
 - Frames stay on the GPU: the final mix is converted to BGRA in one extra fullscreen pass and handed to Syphon's Metal server on openVJ's own Metal command queue. No CPU readback, no extra thread.
 - The server follows the composition size and is published the right way up (Metal orientation, `flipped: NO`).

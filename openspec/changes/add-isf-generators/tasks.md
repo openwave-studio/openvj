@@ -17,6 +17,6 @@
 
 - [x] 3.1 `scripts/import-ghost-arcade.sh`: fetch a pinned commit, drop excluded files, test-compile, write NOTICE
 - [x] 3.2 `shaders/ghost-arcade/` with LICENSE (AGPL-3.0) and NOTICE; load from the app bundle and from the repo in dev
-- [x] 3.3 Copy the folder into OpenVJ.app in `packaging/`
+- [x] 3.3 Copy the folder into openVJ.app in `packaging/`
 - [x] 3.4 Test: every bundled file compiles
 - [ ] 3.5 README "What works" and credits; archive this change

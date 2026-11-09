@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>OpenVJ</string>
+	<string>openVJ</string>
 	<key>CFBundleDisplayName</key>
-	<string>OpenVJ</string>
+	<string>openVJ</string>
 	<key>CFBundleIdentifier</key>
 	<string>org.openvj.OpenVJ</string>
 	<key>CFBundleExecutable</key>
@@ -25,10 +25,10 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenVJ shows your cameras and capture cards as live clips.</string>
+	<string>openVJ shows your cameras and capture cards as live clips.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenVJ listens to the audio input to make effects and parameters react to the music.</string>
+	<string>openVJ listens to the audio input to make effects and parameters react to the music.</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>OpenVJ is free software under the GNU GPL v3 or later.</string>
+	<string>openVJ is free software under the GNU GPL v3 or later.</string>
 </dict>
 </plist>

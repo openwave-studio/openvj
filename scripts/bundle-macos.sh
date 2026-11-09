@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds OpenVJ.app and a zip of it in target/macos/.
+# Builds openVJ.app and a zip of it in target/macos/.
 #
 #   scripts/bundle-macos.sh            # release build, signed ad hoc
 #   OPENVJ_SIGN_IDENTITY="Developer ID Application" scripts/bundle-macos.sh
@@ -15,7 +15,7 @@
 # Without them the app falls back to Homebrew's FFmpeg; OPENVJ_REQUIRE_FFMPEG=1 makes that an error.
 #
 # The app carries Info.plist usage strings, so macOS asks for camera and microphone
-# access for OpenVJ itself rather than for the terminal it was started from.
+# access for openVJ itself rather than for the terminal it was started from.
 # Extra arguments go to `cargo build` (for example `--no-default-features --features camera,syphon`).
 set -euo pipefail
 
@@ -36,7 +36,7 @@ echo "==> Building openvj $version ($arch)"
 cargo build --release -p openvj-app --bin openvj "$@"
 
 out="target/macos"
-app="$out/OpenVJ.app"
+app="$out/openVJ.app"
 contents="$app/Contents"
 bin="$contents/MacOS/openvj"
 rm -rf "$app"
@@ -140,7 +140,7 @@ for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
   /usr/libexec/PlistBuddy -c "Print :$key" "$contents/Info.plist" >/dev/null
 done
 
-zip="$out/OpenVJ-$version-macos-$arch.zip"
+zip="$out/openVJ-$version-macos-$arch.zip"
 rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
 

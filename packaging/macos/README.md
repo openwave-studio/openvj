@@ -1,6 +1,6 @@
 # macOS packaging
 
-`scripts/bundle-macos.sh` builds `target/macos/OpenVJ.app` from `Info.plist` here, and the
+`scripts/bundle-macos.sh` builds `target/macos/openVJ.app` from `Info.plist` here, and the
 [macOS app workflow](../../.github/workflows/macos-app.yml) runs it on GitHub.
 
 - **Bundle ID** `org.openvj.OpenVJ`. macOS keeps camera and microphone permissions under it, so
