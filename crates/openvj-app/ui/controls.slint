@@ -1,0 +1,704 @@
+import { Theme } from "theme.slint";
+import { ParamData, ModNames, AudioLevels } from "state.slint";
+
+/// Horizontal fader in openDJ's mixer style: tick marks either side of a dark slot,
+/// a grey metal cap, the name on the left and the value on the right.
+/// Drag or scroll to set, double-click resets to `reset-value`.
+export component Fader inherits Rectangle {
+    in property <float> value;
+    in property <string> label;
+    in property <color> fill: Theme.accent;
+    in property <float> reset-value: 1.0;
+    in property <bool> show-percent: true;
+    // Where a modulator has moved it this frame (-1 when it isn't modulated).
+    in property <float> live: -1;
+    in property <length> label-width: 46px;
+    callback changed(float);
+
+    property <length> handle: 12px;
+    property <length> value-width: root.show-percent ? 34px : 0px;
+    property <length> slot-x: root.label == "" ? 0px : root.label-width;
+    property <length> slot-w: root.width - root.slot-x - root.value-width;
+    property <length> travel: root.slot-w - root.handle;
+    property <float> drag-start;
+
+    height: 20px;
+
+    if root.label != "": Text {
+        x: 0;
+        width: root.label-width - 6px;
+        text: root.label;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // Ticks above and below the slot.
+    for i in 9: Rectangle {
+        property <bool> major: i == 0 || i == 8;
+        x: root.slot-x + root.handle / 2 + root.travel * i / 8;
+        y: 1px;
+        width: 1px;
+        height: root.height - 2px;
+        background: major ? #55555a : Theme.tick;
+    }
+    // Slot, lit in the fill colour up to the value.
+    Rectangle {
+        x: root.slot-x + root.handle / 2;
+        y: (root.height - 4px) / 2;
+        width: root.travel;
+        height: 4px;
+        border-radius: 2px;
+        background: #050506;
+        border-width: 1px;
+        border-color: #2a2a2d;
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.value, 0, 1);
+            border-radius: 2px;
+            background: root.fill;
+        }
+    }
+    // The modulated value, as a ghost cap.
+    if root.live >= 0 && abs(root.live - root.value) > 0.002: Rectangle {
+        x: root.slot-x + root.travel * clamp(root.live, 0, 1);
+        y: 2px;
+        width: root.handle;
+        height: root.height - 4px;
+        border-radius: 3px;
+        border-width: 1.5px;
+        border-color: Theme.tempo;
+        background: Theme.tempo.with-alpha(0.12);
+    }
+    // Cap.
+    Rectangle {
+        x: root.slot-x + root.travel * clamp(root.value, 0, 1);
+        y: 1px;
+        width: root.handle;
+        height: root.height - 2px;
+        border-radius: 3px;
+        background: Theme.fader-cap;
+        border-width: 1px;
+        border-color: ta.pressed ? root.fill : #2a2a2d;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #000000a0;
+        Rectangle {
+            width: 1px;
+            height: parent.height - 8px;
+            background: #2a2a2d;
+        }
+    }
+
+    if root.show-percent: Text {
+        x: root.width - root.value-width;
+        width: root.value-width;
+        text: round(root.value * 100) + "%";
+        color: Theme.text;
+        font-size: Theme.font-small;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        x: root.slot-x;
+        width: root.slot-w;
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                // A click on the slot jumps there; a click on the cap grabs it.
+                let at = (self.mouse-x - root.handle / 2) / root.travel;
+                if (abs(at - root.value) > root.handle / root.travel) {
+                    root.changed(clamp(at, 0, 1));
+                }
+                root.drag-start = abs(at - root.value) > root.handle / root.travel ? clamp(at, 0, 1) : root.value;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.changed(clamp(root.drag-start + (self.mouse-x - self.pressed-x) / root.travel, 0, 1));
+            }
+        }
+        double-clicked => {
+            root.changed(root.reset-value);
+        }
+        scroll-event(e) => {
+            root.changed(clamp(root.value + max(-0.05, min(0.05, e.delta-y / 400px)), 0, 1));
+            accept
+        }
+    }
+}
+
+/// Small square toggle button (bypass, solo, clear) in openDJ's style: flat and dark
+/// with a thin border; when on, the label and border take the colour.
+export component ToggleButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    in property <color> on-color: Theme.accent;
+    in property <string> tooltip;
+    callback clicked();
+
+    width: 22px;
+    height: 20px;
+    border-radius: Theme.radius-small;
+    background: ta.pressed ? Theme.pressed : root.checked ? root.on-color.with-alpha(0.14) : ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.checked ? root.on-color : Theme.border;
+
+    Text {
+        text: root.text;
+        color: root.checked ? root.on-color : Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Flat text button used in toolbars and panels. `primary` fills it with the accent;
+/// `active` (a mode that is on) tints its label and border.
+export component FlatButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    in property <color> tint: Theme.accent;
+    callback clicked();
+
+    min-width: label.preferred-width + 20px;
+    height: 24px;
+    border-radius: Theme.radius;
+    background: !root.enabled ? Theme.panel-2
+        : root.primary ? (ta.pressed ? root.tint.darker(0.3) : root.tint)
+        : ta.pressed ? Theme.pressed
+        : root.active ? root.tint.with-alpha(0.14)
+        : ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.primary || root.active ? root.tint : Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+
+    label := Text {
+        text: root.text;
+        color: root.primary ? Theme.on-accent : root.active ? root.tint : Theme.text;
+        font-size: Theme.font-body;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// openDJ's tab: a word, the open one in the accent and underlined.
+export component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <string> subtitle;
+    in property <bool> active;
+    callback clicked();
+
+    height: 30px;
+    min-width: row.preferred-width + 16px;
+    background: ta.has-hover && !root.active ? #ffffff08 : transparent;
+    row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: root.active ? Theme.accent : ta.has-hover ? Theme.text : Theme.text-dim;
+            font-size: 12px;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+        }
+        if root.subtitle != "": Text {
+            text: root.subtitle;
+            color: Theme.text-faint;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+            overflow: elide;
+            max-width: 140px;
+        }
+    }
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.active ? Theme.accent : transparent;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The small down chevron on menus.
+export component Chevron inherits Path {
+    width: 8px;
+    height: 5px;
+    commands: "M 0 0 L 4 4.5 L 8 0";
+    stroke: Theme.text-dim;
+    stroke-width: 1.5px;
+    fill: transparent;
+}
+
+/// Shows the current choice; click opens a menu of all of them (openDJ's MenuField).
+export component BlendPicker inherits Rectangle {
+    in property <[string]> modes;
+    in property <int> current;
+    in property <length> menu-width: 160px;
+    callback picked(int);
+
+    height: 22px;
+    border-radius: Theme.radius;
+    background: ta.has-hover ? #2a2a2e : Theme.panel-2;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 4px;
+        Text {
+            text: root.modes[root.current];
+            color: Theme.text;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Chevron {
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 2px;
+        width: max(root.width, root.menu-width);
+        Rectangle {
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000a0;
+            VerticalLayout {
+                padding: 6px;
+                for mode[i] in root.modes: Rectangle {
+                    height: 24px;
+                    border-radius: Theme.radius-small;
+                    background: i == root.current ? Theme.accent.with-alpha(0.35) : item-ta.has-hover ? Theme.chosen : transparent;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: mode;
+                        color: Theme.text;
+                        font-size: 12px;
+                        font-weight: i == root.current ? 600 : 400;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    item-ta := TouchArea {
+                        clicked => { root.picked(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Section heading inside panels: small, uppercase and quieter than what it names.
+export component PanelTitle inherits Text {
+    horizontal-stretch: 0;
+    color: Theme.text-dim;
+    font-size: Theme.font-small;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+}
+
+/// 16:9 video monitor with a caption.
+export component Monitor inherits VerticalLayout {
+    in property <image> source;
+    in property <string> title;
+    in property <string> caption;
+    in property <color> title-color: Theme.text-dim;
+    spacing: 6px;
+
+    HorizontalLayout {
+        PanelTitle {
+            text: root.title;
+            color: root.title-color;
+        }
+        Text {
+            text: root.caption;
+            color: Theme.text-faint;
+            font-size: Theme.font-small;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+    }
+
+    Rectangle {
+        height: self.width * 9 / 16;
+        // Square corners: a rounded clip over the GPU frame leaves it black on the
+        // femtovg-wgpu renderer.
+        background: #000;
+        border-width: 1px;
+        border-color: Theme.separator;
+        clip: true;
+        Image {
+            width: parent.width - 2px;
+            height: parent.height - 2px;
+            source: root.source;
+            image-fit: contain;
+        }
+    }
+}
+
+/// Parameter bar: the fill is the base value, the bright line under it is the live
+/// (modulated) value. Click or drag to set, double-click resets.
+export component ParamBar inherits Rectangle {
+    in property <float> value;
+    in property <float> live;
+    in property <string> display;
+    in property <bool> modulated;
+    in property <color> mod-color: Theme.tempo;
+    in property <float> reset-value: 0.5;
+    callback changed(float);
+
+    height: 20px;
+    border-radius: Theme.radius-small;
+    background: Theme.track;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.border : Theme.separator;
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.value, 0, 1);
+        background: root.modulated ? Theme.pressed : Theme.chosen;
+    }
+    // The value's edge, in the accent.
+    Rectangle {
+        x: parent.width * clamp(root.value, 0, 1) - 2px;
+        width: 2px;
+        visible: root.value > 0.005;
+        background: root.modulated ? Theme.text-faint : Theme.accent;
+    }
+    if root.modulated: Rectangle {
+        x: 0;
+        y: parent.height - 4px;
+        height: 4px;
+        width: parent.width * clamp(root.live, 0, 1);
+        background: root.mod-color;
+    }
+    if root.modulated: Rectangle {
+        x: parent.width * clamp(root.live, 0, 1) - 1px;
+        width: 2px;
+        background: root.mod-color;
+    }
+    Text {
+        x: parent.width - self.width - 6px;
+        text: root.display;
+        color: Theme.text;
+        font-size: Theme.font-small;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.changed(clamp(self.mouse-x / root.width, 0, 1));
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.changed(clamp(self.mouse-x / root.width, 0, 1));
+            }
+        }
+        double-clicked => {
+            root.changed(root.reset-value);
+        }
+    }
+}
+
+/// Bipolar −100%..+100% bar for modulation depth. Double-click resets to +100%.
+export component AmountBar inherits Rectangle {
+    in property <float> value;
+    in property <color> fill: Theme.tempo;
+    callback changed(float);
+
+    height: 14px;
+    border-radius: 3px;
+    background: Theme.track;
+    clip: true;
+
+    Rectangle {
+        x: root.value >= 0 ? parent.width / 2 : parent.width / 2 * (1 + root.value);
+        width: parent.width / 2 * abs(root.value);
+        background: root.fill.with-alpha(0.55);
+    }
+    Rectangle {
+        x: parent.width / 2;
+        width: 1px;
+        background: Theme.text-faint;
+    }
+    Text {
+        x: parent.width - self.width - 4px;
+        text: (root.value > 0 ? "+" : "") + round(root.value * 100) + "%";
+        color: Theme.text;
+        font-size: 9px;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.changed(clamp(self.mouse-x / root.width * 2 - 1, -1, 1));
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.changed(clamp(self.mouse-x / root.width * 2 - 1, -1, 1));
+            }
+        }
+        double-clicked => {
+            root.changed(1);
+        }
+    }
+}
+
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> current;
+    in property <color> dot: transparent;
+    callback clicked();
+    height: 24px;
+    border-radius: Theme.radius-small;
+    background: root.current ? Theme.accent.with-alpha(0.35) : ta.has-hover ? Theme.chosen : transparent;
+    Rectangle {
+        x: 8px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.dot;
+    }
+    Text {
+        x: 20px;
+        text: root.text;
+        color: Theme.text;
+        font-size: 12px;
+        font-weight: root.current ? 600 : 400;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component MenuHeading inherits Text {
+    height: 18px;
+    x: 8px;
+    color: Theme.text-faint;
+    font-size: Theme.font-tiny;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    vertical-alignment: bottom;
+}
+
+/// Shows a parameter's modulation source; click opens the source menu.
+export component ModButton inherits Rectangle {
+    in property <int> source;
+    in property <int> rate;
+    callback picked(int);
+
+    width: 64px;
+    height: 20px;
+    border-radius: Theme.radius-small;
+    background: root.source != 0 ? Theme.mod-color(root.source).with-alpha(0.14) : ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.source != 0 ? Theme.mod-color(root.source) : Theme.border;
+
+    Text {
+        text: root.source == 0 ? "map ▾" : ModNames.sources[root.source] + (root.source >= 5 ? " " + ModNames.rates[root.rate] : "");
+        color: root.source == 0 ? Theme.text-dim : Theme.mod-color(root.source);
+        font-size: Theme.font-tiny;
+        font-weight: root.source == 0 ? 500 : 700;
+        overflow: elide;
+    }
+
+    ta := TouchArea {
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: root.width - 150px;
+        y: root.height;
+        width: 150px;
+        Rectangle {
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000a0;
+            VerticalLayout {
+                padding: 6px;
+                MenuItem {
+                    text: "Off (static)";
+                    current: root.source == 0;
+                    clicked => { root.picked(0); }
+                }
+                MenuHeading { text: "AUDIO FFT"; }
+                for i in 4: MenuItem {
+                    text: ModNames.sources[i + 1];
+                    current: root.source == i + 1;
+                    dot: Theme.audio;
+                    clicked => { root.picked(i + 1); }
+                }
+                MenuHeading { text: "TEMPO SYNC"; }
+                for i in 4: MenuItem {
+                    text: ModNames.sources[i + 5];
+                    current: root.source == i + 5;
+                    dot: Theme.tempo;
+                    clicked => { root.picked(i + 5); }
+                }
+            }
+        }
+    }
+}
+
+/// Picks the cycle length of a tempo-synced modulator.
+export component RatePicker inherits HorizontalLayout {
+    in property <int> current;
+    callback picked(int);
+    spacing: 1px;
+    for label[i] in ModNames.rates: Rectangle {
+        width: 16px;
+        height: 14px;
+        border-radius: 3px;
+        background: i == root.current ? Theme.tempo.with-alpha(0.14) : rate-ta.has-hover ? Theme.raised : Theme.track;
+        border-width: 1px;
+        border-color: i == root.current ? Theme.tempo : transparent;
+        Text {
+            text: label;
+            color: i == root.current ? Theme.tempo : Theme.text-dim;
+            font-size: 9px;
+        }
+        rate-ta := TouchArea {
+            clicked => { root.picked(i); }
+        }
+    }
+}
+
+/// A parameter with its value bar, mapping button and, when mapped, depth and rate.
+export component ModParam inherits VerticalLayout {
+    in property <ParamData> data;
+    callback set(int, float);
+    callback mod-source(int, int);
+    callback mod-amount(int, float);
+    callback mod-rate(int, int);
+    spacing: 2px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        height: 20px;
+        Text {
+            width: Theme.label-w;
+            text: root.data.name;
+            color: root.data.mod-source != 0 ? Theme.mod-color(root.data.mod-source) : Theme.text-dim;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        ParamBar {
+            value: root.data.value;
+            live: root.data.live;
+            display: root.data.display;
+            modulated: root.data.mod-source != 0;
+            mod-color: Theme.mod-color(root.data.mod-source);
+            reset-value: root.data.reset;
+            changed(v) => { root.set(root.data.index, v); }
+        }
+        if root.data.modulatable: ModButton {
+            source: root.data.mod-source;
+            rate: root.data.mod-rate;
+            picked(s) => { root.mod-source(root.data.index, s); }
+        }
+        if !root.data.modulatable: Rectangle {
+            width: 64px;
+        }
+    }
+    if root.data.mod-source != 0: HorizontalLayout {
+        spacing: 6px;
+        height: 14px;
+        Text {
+            width: Theme.label-w;
+            text: "↳ depth";
+            color: Theme.text-faint;
+            font-size: 9px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+        AmountBar {
+            value: root.data.mod-amount;
+            fill: Theme.mod-color(root.data.mod-source);
+            changed(v) => { root.mod-amount(root.data.index, v); }
+        }
+        if root.data.mod-source >= 5: RatePicker {
+            current: root.data.mod-rate;
+            picked(r) => { root.mod-rate(root.data.index, r); }
+        }
+        if root.data.mod-source < 5: Rectangle {
+            width: 64px;
+            Text {
+                text: "from audio";
+                color: Theme.audio;
+                font-size: 9px;
+            }
+        }
+    }
+}
+
+/// Four vertical band meters plus an input level bar.
+export component BandMeters inherits HorizontalLayout {
+    in property <length> bar-height: 22px;
+    in property <bool> labels;
+    spacing: 3px;
+    for v[i] in AudioLevels.bands: VerticalLayout {
+        spacing: 1px;
+        Rectangle {
+            width: root.labels ? 34px : 7px;
+            height: root.bar-height;
+            border-radius: 2px;
+            background: Theme.chosen.with-alpha(0.5);
+            clip: true;
+            Rectangle {
+                y: parent.height * (1 - clamp(v, 0, 1));
+                height: parent.height * clamp(v, 0, 1);
+                background: Theme.audio;
+            }
+        }
+        if root.labels: Text {
+            text: AudioLevels.band-names[i];
+            color: Theme.text-dim;
+            font-size: 9px;
+            horizontal-alignment: center;
+        }
+    }
+}

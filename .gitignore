@@ -1,0 +1,3 @@
+/target
+*.ovj.json.bak
+.DS_Store

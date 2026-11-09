@@ -1,0 +1,27 @@
+[package]
+name = "openvj-media"
+description = "openVJ media loading: images, FFmpeg video decoding, thumbnails, camera and Syphon input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Passes the Syphon.framework location on to openvj-app's build script (see build.rs).
+links = "openvj_media"
+
+[features]
+default = ["camera", "syphon"]
+# Camera and capture-device input (AVFoundation on macOS, V4L2 on Linux, Media Foundation on Windows).
+camera = ["dep:nokhwa", "dep:yuvutils-rs"]
+# Syphon input from other apps. macOS only; does nothing elsewhere.
+syphon = ["dep:syphon-core"]
+
+[dependencies]
+anyhow.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+nokhwa = { version = "0.10.11", features = ["input-native"], optional = true }
+yuvutils-rs = { version = "0.8.3", optional = true }
+# Snappy decompression for HAP frames.
+snap = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Ships Syphon.framework and links it, so no separate Syphon install is needed.
+syphon-core = { version = "0.4", optional = true }

@@ -1,0 +1,10 @@
+[package]
+name = "openvj-core"
+description = "openVJ composition model: layers, columns, clips, playback state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

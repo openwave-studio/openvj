@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets a merge queue run CI on its merge commits, if the repo ever gets one.
+  merge_group:
+  workflow_dispatch:
+
+# A new push to a PR cancels the run for the push before it. Runs on main
+# always finish, because they save the build cache that PRs start from.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI builds from scratch or from the cache, so incremental files are dead weight.
+  CARGO_INCREMENTAL: 0
+  # No debug info: a much smaller cache, faster restore and faster linking.
+  # Panic messages still name the file and line.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache. PR branches read main's cache but don't
+          # write their own ~1.5 GB copies, which would push main's cache out
+          # of the repo's 10 GB limit and make every PR build from scratch.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: brew install ffmpeg
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libfontconfig-dev libasound2-dev mesa-vulkan-drivers ffmpeg
+      # GPU tests run on lavapipe (software Vulkan).
+      - run: cargo test --workspace

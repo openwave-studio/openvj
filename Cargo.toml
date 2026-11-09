@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/openwave-studio/openvj"
+
+[workspace.dependencies]
+openvj-audio = { path = "crates/openvj-audio" }
+openvj-core = { path = "crates/openvj-core" }
+openvj-media = { path = "crates/openvj-media", default-features = false }
+openvj-render = { path = "crates/openvj-render" }
+openvj-resolume = { path = "crates/openvj-resolume" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.dev.package."*"]
+opt-level = 2
