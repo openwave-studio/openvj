@@ -840,6 +840,7 @@ component Browser inherits Rectangle {
     in property <string> effects-hint;
     in property <string> layer-name;
     in property <string> group-name;
+    in property <bool> clip-selected;
     in property <string> path;
     in-out property <int> tab;
     callback generator-clicked(int);
@@ -1005,6 +1006,13 @@ component Browser inherits Rectangle {
                             font-size: 10px;
                             overflow: elide;
                             vertical-alignment: center;
+                        }
+                        if !broken && root.clip-selected: FlatButton {
+                            y: 3px;
+                            width: 62px;
+                            horizontal-stretch: 0;
+                            text: "+ Clip";
+                            clicked => { root.effect-add(Scope.clip-fx, i); }
                         }
                         if !broken: FlatButton {
                             y: 3px;
@@ -1212,6 +1220,9 @@ export component MainWindow inherits Window {
     in property <int> layer-blend-value;
     in property <[ParamData]> layer-params;
     in property <[EffectData]> layer-effects;
+    in property <[EffectData]> layer-transform;
+    in property <[EffectData]> clip-effects;
+    in property <[EffectData]> clip-transform;
     in property <string> layer-side;
     in property <[string]> group-choices;
     in property <int> layer-group-choice;
@@ -1477,6 +1488,9 @@ export component MainWindow inherits Window {
                     layer-blend-value: root.layer-blend-value;
                     layer-params: root.layer-params;
                     layer-effects: root.layer-effects;
+                    layer-transform: root.layer-transform;
+                    clip-effects: root.clip-effects;
+                    clip-transform: root.clip-transform;
                     layer-side: root.layer-side;
                     group-choices: root.group-choices;
                     layer-group-choice: root.layer-group-choice;
@@ -1543,6 +1557,7 @@ export component MainWindow inherits Window {
                     effects-hint: root.effects-hint;
                     path: root.browser-path;
                     group-name: root.group-valid ? root.group-name : "";
+                    clip-selected: root.clip-valid;
                     tab <=> root.browser-tab;
                     generator-clicked(i) => { root.generator-clicked(i); keys.focus(); }
                     generator-double-clicked(i) => { root.generator-double-clicked(i); keys.focus(); }

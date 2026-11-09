@@ -7,8 +7,8 @@
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
         {"NAME": "segments", "LABEL": "Segments", "TYPE": "float", "MIN": 2, "MAX": 16, "DEFAULT": 6.2},
-        {"NAME": "rotate", "LABEL": "Rotate", "TYPE": "float", "MIN": 0, "MAX": 360, "DEFAULT": 0, "UNIT": "°", "WRAP": true},
-        {"NAME": "zoom", "LABEL": "Zoom", "TYPE": "float", "MIN": 50, "MAX": 200, "DEFAULT": 125, "UNIT": "%"}
+        {"NAME": "rotate", "LABEL": "Rotate", "TYPE": "float", "MIN": 0, "MAX": 360, "DEFAULT": 0, "UNIT": "°", "WRAP": true, "RESOLUME": {"NAME": "Rotation", "RANGE": [0, 1]}},
+        {"NAME": "zoom", "LABEL": "Zoom", "TYPE": "float", "MIN": 50, "MAX": 200, "DEFAULT": 125, "UNIT": "%", "RESOLUME": {"NAME": "Zoom", "RANGE": [0, 1]}}
     ]
 }*/
 

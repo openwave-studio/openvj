@@ -6,8 +6,10 @@
     "OPENVJ": {"ID": "edges", "NAME": "Edges", "RESOLUME": ["EdgeDetection", "Edges", "EdgeDetect", "Sobel"]},
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
-        {"NAME": "strength", "LABEL": "Strength", "TYPE": "float", "MIN": 1, "MAX": 8, "DEFAULT": 4.5, "UNIT": "×"},
-        {"NAME": "keep_color", "LABEL": "Keep colour", "TYPE": "float", "MIN": 0, "MAX": 100, "DEFAULT": 0, "UNIT": "%"}
+        {"NAME": "strength", "LABEL": "Strength", "TYPE": "float", "MIN": 1, "MAX": 8, "DEFAULT": 4.5, "UNIT": "×", "RESOLUME": {"NAME": "Multiplier", "RANGE": [0, 0.5]}},
+        {"NAME": "keep_color", "LABEL": "Keep colour", "TYPE": "float", "MIN": 0, "MAX": 100, "DEFAULT": 0, "UNIT": "%"},
+        {"NAME": "use_color", "LABEL": "Use colour", "TYPE": "bool", "DEFAULT": false, "RESOLUME": "Use Color"},
+        {"NAME": "color", "LABEL": "Colour", "TYPE": "color", "DEFAULT": [1, 1, 1, 1], "RESOLUME": "Color"}
     ]
 }*/
 
@@ -31,5 +33,6 @@ void main() {
     float gy = bl + 2.0 * bc + br - tl - 2.0 * tc - tr;
     float e = clamp(length(vec2(gx, gy)) * strength, 0.0, 1.0);
     vec4 c = IMG_THIS_PIXEL(inputImage);
-    gl_FragColor = vec4(mix(vec3(e), c.rgb * e, keep_color / 100.0), c.a);
+    vec3 edge = use_color ? color.rgb * e : vec3(e);
+    gl_FragColor = vec4(mix(edge, c.rgb * e, keep_color / 100.0), c.a);
 }
