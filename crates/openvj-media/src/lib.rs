@@ -80,7 +80,7 @@ impl VideoInfo {
 /// Locates an FFmpeg tool (`ffmpeg` or `ffprobe`).
 ///
 /// `OPENVJ_FFMPEG_DIR` overrides everything. Next comes openVJ's own folder, where
-/// OpenVJ.app ships its FFmpeg (Contents/MacOS). Apps started from the macOS Finder don't
+/// openVJ.app ships its FFmpeg (Contents/MacOS). Apps started from the macOS Finder don't
 /// inherit the shell `PATH`, so the usual Homebrew locations are checked too.
 pub fn tool_path(tool: &str) -> PathBuf {
     let mut dirs: Vec<PathBuf> = Vec::new();
