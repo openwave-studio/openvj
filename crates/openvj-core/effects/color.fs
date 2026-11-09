@@ -6,8 +6,8 @@
     "OPENVJ": {"ID": "color", "NAME": "Color", "RESOLUME": ["HueRotate", "Colorize", "HueSaturation", "BrightContrast", "BrightnessContrast", "Saturation", "Levels", "Exposure", "Tint", "Vibrance", "Recolor"]},
     "INPUTS": [
         {"NAME": "inputImage", "TYPE": "image"},
-        {"NAME": "hue", "LABEL": "Hue", "TYPE": "float", "MIN": 0, "MAX": 360, "DEFAULT": 0, "UNIT": "°", "WRAP": true},
-        {"NAME": "saturation", "LABEL": "Saturation", "TYPE": "float", "MIN": 0, "MAX": 200, "DEFAULT": 100, "UNIT": "%"},
+        {"NAME": "hue", "LABEL": "Hue", "TYPE": "float", "MIN": 0, "MAX": 360, "DEFAULT": 0, "UNIT": "°", "WRAP": true, "RESOLUME": {"NAME": "Hue Rotate", "RANGE": [0, 1]}},
+        {"NAME": "saturation", "LABEL": "Saturation", "TYPE": "float", "MIN": 0, "MAX": 200, "DEFAULT": 100, "UNIT": "%", "RESOLUME": {"NAME": "Sat. Scale", "RANGE": [0, 1]}},
         {"NAME": "brightness", "LABEL": "Brightness", "TYPE": "float", "MIN": 0, "MAX": 200, "DEFAULT": 100, "UNIT": "%"},
         {"NAME": "contrast", "LABEL": "Contrast", "TYPE": "float", "MIN": -100, "MAX": 100, "DEFAULT": 0, "UNIT": "%"}
     ]

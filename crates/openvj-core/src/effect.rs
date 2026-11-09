@@ -31,6 +31,12 @@ const BUILTIN: &[(&str, &str)] = &[
     ("acuarela", include_str!("../effects/acuarela.fs")),
 ];
 
+/// Built-in effects that aren't listed in the Effects tab: they're fixed in a card.
+const HIDDEN: &[(&str, &str)] = &[(TRANSFORM, include_str!("../effects/clip_transform.fs"))];
+
+/// Id of the fixed Transform every clip and layer has.
+pub const TRANSFORM: &str = "clip_transform";
+
 /// A parsed effect plus its channel list, shared by every instance.
 #[derive(Debug)]
 pub struct EffectType {
@@ -124,7 +130,7 @@ impl EffectLibrary {
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<EffectType>> {
-        self.types.iter().find(|t| t.def.id == id)
+        self.types.iter().chain(hidden_types()).find(|t| t.def.id == id)
     }
 
     /// Looks an effect up by id or display name, ignoring case.
@@ -146,21 +152,28 @@ fn normalise(s: &str) -> String {
 
 /// Ids of the built-in effects; folder files can't use them.
 pub fn is_builtin(id: &str) -> bool {
-    BUILTIN.iter().any(|(b, _)| *b == id)
+    BUILTIN.iter().chain(HIDDEN).any(|(b, _)| *b == id)
 }
 
 /// The parsed built-ins. Panics at first use if a built-in file doesn't parse (a test checks them).
 fn builtin_types() -> &'static [Arc<EffectType>] {
     static TYPES: std::sync::OnceLock<Vec<Arc<EffectType>>> = std::sync::OnceLock::new();
-    TYPES.get_or_init(|| {
-        BUILTIN
-            .iter()
-            .map(|(id, src)| {
-                let def = EffectDef::parse(src, id).unwrap_or_else(|e| panic!("built-in effect {id}: {e}"));
-                Arc::new(EffectType::new(def, None))
-            })
-            .collect()
-    })
+    TYPES.get_or_init(|| parse_builtins(BUILTIN))
+}
+
+fn hidden_types() -> &'static [Arc<EffectType>] {
+    static TYPES: std::sync::OnceLock<Vec<Arc<EffectType>>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(|| parse_builtins(HIDDEN))
+}
+
+fn parse_builtins(files: &[(&str, &str)]) -> Vec<Arc<EffectType>> {
+    files
+        .iter()
+        .map(|(id, src)| {
+            let def = EffectDef::parse(src, id).unwrap_or_else(|e| panic!("built-in effect {id}: {e}"));
+            Arc::new(EffectType::new(def, None))
+        })
+        .collect()
 }
 
 static LIBRARY: RwLock<Option<Arc<EffectLibrary>>> = RwLock::new(None);
@@ -245,6 +258,21 @@ impl Effect {
     pub fn param_mut(&mut self, key: &str) -> Option<&mut Param> {
         let default = self.ty()?.channels.iter().find(|c| c.key == key)?.default;
         Some(self.params.entry(key.to_owned()).or_insert_with(|| Param::new(default)))
+    }
+
+    /// True when the effect can't change its input: bypassed, fully dry, or every channel at
+    /// its default with nothing modulating it. Only meaningful for effects whose defaults
+    /// are a no-op, like the Transform.
+    pub fn is_noop(&self) -> bool {
+        if !self.enabled || (self.mix.value <= 0.0 && self.mix.modulation.source == crate::ModSource::Off) {
+            return true;
+        }
+        let Some(t) = self.ty() else { return true };
+        t.channels.iter().all(|ch| {
+            self.params
+                .get(&ch.key)
+                .is_none_or(|p| p.modulation.source == crate::ModSource::Off && (p.value - ch.default).abs() < 1e-5)
+        })
     }
 
     /// Turns event inputs (momentary triggers) back off. Call once per frame after rendering.

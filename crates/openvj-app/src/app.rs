@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::{
-    BAND_COUNT, BeatClock, BlendMode, ClipId, ClipSource, Composition, CrossfadeCurve, CrossfadeSide,
+    BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve, CrossfadeSide,
     DEFAULT_CLIP_SECS, Effect, GeneratorKind, MOD_RATES, MidiEffect, MidiMessage, ModInputs, ModSource, Modulation,
     Param, PlayMode, Playing, SYNC_BEATS, TapTempo, apply_midi, library, move_effect,
 };
@@ -49,6 +49,15 @@ mod scope {
     pub const CLIP: i32 = 4;
     pub const GROUP: i32 = 5;
     pub const GROUP_FX: i32 = 6;
+    pub const CLIP_FX: i32 = 7;
+    /// The fixed Transforms; the owner is ignored.
+    pub const LAYER_TF: i32 = 8;
+    pub const CLIP_TF: i32 = 9;
+
+    /// Scopes whose parameters belong to an effect (a chain entry or a Transform).
+    pub fn is_effect(scope: i32) -> bool {
+        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF)
+    }
 }
 
 /// Parameter index of an effect's dry/wet mix (its channels come first).
@@ -235,6 +244,9 @@ pub struct App {
     comp_fx: EffectModels,
     layer_fx: EffectModels,
     group_fx: EffectModels,
+    clip_fx: EffectModels,
+    layer_tf: EffectModels,
+    clip_tf: EffectModels,
 
     grid_dirty: bool,
     props_dirty: bool,
@@ -326,6 +338,9 @@ impl App {
             comp_fx: EffectModels::default(),
             layer_fx: EffectModels::default(),
             group_fx: EffectModels::default(),
+            clip_fx: EffectModels::default(),
+            layer_tf: EffectModels::default(),
+            clip_tf: EffectModels::default(),
             grid_dirty: true,
             props_dirty: true,
             effects_generation: None,
@@ -358,6 +373,9 @@ impl App {
         ui.set_layer_effects(ModelRc::from(self.layer_fx.effects.clone()));
         ui.set_group_params(ModelRc::from(self.group_params.clone()));
         ui.set_group_effects(ModelRc::from(self.group_fx.effects.clone()));
+        ui.set_clip_effects(ModelRc::from(self.clip_fx.effects.clone()));
+        ui.set_layer_transform(ModelRc::from(self.layer_tf.effects.clone()));
+        ui.set_clip_transform(ModelRc::from(self.clip_tf.effects.clone()));
         let names =
             |v: Vec<&str>| ModelRc::new(VecModel::from(v.into_iter().map(SharedString::from).collect::<Vec<_>>()));
         ui.set_play_modes(names(PlayMode::ALL.iter().map(|m| m.name()).collect()));
@@ -798,6 +816,9 @@ impl App {
         {
             fx.clear_events();
         }
+        for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten()) {
+            clip.effects.iter_mut().for_each(Effect::clear_events);
+        }
 
         self.update_effect_library(ui);
         if self.escape_at.is_some_and(|t| now - t > 0.8) {
@@ -949,10 +970,12 @@ impl App {
                     ],
                 );
                 self.layer_fx.update(&layer.effects, &inputs);
+                self.layer_tf.update(std::slice::from_ref(&layer.transform), &inputs);
             }
             None => {
                 update_model(&self.layer_params, Vec::new());
                 self.layer_fx.update(&[], &inputs);
+                self.layer_tf.update(&[], &inputs);
             }
         }
 
@@ -969,7 +992,10 @@ impl App {
         }
 
         let mut rows = Vec::new();
-        if let Some(clip) = self.selected.and_then(|(l, c)| comp.clip(l, c)) {
+        let clip = self.selected.and_then(|(l, c)| comp.clip(l, c));
+        self.clip_fx.update(clip.map_or(&[][..], |c| &c.effects), &inputs);
+        self.clip_tf.update(clip.map_or(&[][..], |c| std::slice::from_ref(&c.transform)), &inputs);
+        if let Some(clip) = clip {
             if let ClipSource::Generator { kind } = clip.source {
                 for (i, spec) in kind.params().iter().enumerate() {
                     let p = Param { value: clip.params[i], modulation: clip.mods[i] };
@@ -1905,12 +1931,27 @@ impl App {
             scope::COMP_FX => Some(&mut self.comp.effects),
             scope::LAYER_FX => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.effects),
             scope::GROUP_FX => self.selected_group_mut().map(|g| &mut g.effects),
+            scope::CLIP_FX => self.selected_clip_mut().map(|c| &mut c.effects),
             _ => None,
         }
     }
 
+    fn selected_clip_mut(&mut self) -> Option<&mut Clip> {
+        let (l, c) = self.selected?;
+        self.comp.clip_mut(l, c)
+    }
+
+    /// Effect `owner` of a chain, or the selected layer's or clip's Transform.
+    fn effect_mut(&mut self, scope: i32, owner: i32) -> Option<&mut Effect> {
+        match scope {
+            scope::LAYER_TF => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.transform),
+            scope::CLIP_TF => self.selected_clip_mut().map(|c| &mut c.transform),
+            _ => self.effects_mut(scope)?.get_mut(usize::try_from(owner).ok()?),
+        }
+    }
+
     fn effect_param_mut(&mut self, scope: i32, owner: i32, index: usize) -> Option<&mut Param> {
-        let fx = self.effects_mut(scope)?.get_mut(usize::try_from(owner).ok()?)?;
+        let fx = self.effect_mut(scope, owner)?;
         if index == MIX_INDEX {
             return Some(&mut fx.mix);
         }
@@ -1931,9 +1972,7 @@ impl App {
             (scope::COMP, 0) => Some(&mut self.comp.master_mod),
             (scope::COMP, CROSSFADER_INDEX) => Some(&mut self.comp.crossfader.position_mod),
             (scope::GROUP, 0) => self.selected_group_mut().map(|g| &mut g.opacity_mod),
-            (scope::COMP_FX | scope::LAYER_FX | scope::GROUP_FX, _) => {
-                self.effect_param_mut(scope, owner, index).map(|p| &mut p.modulation)
-            }
+            (s, _) if scope::is_effect(s) => self.effect_param_mut(scope, owner, index).map(|p| &mut p.modulation),
             (scope::LAYER, 0) => {
                 let l = self.layer_index(owner)?;
                 Some(&mut self.comp.layers[l].opacity_mod)
@@ -1964,7 +2003,7 @@ impl App {
                     g.opacity = v;
                 }
             }
-            scope::COMP_FX | scope::LAYER_FX | scope::GROUP_FX => {
+            s if scope::is_effect(s) => {
                 if let Some(p) = self.effect_param_mut(scope, owner, index) {
                     p.value = v;
                 }
@@ -2087,6 +2126,9 @@ impl App {
         let target = match scope {
             scope::COMP_FX => "the composition".to_owned(),
             scope::GROUP_FX => layer.and_then(|l| self.comp.group_of(l)).map(|g| g.name.clone()).unwrap_or_default(),
+            scope::CLIP_FX => {
+                self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone()).unwrap_or_default()
+            }
             _ => layer.map(|l| l.name.clone()).unwrap_or_default(),
         };
         let Some(chain) = self.effects_mut(scope) else { return };
@@ -2094,6 +2136,7 @@ impl App {
         self.tab_request = Some(match scope {
             scope::COMP_FX => 0,
             scope::GROUP_FX => 3,
+            scope::CLIP_FX => 2,
             _ => 1,
         });
         self.grid_dirty = true;
@@ -2101,7 +2144,7 @@ impl App {
     }
 
     pub fn effect_toggle(&mut self, scope: i32, i: usize) {
-        if let Some(fx) = self.effects_mut(scope).and_then(|c| c.get_mut(i)) {
+        if let Some(fx) = self.effect_mut(scope, i as i32) {
             fx.enabled ^= true;
         }
     }

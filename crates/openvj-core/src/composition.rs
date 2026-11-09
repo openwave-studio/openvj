@@ -213,6 +213,17 @@ pub struct Clip {
     /// Length of the video file in seconds, once known (from the file or an import).
     #[serde(default)]
     pub media_secs: Option<f64>,
+    /// The fixed Transform, applied before the clip's effects.
+    #[serde(default = "default_transform")]
+    pub transform: Effect,
+    /// Applied to the clip alone, top to bottom, before it reaches its layer.
+    #[serde(default)]
+    pub effects: Vec<Effect>,
+}
+
+/// A fresh fixed Transform for a clip or layer.
+pub fn default_transform() -> Effect {
+    Effect::new(crate::effect::TRANSFORM)
 }
 
 impl Clip {
@@ -244,6 +255,8 @@ impl Clip {
             sync_beats: None,
             duration: None,
             media_secs: None,
+            transform: default_transform(),
+            effects: Vec::new(),
         }
     }
 
@@ -434,6 +447,9 @@ pub struct Layer {
     pub transition_secs: f32,
     #[serde(default)]
     pub opacity_mod: Modulation,
+    /// The fixed Transform, applied before the layer's effects.
+    #[serde(default = "default_transform")]
+    pub transform: Effect,
     /// Applied to whatever the layer plays, top to bottom, before it is blended.
     #[serde(default)]
     pub effects: Vec<Effect>,
@@ -475,6 +491,7 @@ impl Layer {
             solo: false,
             transition_secs: 0.0,
             opacity_mod: Modulation::default(),
+            transform: default_transform(),
             effects: Vec::new(),
             group: None,
             crossfade: CrossfadeSide::None,

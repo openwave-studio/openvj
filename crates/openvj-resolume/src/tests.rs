@@ -66,7 +66,13 @@ fn imports_moved_transforms_and_drops_untouched_ones() {
     assert!(!c.effects.is_empty());
     let notes = report.notes.join("\n");
     assert!(notes.contains("composition: no openVJ equivalent for TextEffect"), "{notes}");
-    assert!(notes.contains("Clip effects aren't supported yet, so they were dropped from 5 clips"), "{notes}");
+    // Its clips' moved Transforms come along, and a second Transform added to a clip's
+    // chain stays in the chain.
+    let clips: Vec<_> = c.every_clip().collect();
+    assert_eq!(clips.len(), 5);
+    assert!(clips.iter().all(|cl| !cl.transform.is_noop()), "every clip's Transform was moved");
+    assert_eq!(clips.iter().filter(|cl| !cl.effects.is_empty()).count(), 1);
+    assert!(!notes.contains("Clip effects aren't supported"), "{notes}");
 }
 
 const SYNTHETIC: &str = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -465,4 +471,70 @@ fn numbers_repeated_effects_like_resolume() {
         effect_path_names(["Blur", "Transform", "Blur", "Hue Rotate", "Blur"].into_iter()),
         ["blur", "transform", "blur2", "huerotate", "blur3"]
     );
+}
+
+#[test]
+fn imports_clip_transforms_effects_and_their_settings() {
+    let clip = r#"<Clip name="Clip" layerIndex="0" columnIndex="0">
+  <PreloadData><VideoFile value="/media/silhouette.mov"/></PreloadData>
+  <VideoTrack name="VideoTrack">
+    <RenderPass name="RenderPassChain">
+      <RenderPass name="Transform" type="TransformEffect" baseType="Effect">
+        <Params name="Params">
+          <ParamRange name="Scale" T="DOUBLE" default="100" value="140"/>
+          <ParamRange name="Position Y" T="DOUBLE" default="0" value="-120"/>
+          <ParamRange name="Rotation Z" T="DOUBLE" default="0" value="45"/>
+        </Params>
+      </RenderPass>
+      <RenderPass name="EdgeDetection" type="DryWetEffect" baseType="DryWetEffect">
+        <Params name="Params"><Param name="Bypassed" T="BOOL" default="0" value="1"/></Params>
+        <RenderPass name="EdgeDetection" type="EdgeDetection" dwType="Effect">
+          <Params name="Params">
+            <Param name="Use Color" T="BOOL" default="0" value="1"/>
+            <ParamColor name="Color" default="4294967295" value="4294944512"/>
+            <ParamRange name="Mode" T="DOUBLE" default="1" value="0.5"/>
+          </Params>
+        </RenderPass>
+      </RenderPass>
+      <RenderPass name="Acuarela" type="WireEffect" baseType="Effect">
+        <Params name="Params">
+          <ParamRange name="Strength" T="DOUBLE" default="0.322" value="0.5"/>
+          <ParamRange name="Speed" T="DOUBLE" default="4" value="4"/>
+        </Params>
+      </RenderPass>
+    </RenderPass>
+    <PrimarySource><VideoSource name="VideoSource" type="VideoFormatReaderSource"/></PrimarySource>
+  </VideoTrack>
+</Clip>"#;
+    let layer = r#"<Layer name="Layer" layerIndex="0"><VideoTrack name="VideoTrack"><RenderPass name="RenderPassChain">
+      <RenderPass name="Transform" type="TransformEffect" baseType="Effect">
+        <Params name="Params"><ParamRange name="Rotation X" T="DOUBLE" default="0" value="30"/></Params>
+      </RenderPass>
+    </RenderPass></VideoTrack></Layer>"#;
+    let xml = composition("", layer, clip, "");
+    let Imported { composition: c, report, .. } = import_str(&xml).unwrap();
+    let real = |fx: &Effect, key: &str| {
+        let ty = fx.ty().unwrap();
+        let ch = ty.channels.iter().find(|ch| ch.key == key).unwrap();
+        ty.input(ch).real(ch.component, fx.params[key].value)
+    };
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+
+    let clip = c.clip(0, 0).unwrap();
+    assert!(close(real(&clip.transform, "scale"), 140.0));
+    assert!(close(real(&clip.transform, "position_y"), -120.0));
+    assert!(close(real(&clip.transform, "rotation_z"), 45.0));
+    let kinds: Vec<&str> = clip.effects.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(kinds, ["edges", "acuarela"]);
+    let edges = &clip.effects[0];
+    assert!(!edges.enabled, "bypass comes along");
+    assert_eq!(edges.params["use_color"].value, 1.0);
+    // 0xFFFFA500: orange.
+    assert!(close(edges.params["color.r"].value, 1.0) && close(edges.params["color.g"].value, 165.0 / 255.0));
+    assert!(close(edges.params["color.b"].value, 0.0));
+    assert!(close(real(&clip.effects[1], "strength"), 0.5));
+    assert!(report.notes.iter().any(|n| n.contains("Edges settings openVJ doesn't have were left out (Mode)")));
+
+    assert!(close(real(&c.layers[0].transform, "rotation_x"), 30.0));
+    assert!(c.layers[0].effects.is_empty(), "the layer's Transform isn't an effect in its chain");
 }
