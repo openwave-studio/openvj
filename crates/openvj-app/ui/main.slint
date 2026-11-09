@@ -1183,6 +1183,7 @@ export component MainWindow inherits Window {
     callback syphon-toggle();
     in property <int> missing-media;
     in property <string> status;
+    in property <string> app-version;
     in property <string> fps;
 
     // Audio and tempo sync.
@@ -1614,6 +1615,7 @@ export component MainWindow inherits Window {
         // Only built while open, so it costs nothing the rest of the time.
         if root.settings-open: SettingsOverlay {
             page <=> root.settings-page;
+            app-version: root.app-version;
             audio-on: root.audio-on;
             audio-devices: root.audio-devices;
             audio-device-index: root.audio-device-index;

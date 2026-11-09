@@ -1,7 +1,7 @@
 # macos-app Specification
 
 ## Purpose
-TBD - created by archiving change package-macos-app. Update Purpose after archive.
+How openVJ ships on macOS: a signed, self-contained openVJ.app with Syphon, FFmpeg, the bundled shaders and their licences inside, so a VJ can download it and play without installing anything else.
 
 ## Requirements
 

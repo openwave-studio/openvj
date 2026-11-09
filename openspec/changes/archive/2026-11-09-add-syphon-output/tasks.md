@@ -13,4 +13,4 @@
 ## 3. Docs and check
 
 - [x] 3.1 README "What works"
-- [ ] 3.2 The maintainer checks a downloaded build in Synesthesia, MadMapper or OBS: right way up, right size, Activity Monitor unchanged with no client
+- [x] 3.2 The maintainer checks a downloaded build in Synesthesia, MadMapper or OBS: right way up, right size, Activity Monitor unchanged with no client

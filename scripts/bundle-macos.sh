@@ -52,6 +52,14 @@ if [[ -d shaders ]]; then
   ditto shaders "$contents/Resources/shaders"
 fi
 
+# openVJ's licence and the third-party notices (Syphon's BSD licence, the fonts' OFL; FFmpeg's
+# licences are added below with FFmpeg itself).
+cp LICENSE "$contents/Resources/LICENSE"
+mkdir -p "$contents/Resources/ThirdParty"
+cp THIRD_PARTY_NOTICES.md "$contents/Resources/ThirdParty/"
+cp packaging/licenses/* "$contents/Resources/ThirdParty/"
+cp crates/openvj-app/ui/fonts/OFL*.txt "$contents/Resources/ThirdParty/"
+
 if [[ -f packaging/macos/AppIcon.png ]]; then
   echo "==> Making the app icon"
   iconset="$out/AppIcon.iconset"
