@@ -2,9 +2,11 @@
 
 All notable changes to openVJ are listed here. Versions follow [Semantic Versioning](https://semver.org); until 1.0, a minor version may change file formats.
 
+Each version's section is also its GitHub release notes: `scripts/release-notes.sh <version>` prints them, and the release workflow sets them, with the title "openVJ v<version>", when a release is published. Add a section here before tagging a version.
+
 ## [0.1.0] - 2026-11-09
 
-The first release of openVJ: an open-source, layer-based VJ mixer for macOS, modelled on Resolume. Download openVJ.app from the release below; FFmpeg and Syphon are built in.
+The first release of openVJ: an open-source, layer-based VJ mixer for macOS, modelled on Resolume.
 
 ### Mixing
 

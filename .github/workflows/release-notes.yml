@@ -1,0 +1,39 @@
+name: Release notes
+
+# Gives every release the title "openVJ vX.Y.Z" and that version's section of CHANGELOG.md as its
+# notes (scripts/release-notes.sh). Runs when a release is published, and on demand for an existing
+# tag (Actions → Release notes → Run workflow), which also rewrites notes edited by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.1.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      # The default branch's CHANGELOG, so notes fixed after the tag still reach the release.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set the title and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          BODY: ${{ github.event.release.body }}
+        run: |
+          # On publish, keep notes someone already wrote; a manual run always rewrites them.
+          if [[ "$GITHUB_EVENT_NAME" == release && -n "${BODY//[[:space:]]/}" ]]; then
+            echo "Release $TAG already has notes; setting only the title."
+            gh release edit "$TAG" --title "openVJ $TAG"
+            exit 0
+          fi
+          scripts/release-notes.sh "$TAG" >"$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --title "openVJ $TAG" --notes-file "$RUNNER_TEMP/notes.md"
