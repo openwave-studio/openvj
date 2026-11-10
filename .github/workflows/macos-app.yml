@@ -128,8 +128,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          # Title and notes come from CHANGELOG.md (see the release notes workflow).
+          scripts/release-notes.sh "$tag" >"$RUNNER_TEMP/notes.md"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" target/macos/*.zip --clobber
           else
-            gh release create "$tag" target/macos/*.zip --draft --generate-notes --title "openVJ $tag"
+            gh release create "$tag" target/macos/*.zip --draft --title "openVJ $tag" --notes-file "$RUNNER_TEMP/notes.md"
           fi
