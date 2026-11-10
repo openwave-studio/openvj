@@ -239,6 +239,7 @@ component Shortcut inherits PrefRow {
 export component SettingsOverlay inherits Rectangle {
     in-out property <int> page;
     in-out property <string> query;
+    in property <string> app-version;
 
     // Audio.
     in property <bool> audio-on;
@@ -285,7 +286,7 @@ export component SettingsOverlay inherits Rectangle {
         { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
         { name: "Media", words: "media folder files browser relink missing" },
         { name: "Keyboard", words: "keyboard shortcuts keys" },
-        { name: "About", words: "about version license fonts help" },
+        { name: "About", words: "about version license licence credits syphon ffmpeg ghost arcade fonts help" },
     ];
     property <bool> searching: root.query != "";
 
@@ -609,15 +610,30 @@ export component SettingsOverlay inherits Rectangle {
                                 font-size: 24px;
                             }
                             Text {
+                                text: "Version " + root.app-version;
+                                color: Theme.text;
+                                font-size: Theme.font-normal;
+                            }
+                            Text {
                                 text: "A free, open VJ app. GPL-3.0-or-later. github.com/openwave-studio/openvj";
                                 color: Theme.text-dim;
                                 font-size: Theme.font-normal;
                                 wrap: word-wrap;
                             }
+                            Rectangle { height: 8px; }
+                            PrefHeading { text: "CREDITS"; }
                             Text {
-                                text: "Styled after openDJ. Typefaces: Inter (Inter Tabular) and Zen Dots, both under the SIL Open Font License.";
+                                text: "Bundled ISF shaders from Ghost Arcade, © Risk Capital Media LLC and contributors, under the AGPL-3.0 (github.com/riskcapital/ghost-arcade).\nVideo decoding by FFmpeg (ffmpeg.org) under the LGPL-2.1-or-later, with libvpx (BSD).\nSyphon (syphon.github.io), © Tom Butterworth and Anton Marini, under the BSD licence below.\nTypefaces: Inter (Inter Tabular) and Zen Dots, both under the SIL Open Font License.\nThanks to Varda (github.com/im-knots/varda) for the projection mapping reference. Styled after openDJ.\nThe full notices and licence texts are in openVJ.app/Contents/Resources/ThirdParty and THIRD_PARTY_NOTICES.md in the repository.";
                                 color: Theme.text-dim;
                                 font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            Rectangle { height: 8px; }
+                            PrefHeading { text: "SYPHON LICENCE"; }
+                            Text {
+                                text: "Syphon Framework License:\n\nCopyright 2010 bangnoise (Tom Butterworth) & vade (Anton Marini).\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n* Redistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n\n* Redistributions in binary form must reproduce the above copyright\nnotice, this list of conditions and the following disclaimer in the\ndocumentation and/or other materials provided with the distribution.\n\n* Neither the name of the Syphon Project nor the names of its contributors\nmay be used to endorse or promote products derived from this software\nwithout specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\nANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\nWARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY\nDIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\nLOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND\nON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS\nSOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.";
+                                color: Theme.text-dim;
+                                font-size: 11px;
                                 wrap: word-wrap;
                             }
                         }

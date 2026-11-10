@@ -357,6 +357,7 @@ impl App {
 
     /// Binds the long-lived models to the window. Call once.
     pub fn attach(&self, ui: &MainWindow) {
+        ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         ui.set_layers(ModelRc::from(self.layers_model.clone()));
         ui.set_columns(ModelRc::from(self.columns_model.clone()));
         ui.set_decks(ModelRc::from(self.decks_model.clone()));

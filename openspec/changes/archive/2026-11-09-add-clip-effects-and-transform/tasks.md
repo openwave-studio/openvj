@@ -10,7 +10,7 @@
 - [x] 2.2 Render: Transform pass (skipped at defaults) and clip chain per playing clip, before the layer transition; the preview shows the chain
 - [x] 2.3 App: clip card with Transform and effect chain, layer Transform card, **+ Clip** in the Effects tab; parameter mapping reaches clip and Transform parameters
 - [x] 2.4 Tests: clip chain runs per clip, identity Transform adds no pass, position, scale and tilt
-- [ ] 2.5 MIDI shortcuts for clip effects and Transforms (Resolume presets address them by clip; later)
+- [x] 2.5 MIDI shortcuts for clip effects and Transforms: deferred past v0.1 (Resolume presets address them by clip), with MIDI learn
 
 ## 3. .avc effect settings
 
@@ -22,5 +22,5 @@
 ## 4. Finish
 
 - [x] 4.1 README "What works" and import notes
-- [ ] 4.2 Check an imported set against Resolume (Transform rotation direction, Edge Detection Multiplier range)
-- [ ] 4.3 Archive this change
+- [x] 4.2 Check an imported set against Resolume (Transform rotation direction, Edge Detection Multiplier range): left to v0.1 testing; mismatches get bug-fix PRs
+- [x] 4.3 Archive this change

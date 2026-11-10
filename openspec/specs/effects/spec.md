@@ -7,11 +7,16 @@ GPU effects stack in chains on layers, groups and the composition, like Resolume
 ## Requirements
 
 ### Requirement: Effect chains
-Every layer, group and the composition SHALL have an effect chain. Each effect SHALL have Bypass, reorder, remove and a dry/wet mix.
+Every clip, layer, group and the composition SHALL have an effect chain. Each effect SHALL have Bypass, reorder, remove and a dry/wet mix. A clip's chain SHALL run before the clip reaches its layer, and travel with the clip when it is copied or moved.
 
 #### Scenario: Reorder
 - **WHEN** the VJ moves Blur above Edges in a layer's chain
 - **THEN** the layer is blurred before edge detection
+
+#### Scenario: Clip effect
+- **GIVEN** a layer whose clip A has Mirror and clip B has no effects
+- **WHEN** the VJ launches A and then B
+- **THEN** A plays mirrored and B plays unprocessed, and during the transition each is processed on its own before the crossfade
 
 ### Requirement: Built-in effects
 openVJ SHALL ship Color, Invert, Transform, Mirror, Kaleido, Pixelate, RGB Split, Wave, Posterize, Blur, Edges and Acuarela, added from the browser's Effects tab.
@@ -92,3 +97,21 @@ A folder effect's id SHALL be its `OPENVJ.ID` header key, or else its file name 
 #### Scenario: Missing on another machine
 - **WHEN** a composition that uses a folder effect opens on a machine without that file
 - **THEN** the effect keeps its saved settings and passes video through, and starts working once the file is added
+
+### Requirement: Ghost Arcade ISF names
+openVJ SHALL accept ISF files written for Ghost Arcade: its audio values (`audioLevel`, `audioBass`, `audioMid`, `audioHigh`, `audioBeat`, `audioBeatPhase`, `audioBPM`, `audioSpectralCentroid`), its `sampleFFT` and `sampleWaveform` functions, `renderSize`, and files that redeclare built-in uniforms or set a precision.
+
+#### Scenario: Ghost Arcade effect
+- **WHEN** an ISF filter that reads `audioBass` is added to a layer
+- **THEN** it compiles and follows the bass band of the audio input
+
+### Requirement: Clip and layer Transform
+Every clip and layer SHALL have a fixed Transform at the top of its card with Position X/Y in pixels, Scale and Scale W/H in %, Rotation X/Y/Z in degrees and Anchor X/Y, applied before that clip's or layer's effects. A Transform left at its defaults SHALL cost no render pass.
+
+#### Scenario: Zoomed clip
+- **WHEN** the VJ sets a clip's Scale to 150%
+- **THEN** that clip plays zoomed in while other clips on the layer stay full-frame
+
+#### Scenario: Tilt
+- **WHEN** the VJ sets a layer's Rotation X to 30°
+- **THEN** the layer tilts back in perspective

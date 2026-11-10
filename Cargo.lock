@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-app"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "midir",
@@ -3878,7 +3878,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-audio"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3887,7 +3887,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3895,7 +3895,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-media"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3907,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-render"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "naga",
@@ -3918,7 +3918,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-resolume"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 dependencies = [
  "openvj-core",
  "roxmltree",
