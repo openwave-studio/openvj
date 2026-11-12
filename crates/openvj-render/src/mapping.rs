@@ -12,6 +12,12 @@ use crate::{LDR, Target};
 
 /// Mesh resolution of a slice; enough for smooth bezier warps and steep corner pins.
 const MESH_CELLS: u32 = 32;
+
+/// Mesh cells along a side with `grid_cells` warp grid cells: at least [`MESH_CELLS`], and a
+/// whole number per grid cell, so the bends of a linear grid fall on mesh edges.
+fn mesh_cells(grid_cells: u32) -> u32 {
+    grid_cells * MESH_CELLS.div_ceil(grid_cells)
+}
 const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
 #[repr(C)]
@@ -238,7 +244,8 @@ impl Mapper {
                 .slices()
                 .filter(|s| s.enabled)
                 .map(|slice| {
-                    let mesh = slice.mesh(MESH_CELLS, MESH_CELLS);
+                    let cells = |points: u32| mesh_cells(points.saturating_sub(1).max(1));
+                    let mesh = slice.mesh(cells(slice.warp.cols), cells(slice.warp.rows));
                     let vertices: Vec<Vertex> =
                         mesh.vertices.iter().map(|v| Vertex { pos: v.position, src: v.uv }).collect();
                     let u = uniforms(screen, slice, &target, comp_size, false);

@@ -2,11 +2,11 @@
 
 use std::rc::Rc;
 
-use openvj_core::{OutputSetup, ScreenLayer};
+use openvj_core::{OutputSetup, PointMode, ScreenLayer};
 use slint::{ComponentHandle, Image, ModelRc, VecModel};
 
 use super::App;
-use crate::mapping::{CORNER_NAMES, Stage, path_commands};
+use crate::mapping::{CORNER_NAMES, Stage, grid_handles, grid_lines, path_commands, polyline_commands};
 use crate::{MapCorner, MapHandle, MapLayer, MappingWindow};
 
 /// How close to a corner a press grabs it, as a share of the canvas's longer side.
@@ -117,6 +117,15 @@ impl App {
         self.edit_mapping(true, |e, s| e.reset(s));
     }
 
+    pub fn map_grid_size(&mut self, cols: i32, rows: i32) {
+        self.edit_mapping(true, |e, s| e.set_grid(s, cols.max(0) as u32, rows.max(0) as u32));
+    }
+
+    pub fn map_point_mode(&mut self, bezier: bool) {
+        let mode = if bezier { PointMode::Bezier } else { PointMode::Linear };
+        self.edit_mapping(true, |e, s| e.set_point_mode(s, mode));
+    }
+
     pub fn map_add_slice(&mut self) {
         self.edit_mapping(true, |e, s| e.add_slice(s));
     }
@@ -180,6 +189,7 @@ impl App {
         let mut corners = Vec::new();
         let mut selected_name = String::new();
         let mut selected_mask: Option<bool> = None;
+        let mut grid: Option<(u32, u32, bool, String)> = None;
         for (i, layer) in screen.map(|s| s.layers.as_slice()).unwrap_or_default().iter().enumerate() {
             let selected = ed.selected == Some(i);
             let (name, is_mask, enabled) = match layer {
@@ -192,19 +202,51 @@ impl App {
                 continue;
             }
             selected_name = name.clone();
-            if let ScreenLayer::Mask(m) = layer {
-                selected_mask = Some(m.invert);
-            }
+            let warp = match layer {
+                ScreenLayer::Mask(m) => {
+                    selected_mask = Some(m.invert);
+                    None
+                }
+                ScreenLayer::Slice(s) if stage == Stage::Output => {
+                    let lines = polyline_commands(&grid_lines(&s.warp));
+                    grid = Some((s.warp.cols, s.warp.rows, s.warp.mode == PointMode::Bezier, lines));
+                    Some(&s.warp)
+                }
+                ScreenLayer::Slice(_) => None,
+            };
+            let grid_index: Vec<usize> = warp.map(|w| grid_handles(w).collect()).unwrap_or_default();
             for (c, p) in ed.points(layer).iter().enumerate() {
-                handles.push(MapHandle { x: p[0], y: p[1], selected: c == ed.corner });
-                let label = if is_mask { format!("Point {}", c + 1) } else { CORNER_NAMES[c % 4].to_string() };
+                let is_grid = !is_mask && c >= 4;
+                handles.push(MapHandle { x: p[0], y: p[1], selected: c == ed.corner, grid: is_grid });
+                // The table lists the corners (or mask points), plus the grid point being edited.
+                if is_grid && c != ed.corner {
+                    continue;
+                }
+                let label = match (is_mask, warp) {
+                    (true, _) => format!("Point {}", c + 1),
+                    (false, Some(w)) if is_grid => {
+                        let g = grid_index.get(c - 4).copied().unwrap_or(0);
+                        format!("Grid {},{}", g % w.cols as usize + 1, g / w.cols as usize + 1)
+                    }
+                    _ => CORNER_NAMES[c % 4].to_string(),
+                };
                 corners.push(MapCorner {
                     name: label.into(),
+                    index: c as i32,
                     x: format!("{:.0}", p[0]).into(),
                     y: format!("{:.0}", p[1]).into(),
                     selected: c == ed.corner,
                 });
             }
+        }
+        win.set_has_grid(grid.is_some());
+        if let Some((cols, rows, bezier, lines)) = grid {
+            win.set_grid_cols(cols as i32);
+            win.set_grid_rows(rows as i32);
+            win.set_grid_bezier(bezier);
+            win.set_grid_lines(lines.into());
+        } else {
+            win.set_grid_lines("".into());
         }
         win.set_selected_is_mask(selected_mask.is_some());
         win.set_selected_invert(selected_mask.unwrap_or(false));
@@ -217,7 +259,7 @@ impl App {
             match stage {
                 Stage::Input => "Drag a slice to move what it takes from the composition, or a corner to reshape it",
                 Stage::Output => {
-                    "Drag a corner to pin it · arrows nudge 1 px, Shift+arrows 10 px · Tab picks the next corner"
+                    "Drag a corner to pin it, or a small grid point to bend the slice · arrows nudge 1 px, Shift+arrows 10 px · Tab picks the next point"
                 }
             }
             .into(),

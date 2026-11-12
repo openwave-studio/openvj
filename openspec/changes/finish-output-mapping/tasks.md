@@ -1,9 +1,9 @@
 ## 1. Edit grid and bezier warps
 
-- [ ] 1.1 Model helpers: resize a warp grid keeping its shape; linear ↔ bezier switch
-- [ ] 1.2 Editor: draw grid points (and bezier handles), drag and nudge them; corners stay the corner pin
-- [ ] 1.3 Grid size and point mode controls in Output transformation
-- [ ] 1.4 Tests: resize keeps an identity warp an identity; imported bezier warp saves back unchanged
+- [x] 1.1 Model helpers: resize a warp grid keeping its shape; linear ↔ bezier switch
+- [x] 1.2 Editor: draw grid points (and bezier handles), drag and nudge them; corners stay the corner pin
+- [x] 1.3 Grid size and point mode controls in Output transformation
+- [x] 1.4 Tests: resize keeps the shape; grid points follow the corner pin; drag, nudge and type grid points; reset keeps size and mode
 
 ## 2. Outlines on the output
 

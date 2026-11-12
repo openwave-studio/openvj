@@ -342,6 +342,8 @@ fn main() -> Result<()> {
         map_on!(on_next_corner, |a| a.map_next_corner());
         map_on!(on_corner_edited, |a, c: i32, axis: i32, t: slint::SharedString| a.map_corner_edited(c, axis, &t));
         map_on!(on_reset_selected, |a| a.map_reset());
+        map_on!(on_grid_size, |a, c: i32, r: i32| a.map_grid_size(c, r));
+        map_on!(on_point_mode, |a, b: bool| a.map_point_mode(b));
         map_on!(on_add_slice, |a| a.map_add_slice());
         map_on!(on_remove_selected, |a| a.map_remove());
         map_on!(on_add_mask, |a| a.map_add_mask());

@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use openvj_core::{Contour, Mask, OutputSetup, Point, Quad, ScreenLayer, Slice, rect_quad};
+use openvj_core::{Contour, Mask, OutputSetup, Point, PointMode, ScreenLayer, Slice, Warp, rect_quad};
 
 #[derive(Default)]
 pub struct Mapping {
@@ -137,32 +137,74 @@ pub struct Editor {
 pub const CORNER_NAMES: [&str; 4] = ["Top left", "Top right", "Bottom right", "Bottom left"];
 
 impl Editor {
-    /// The quad being edited for a slice at this stage.
-    pub fn quad(&self, slice: &Slice) -> Quad {
-        match self.stage {
-            Stage::Input => slice.input,
-            Stage::Output => slice.warp.dst,
-        }
-    }
-
-    /// The points the selected layer shows as handles at this stage: a slice's four corners, or a
-    /// screen mask's outline points (output stage only).
+    /// The points the selected layer shows as handles at this stage: a slice's four corners
+    /// (then, on the output stage, its warp grid points), or a screen mask's outline points
+    /// (output stage only).
     pub fn points(&self, layer: &ScreenLayer) -> Vec<Point> {
         match (layer, self.stage) {
-            (ScreenLayer::Slice(s), _) => self.quad(s).to_vec(),
+            (ScreenLayer::Slice(s), Stage::Input) => s.input.to_vec(),
+            (ScreenLayer::Slice(s), Stage::Output) => {
+                let mut pts = s.warp.dst.to_vec();
+                pts.extend(grid_handles(&s.warp).filter_map(|g| s.warp.screen_point(g)));
+                pts
+            }
             (ScreenLayer::Mask(m), Stage::Output) => m.contours.first().map(|c| c.points.clone()).unwrap_or_default(),
             (ScreenLayer::Mask(_), Stage::Input) => Vec::new(),
         }
     }
 
-    fn points_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut [Point]> {
-        let i = self.selected?;
-        match (setup.screens.first_mut()?.layers.get_mut(i)?, self.stage) {
-            (ScreenLayer::Slice(s), Stage::Input) => Some(&mut s.input[..]),
-            (ScreenLayer::Slice(s), Stage::Output) => Some(&mut s.warp.dst[..]),
-            (ScreenLayer::Mask(m), Stage::Output) => m.contours.first_mut().map(|c| &mut c.points[..]),
-            (ScreenLayer::Mask(_), Stage::Input) => None,
+    /// The selected layer of screen 1.
+    fn layer_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut ScreenLayer> {
+        setup.screens.first_mut()?.layers.get_mut(self.selected?)
+    }
+
+    /// The selected slice of screen 1, if a slice is selected.
+    pub fn slice_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut Slice> {
+        match self.layer_mut(setup)? {
+            ScreenLayer::Slice(s) => Some(s),
+            ScreenLayer::Mask(_) => None,
         }
+    }
+
+    /// Moves point `i` of the selected layer (numbered as [`Editor::points`] lists them) to `p`.
+    fn set_point(&self, setup: &mut OutputSetup, i: usize, p: Point) -> bool {
+        let stage = self.stage;
+        match (self.layer_mut(setup), stage) {
+            (Some(ScreenLayer::Slice(s)), Stage::Input) => s.input.get_mut(i).map(|q| *q = p).is_some(),
+            (Some(ScreenLayer::Slice(s)), Stage::Output) if i < 4 => {
+                s.warp.dst[i] = p;
+                true
+            }
+            (Some(ScreenLayer::Slice(s)), Stage::Output) => {
+                let g = grid_handles(&s.warp).nth(i - 4);
+                g.is_some_and(|g| s.warp.set_screen_point(g, p))
+            }
+            (Some(ScreenLayer::Mask(m)), Stage::Output) => {
+                m.contours.first_mut().and_then(|c| c.points.get_mut(i)).map(|q| *q = p).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves the whole selected layer by `d`: on the output stage a slice moves its corner pin,
+    /// and its grid moves with it.
+    fn shift(&self, setup: &mut OutputSetup, d: Point) -> bool {
+        let stage = self.stage;
+        let quad = |q: &mut [Point]| q.iter_mut().for_each(|q| *q = [q[0] + d[0], q[1] + d[1]]);
+        match (self.layer_mut(setup), stage) {
+            (Some(ScreenLayer::Slice(s)), Stage::Input) => quad(&mut s.input),
+            (Some(ScreenLayer::Slice(s)), Stage::Output) => quad(&mut s.warp.dst),
+            (Some(ScreenLayer::Mask(m)), Stage::Output) => match m.contours.first_mut() {
+                Some(c) => quad(&mut c.points),
+                None => return false,
+            },
+            _ => return false,
+        }
+        true
+    }
+
+    fn selected_points(&self, setup: &OutputSetup) -> Vec<Point> {
+        self.selected.and_then(|i| setup.screens.first()?.layers.get(i)).map(|l| self.points(l)).unwrap_or_default()
     }
 
     /// The outline of a layer on the canvas at this stage (empty for masks on the input stage).
@@ -196,13 +238,13 @@ impl Editor {
     /// Returns whether anything changed.
     pub fn press(&mut self, setup: &mut OutputSetup, p: Point, reach: f32) -> bool {
         self.drag = None;
-        if let Some(points) = self.points_mut(setup) {
-            let nearest = (0..points.len()).min_by(|&a, &b| dist(points[a], p).total_cmp(&dist(points[b], p)));
-            if let Some(i) = nearest.filter(|&i| dist(points[i], p) <= reach) {
-                self.corner = i;
-                self.drag = Some(Drag::Corner(i));
-                return true;
-            }
+        let points = self.selected_points(setup);
+        // Corners come first in the list, so they win a tie with a grid point under them.
+        let nearest = (0..points.len()).min_by(|&a, &b| dist(points[a], p).total_cmp(&dist(points[b], p)));
+        if let Some(i) = nearest.filter(|&i| dist(points[i], p) <= reach) {
+            self.corner = i;
+            self.drag = Some(Drag::Corner(i));
+            return true;
         }
         let Some(screen) = setup.screens.first() else { return false };
         let enabled = |l: &ScreenLayer| match l {
@@ -227,20 +269,13 @@ impl Editor {
     /// The pointer moved to `p` while pressed.
     pub fn drag_to(&mut self, setup: &mut OutputSetup, p: Point) -> bool {
         let Some(drag) = self.drag else { return false };
-        let Some(points) = self.points_mut(setup) else { return false };
         match drag {
-            Drag::Corner(i) => {
-                if let Some(q) = points.get_mut(i) {
-                    *q = p;
-                }
-            }
+            Drag::Corner(i) => self.set_point(setup, i, p),
             Drag::Move { last } => {
-                let d = [p[0] - last[0], p[1] - last[1]];
-                points.iter_mut().for_each(|q| *q = [q[0] + d[0], q[1] + d[1]]);
                 self.drag = Some(Drag::Move { last: p });
+                self.shift(setup, [p[0] - last[0], p[1] - last[1]])
             }
         }
-        true
     }
 
     /// Ends a drag. Returns whether the setup changed and should be saved.
@@ -250,27 +285,24 @@ impl Editor {
 
     /// Moves the current point by `d` pixels.
     pub fn nudge(&mut self, setup: &mut OutputSetup, d: Point) -> bool {
-        let corner = self.corner;
-        let Some(q) = self.points_mut(setup).and_then(|p| p.get_mut(corner)) else { return false };
-        *q = [q[0] + d[0], q[1] + d[1]];
-        true
+        let Some(q) = self.selected_points(setup).get(self.corner).copied() else { return false };
+        self.set_point(setup, self.corner, [q[0] + d[0], q[1] + d[1]])
     }
 
     /// Types one coordinate (`axis` 0 = x, 1 = y) of a point.
     pub fn set_corner(&mut self, setup: &mut OutputSetup, corner: usize, axis: usize, value: f32) -> bool {
-        let Some(q) = self.points_mut(setup).and_then(|p| p.get_mut(corner)) else { return false };
+        let Some(mut q) = self.selected_points(setup).get(corner).copied() else { return false };
         q[axis.min(1)] = value;
         self.corner = corner;
-        true
+        self.set_point(setup, corner, q)
     }
 
     pub fn next_corner(&mut self, setup: &OutputSetup) {
-        let n =
-            self.selected.and_then(|i| setup.screens.first()?.layers.get(i)).map_or(4, |l| self.points(l).len()).max(1);
+        let n = self.selected_points(setup).len().max(1);
         self.corner = (self.corner + 1) % n;
     }
 
-    /// Output: back to the un-pinned corners. Input: the whole composition.
+    /// Output: back to the un-pinned corners and a flat grid. Input: the whole composition.
     pub fn reset(&mut self, setup: &mut OutputSetup) -> bool {
         let [w, h] = setup.composition_size;
         let stage = self.stage;
@@ -279,10 +311,30 @@ impl Editor {
             return false;
         };
         match stage {
-            Stage::Output => slice.warp.dst = slice.warp.src,
+            Stage::Output => slice.warp.reset(),
             Stage::Input => slice.input = rect_quad(0.0, 0.0, w as f32, h as f32),
         }
         true
+    }
+
+    /// Sets the selected slice's warp grid to `cols`×`rows` points, keeping its shape.
+    pub fn set_grid(&mut self, setup: &mut OutputSetup, cols: u32, rows: u32) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        let before = (slice.warp.cols, slice.warp.rows);
+        slice.warp.resize(cols, rows);
+        let changed = before != (slice.warp.cols, slice.warp.rows);
+        if changed && self.corner >= 4 {
+            self.corner = 0; // The grid point it pointed at may be gone.
+        }
+        changed
+    }
+
+    /// Switches the selected slice's grid between straight lines and a bezier net.
+    pub fn set_point_mode(&mut self, setup: &mut OutputSetup, mode: PointMode) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        let changed = slice.warp.mode != mode;
+        slice.warp.mode = mode;
+        changed
     }
 
     fn next_id(screen: &openvj_core::Screen) -> u64 {
@@ -415,6 +467,42 @@ impl Editor {
     }
 }
 
+/// The warp grid points the editor shows as handles: all but the four corners, which the corner
+/// pin moves. Handle `4 + k` is the `k`th of these.
+pub fn grid_handles(warp: &Warp) -> impl Iterator<Item = usize> + '_ {
+    (0..warp.points.len()).filter(|&i| !warp.is_corner(i))
+}
+
+/// The inner lines of a slice's warp grid on the screen, as open polylines: one per grid row and
+/// column between the edges.
+pub fn grid_lines(warp: &Warp) -> Vec<Vec<Point>> {
+    const N: u32 = 24;
+    let (cols, rows) = (warp.cols.max(2), warp.rows.max(2));
+    let t = |i: u32| i as f32 / N as f32;
+    let mut lines = Vec::new();
+    for r in 1..rows - 1 {
+        let v = r as f32 / (rows - 1) as f32;
+        lines.push((0..=N).map(|i| warp.map(t(i), v)).collect());
+    }
+    for c in 1..cols - 1 {
+        let u = c as f32 / (cols - 1) as f32;
+        lines.push((0..=N).map(|i| warp.map(u, t(i))).collect());
+    }
+    lines
+}
+
+/// SVG path commands for open polylines.
+pub fn polyline_commands(lines: &[Vec<Point>]) -> String {
+    let mut s = String::new();
+    for line in lines {
+        for (i, p) in line.iter().enumerate() {
+            s.push_str(if i == 0 { " M " } else { " L " });
+            s.push_str(&format!("{:.1} {:.1}", p[0], p[1]));
+        }
+    }
+    s.trim_start().to_owned()
+}
+
 fn dist(a: Point, b: Point) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
@@ -449,6 +537,7 @@ pub fn path_commands(poly: &[Point]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openvj_core::Quad;
 
     fn setup() -> OutputSetup {
         OutputSetup::passthrough(1920, 1080)
@@ -556,6 +645,43 @@ mod tests {
         let ScreenLayer::Mask(m) = &s.screens[0].layers[0] else { panic!("mask moved first") };
         assert_eq!(m.name, "Door");
         assert!(!e.move_selected(&mut s, -1));
+    }
+
+    #[test]
+    fn bend_a_slice_with_its_grid() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(e.set_grid(&mut s, 3, 3));
+        assert!(!e.set_grid(&mut s, 3, 3), "same size: nothing to do");
+        let slice = |s: &OutputSetup| match &s.screens[0].layers[0] {
+            ScreenLayer::Slice(sl) => sl.clone(),
+            _ => unreachable!(),
+        };
+        // 4 corners + 5 grid points (a 3×3 grid without its corners).
+        let pts = e.points(&s.screens[0].layers[0]);
+        assert_eq!(pts.len(), 9);
+        // Grab the middle grid point and pull it right: the middle of the slice follows.
+        assert!(e.press(&mut s, [960.0, 540.0], 20.0));
+        assert_eq!(e.corner, 4 + 2, "middle point of the grid");
+        e.drag_to(&mut s, [1060.0, 540.0]);
+        assert!(e.release());
+        let mid = slice(&s).warp.map(0.5, 0.5);
+        assert!((mid[0] - 1060.0).abs() < 0.1, "{mid:?}");
+        // Nudging and typing work on grid points too.
+        e.nudge(&mut s, [0.0, 10.0]);
+        e.set_corner(&mut s, 6, 0, 1000.0);
+        let mid = slice(&s).warp.map(0.5, 0.5);
+        assert!((mid[0] - 1000.0).abs() < 0.1 && (mid[1] - 550.0).abs() < 0.1, "{mid:?}");
+        // Moving the corner pin carries the grid with it.
+        e.press(&mut s, [5.0, 5.0], 20.0);
+        e.drag_to(&mut s, [100.0, 0.0]);
+        e.release();
+        assert!(slice(&s).warp.map(0.5, 0.5)[0] > 1000.0);
+        // Bezier mode keeps the points; reset flattens the grid and keeps its size and mode.
+        assert!(e.set_point_mode(&mut s, PointMode::Bezier));
+        e.reset(&mut s);
+        let w = slice(&s).warp;
+        assert!(w.is_identity() && w.cols == 3 && w.mode == PointMode::Bezier);
     }
 
     #[test]

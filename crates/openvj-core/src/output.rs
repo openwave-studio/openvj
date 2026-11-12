@@ -433,6 +433,57 @@ impl Warp {
         Self { src: rect, dst: rect, cols, rows, points, mode: PointMode::Linear }
     }
 
+    /// The smallest and largest grid size the editor offers, per side.
+    pub const GRID_MIN: u32 = 2;
+    pub const GRID_MAX: u32 = 32;
+
+    /// Changes the grid to `cols`×`rows` points, placing the new points on the surface the old
+    /// grid describes, so the slice keeps its shape (exactly for linear grids, closely for bezier
+    /// ones). The corner pin is untouched.
+    pub fn resize(&mut self, cols: u32, rows: u32) {
+        let (cols, rows) = (cols.clamp(Self::GRID_MIN, Self::GRID_MAX), rows.clamp(Self::GRID_MIN, Self::GRID_MAX));
+        if (cols, rows) == (self.cols, self.rows) && self.points.len() == (cols * rows) as usize {
+            return;
+        }
+        let mut points = Vec::with_capacity((cols * rows) as usize);
+        for r in 0..rows {
+            for c in 0..cols {
+                points.push(self.grid_point(c as f32 / (cols - 1) as f32, r as f32 / (rows - 1) as f32));
+            }
+        }
+        (self.cols, self.rows, self.points) = (cols, rows, points);
+    }
+
+    /// Back to a flat grid of the same size and mode, with the corners un-pinned.
+    pub fn reset(&mut self) {
+        let mode = self.mode;
+        *self = Self { mode, ..Self::identity(self.src, self.cols, self.rows) };
+    }
+
+    /// Where grid point `i` (row by row) shows on the screen, after the corner pin.
+    pub fn screen_point(&self, i: usize) -> Option<Point> {
+        let p = *self.points.get(i)?;
+        Some(Homography::from_quads(&self.src, &self.dst).map_or(p, |h| h.apply(p)))
+    }
+
+    /// Moves grid point `i` so it shows at `p` on the screen.
+    pub fn set_screen_point(&mut self, i: usize, p: Point) -> bool {
+        let q = Homography::from_quads(&self.dst, &self.src).map_or(p, |h| h.apply(p));
+        match self.points.get_mut(i) {
+            Some(slot) => {
+                *slot = q;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether grid point `i` is one of the four corners, which the corner pin moves instead.
+    pub fn is_corner(&self, i: usize) -> bool {
+        let (c, r) = (i % self.cols as usize, i / self.cols as usize);
+        (c == 0 || c + 1 == self.cols as usize) && (r == 0 || r + 1 == self.rows as usize)
+    }
+
     /// Whether the warp leaves the grid and corners where `identity` would put them.
     pub fn is_identity(&self) -> bool {
         let id = Self::identity(self.src, self.cols, self.rows);
@@ -710,6 +761,40 @@ fn catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point, t: f32) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_keeps_the_shape() {
+        let rect = rect_quad(0.0, 0.0, 1920.0, 1080.0);
+        let mut w = Warp::identity(rect, 4, 4);
+        w.resize(7, 3);
+        assert_eq!((w.cols, w.rows, w.points.len()), (7, 3, 21));
+        assert!(w.is_identity(), "a flat grid stays flat");
+        // Bend the middle column, then refine: the bent point stays on the surface.
+        let mut w = Warp::identity(rect, 3, 3);
+        w.points[4] = [1060.0, 540.0];
+        let before = w.grid_point(0.5, 0.5);
+        w.resize(5, 5);
+        let after = w.points[12];
+        assert!((after[0] - before[0]).abs() < 0.01 && (after[1] - before[1]).abs() < 0.01);
+        w.resize(1, 99);
+        assert_eq!((w.cols, w.rows), (Warp::GRID_MIN, Warp::GRID_MAX));
+    }
+
+    #[test]
+    fn grid_points_follow_the_corner_pin() {
+        let rect = rect_quad(0.0, 0.0, 1000.0, 1000.0);
+        let mut w = Warp::identity(rect, 3, 3);
+        w.dst = rect_quad(100.0, 100.0, 600.0, 600.0);
+        let mid = w.screen_point(4).unwrap();
+        assert!((mid[0] - 350.0).abs() < 0.01 && (mid[1] - 350.0).abs() < 0.01);
+        assert!(w.set_screen_point(4, [400.0, 350.0]));
+        assert!((w.points[4][0] - 600.0).abs() < 0.01, "stored before the pin");
+        let p = w.map(0.5, 0.5);
+        assert!((p[0] - 400.0).abs() < 0.01 && (p[1] - 350.0).abs() < 0.01);
+        assert!(w.is_corner(0) && w.is_corner(2) && w.is_corner(8) && !w.is_corner(1) && !w.is_corner(4));
+        w.reset();
+        assert!(w.is_identity());
+    }
 
     #[test]
     fn mask_images_match_shows() {
