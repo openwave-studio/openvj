@@ -39,6 +39,18 @@ Where the input areas of two enabled slices with Soft Edge on overlap, each SHAL
 - **WHEN** Soft Edge is off on a slice
 - **THEN** it draws hard edges even where it overlaps another slice
 
+### Requirement: Outlines on the output
+While the mapping window is open, an Outlines button SHALL draw every slice's outline and the selected point on the output windows, as Resolume does while editing Advanced Output. Closing the mapping window SHALL hide them.
+
+#### Scenario: Line up on the wall
+- **GIVEN** the mapping window is open with Outlines on
+- **WHEN** the VJ drags a warp point
+- **THEN** the projector shows the slice outlines and the point moving, on top of the content
+
+#### Scenario: Show starts
+- **WHEN** the VJ closes the mapping window
+- **THEN** no outlines show on the output
+
 ### Requirement: Colour controls
 The mapping window SHALL show Opacity, Brightness, Contrast and Red, Green and Blue for the selected screen, and Brightness, Contrast and Red, Green and Blue for the selected slice, as in Resolume's screen and slice settings, changing the output live.
 

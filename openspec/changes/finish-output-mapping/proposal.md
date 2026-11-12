@@ -9,6 +9,7 @@ openVJ imports Resolume Advanced Output better than any free tool, but it can on
 - **One output window per screen.** Each enabled screen opens its own output window and can be sent fullscreen to a display picked in the mapping window, like Resolume's per-screen Output Device. Imported display screens go to the display with the same name when it is connected. The mapping window gets a screen list to add, rename, remove and pick screens.
 - **Edit grid and bezier warps.** In Output transformation the VJ sets a slice's grid size and switches points between linear and bezier, then drags points and bezier handles, as with Resolume's warp points. Edits save back in the same form Resolume files use.
 - **Draw soft edges.** Slices with Soft Edge on fade where their input areas overlap, as in Resolume Arena, using the setup's Power, Luminance, Gamma and per-channel gamma. Luminance and the gammas start importing; black level compensation stays out.
+- **Outlines on the projector while editing.** While the mapping window is open, a button shows slice outlines and the selected point on the output, as Resolume does.
 - **Edit colour.** Screen and slice Brightness, Contrast and Red/Green/Blue (already imported and drawn) become editable in the mapping window, plus screen Opacity.
 
 Out of scope: slice input from a single layer, mask feather, the Output Guide image, black level compensation, DMX screens, Syphon/NDI output per screen, camera calibration.
@@ -40,8 +41,12 @@ Builds on the merged mapping screen (renderer per screen target already exists).
 - PR #7 (audio reactivity) touches `app.rs`, `openvj-render/src/lib.rs` and README.md. Merge #7 first; this change rebases on it.
 - add-parameter-animation (not started) touches `app.rs`; whichever lands second rebases. No spec overlap.
 
+## Decisions (maintainer, 2026-11-12)
+
+- The maintainer runs one projector today and may test two later, so build order is: warp editing, projector outlines, colour, output window per screen, then soft edge.
+- A screen whose display isn't connected opens as a normal window the VJ can drag to a projector.
+- Slice outlines and the selected point show on the projector while editing, only while the mapping window is open, toggled by a button.
+
 ## Open questions
 
-- How many projectors does the maintainer run, and are they blended or mapping separate surfaces? Decides whether soft edge (group 3) or warp editing (group 2) is built first after output windows.
-- When the display an imported screen names isn't connected, should its window stay hidden (Resolume's behaviour) or open as a normal window? Proposal: open a normal window so the VJ can drag it to a projector.
-- Should the projector show slice outlines and the selected point while editing, as Resolume does? (Asked 2026-11-09, still open.) Proposal: yes, only while the mapping window is open, toggled by a button.
+None.
