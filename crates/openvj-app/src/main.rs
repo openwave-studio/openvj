@@ -354,6 +354,8 @@ fn main() -> Result<()> {
         map_on!(on_layer_toggled, |a, i: i32| a.map_layer_toggled(i));
         map_on!(on_toggle_test_card, |a| a.toggle_test_card());
         map_on!(on_toggle_outlines, |a| a.map_toggle_outlines());
+        map_on!(on_toggle_soft_edge, |a| a.map_toggle_soft_edge());
+        map_on!(on_soft_edge_changed, |a, c: i32, v: f32| a.map_soft_edge(c, v));
         map_on!(on_screen_picked, |a, i: i32| a.map_screen_picked(i));
         map_on!(on_screen_toggled, |a, i: i32| a.map_screen_toggled(i));
         map_on!(on_add_screen, |a| a.map_add_screen());

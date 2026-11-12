@@ -167,6 +167,30 @@ pub const CORNER_NAMES: [&str; 4] = ["Top left", "Top right", "Bottom right", "B
 /// The colour controls of a slice, then Opacity for a screen, as in Resolume.
 pub const COLOR_NAMES: [&str; 6] = ["Brightness", "Contrast", "Red", "Green", "Blue", "Opacity"];
 
+/// The setup's soft-edge controls, as in Resolume's Soft Edge settings: name and range.
+pub const SOFT_EDGE: [(&str, f32, f32); 6] = [
+    ("Power", 0.1, 7.0),
+    ("Luminance", 0.0, 1.0),
+    ("Gamma", 0.0, 1.0),
+    ("Gamma red", 1.0, 3.0),
+    ("Gamma green", 1.0, 3.0),
+    ("Gamma blue", 1.0, 3.0),
+];
+
+fn soft_edge_values(setup: &OutputSetup) -> [f32; 6] {
+    let [r, g, b] = setup.soft_edge_gamma_rgb;
+    [setup.soft_edge_power, setup.soft_edge_luminance, setup.soft_edge_gamma, r, g, b]
+}
+
+/// The soft-edge controls as bars: (name, bar position 0 to 1, text).
+pub fn soft_edge_bars(setup: &OutputSetup) -> Vec<(&'static str, f32, String)> {
+    SOFT_EDGE
+        .iter()
+        .zip(soft_edge_values(setup))
+        .map(|(&(name, lo, hi), v)| (name, ((v - lo) / (hi - lo)).clamp(0.0, 1.0), format!("{v:.2}")))
+        .collect()
+}
+
 /// Colour controls as bars: (name, bar position 0 to 1, text). `opacity` adds Opacity.
 pub fn color_bars(trim: &openvj_core::ColorTrim, opacity: Option<f32>) -> Vec<(&'static str, f32, String)> {
     let offset = |v: f32| ((v + 1.0) / 2.0, format!("{:+.0}%", v * 100.0));
@@ -417,6 +441,30 @@ impl Editor {
             _ => return false,
         };
         *field = bar * 2.0 - 1.0;
+        true
+    }
+
+    /// Turns Soft Edge on or off for the selected slice.
+    pub fn toggle_soft_edge(&mut self, setup: &mut OutputSetup) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        slice.soft_edge = !slice.soft_edge;
+        true
+    }
+
+    /// Sets one of the setup's soft-edge controls ([`SOFT_EDGE`] order) from its bar, 0 to 1.
+    pub fn set_soft_edge(&mut self, setup: &mut OutputSetup, control: usize, bar: f32) -> bool {
+        let Some(&(_, lo, hi)) = SOFT_EDGE.get(control) else { return false };
+        let v = lo + bar.clamp(0.0, 1.0) * (hi - lo);
+        let [r, g, b] = &mut setup.soft_edge_gamma_rgb;
+        let field = match control {
+            0 => &mut setup.soft_edge_power,
+            1 => &mut setup.soft_edge_luminance,
+            2 => &mut setup.soft_edge_gamma,
+            3 => r,
+            4 => g,
+            _ => b,
+        };
+        *field = v;
         true
     }
 
@@ -921,6 +969,21 @@ mod tests {
         assert!(e.toggle_screen(&mut s, 1) && !s.screens[1].enabled);
         assert!(e.remove_screen(&mut s));
         assert_eq!((e.screen, s.screens.len()), (0, 1));
+    }
+
+    #[test]
+    fn soft_edge_controls() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(e.toggle_soft_edge(&mut s));
+        let ScreenLayer::Slice(sl) = &s.screens[0].layers[0] else { unreachable!() };
+        assert!(sl.soft_edge);
+        assert!(e.set_soft_edge(&mut s, 1, 0.25));
+        assert!(e.set_soft_edge(&mut s, 5, 1.0));
+        assert_eq!((s.soft_edge_luminance, s.soft_edge_gamma_rgb[2]), (0.25, 3.0));
+        let bars = soft_edge_bars(&s);
+        assert_eq!((bars[1].1, bars[5].2.as_str()), (0.25, "3.00"));
+        assert!(!e.set_soft_edge(&mut s, 6, 0.0));
     }
 
     #[test]

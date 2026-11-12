@@ -34,6 +34,13 @@ struct Uniforms {
     look: [f32; 4],
     rgb: [f32; 4],
     card: [f32; 4],
+    /// The slice's input box in composition pixels: x0, y0, x1, y1.
+    input: [f32; 4],
+    /// Soft-edge widths in composition pixels: left, right, top, bottom.
+    edges: [f32; 4],
+    /// Soft edge: power, luminance, then the gamma exponent per channel.
+    soft: [f32; 4],
+    gamma: [f32; 4],
 }
 
 struct BuiltSlice {
@@ -41,8 +48,8 @@ struct BuiltSlice {
     indices: wgpu::Buffer,
     count: u32,
     uniforms: wgpu::Buffer,
-    /// Test card on or off, as last written to `uniforms`.
-    card: bool,
+    /// What was last written to `uniforms`.
+    u: Uniforms,
     mask: Option<wgpu::TextureView>,
 }
 
@@ -194,11 +201,11 @@ impl Mapper {
             }
             rp.set_pipeline(&self.pipeline);
             let screen_mask = built.mask.as_ref().unwrap_or(&self.white);
-            for (slice, b) in screen.slices().filter(|s| s.enabled).zip(&mut built.slices) {
-                if b.card != test_card {
-                    b.card = test_card;
-                    let u = uniforms(screen, slice, &built.target, comp_size, test_card);
-                    queue.write_buffer(&b.uniforms, 0, bytemuck::bytes_of(&u));
+            for b in &mut built.slices {
+                let card = if test_card { 1.0 } else { 0.0 };
+                if b.u.look[1] != card {
+                    b.u.look[1] = card;
+                    queue.write_buffer(&b.uniforms, 0, bytemuck::bytes_of(&b.u));
                 }
                 let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
@@ -227,9 +234,11 @@ impl Mapper {
         // Slices' inputs were laid out for the setup's composition size; follow the current one.
         let mut setup_scaled = setup.clone();
         setup_scaled.rescale_inputs(comp_size[0], comp_size[1]);
+        let soft_edges = setup_scaled.soft_edges();
+        let soft = SoftEdge::new(&setup_scaled);
         let old = std::mem::take(&mut self.screens);
         let mut old = old.into_iter();
-        for screen in &setup_scaled.screens {
+        for (screen, edges) in setup_scaled.screens.iter().zip(&soft_edges) {
             let [w, h] = screen.size().map(|v| v.clamp(16, 8192));
             // Keep the screen's texture when its size didn't change, so the UI's handle stays valid.
             let target = match old.next() {
@@ -242,13 +251,14 @@ impl Mapper {
                 .map(|img| mask_texture(device, queue, "screen mask", screen.size()[0], screen.size()[1], &img));
             let slices = screen
                 .slices()
-                .filter(|s| s.enabled)
-                .map(|slice| {
+                .zip(edges)
+                .filter(|(s, _)| s.enabled)
+                .map(|(slice, &edges)| {
                     let cells = |points: u32| mesh_cells(points.saturating_sub(1).max(1));
                     let mesh = slice.mesh(cells(slice.warp.cols), cells(slice.warp.rows));
                     let vertices: Vec<Vertex> =
                         mesh.vertices.iter().map(|v| Vertex { pos: v.position, src: v.uv }).collect();
-                    let u = uniforms(screen, slice, &target, comp_size, false);
+                    let u = uniforms(screen, slice, &target, comp_size, edges, &soft);
                     BuiltSlice {
                         vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("slice vertices"),
@@ -266,7 +276,7 @@ impl Mapper {
                             contents: bytemuck::bytes_of(&u),
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         }),
-                        card: false,
+                        u,
                         mask: slice
                             .mask_image(comp_size)
                             .map(|img| mask_texture(device, queue, "slice mask", comp_size[0], comp_size[1], &img)),
@@ -279,20 +289,45 @@ impl Mapper {
     }
 }
 
-fn uniforms(screen: &Screen, slice: &Slice, target: &Target, comp: [u32; 2], card: bool) -> Uniforms {
+/// The setup's soft-edge settings, as the shader takes them.
+struct SoftEdge {
+    soft: [f32; 4],
+    gamma: [f32; 4],
+}
+
+impl SoftEdge {
+    fn new(setup: &OutputSetup) -> Self {
+        // Resolume's Gamma (0 to 1) sets how much of the per-channel gamma applies.
+        let k = setup.soft_edge_gamma.clamp(0.0, 1.0);
+        let exp = |g: f32| 1.0 / (1.0 + k * (g.max(0.1) - 1.0)).max(0.1);
+        let [r, g, b] = setup.soft_edge_gamma_rgb;
+        Self {
+            soft: [setup.soft_edge_power, setup.soft_edge_luminance.clamp(0.0, 1.0), 0.0, 0.0],
+            gamma: [exp(r), exp(g), exp(b), 0.0],
+        }
+    }
+}
+
+fn uniforms(
+    screen: &Screen,
+    slice: &Slice,
+    target: &Target,
+    comp: [u32; 2],
+    edges: [f32; 4],
+    soft: &SoftEdge,
+) -> Uniforms {
     let (a, b) = (screen.color, slice.color);
     // A distinct, steady colour per slice for the test card.
     let hue = (slice.id as f32 * 0.618_034).fract();
     Uniforms {
         sizes: [target.width as f32, target.height as f32, comp[0] as f32, comp[1] as f32],
-        look: [
-            screen.opacity.clamp(0.0, 1.0),
-            if card { 1.0 } else { 0.0 },
-            a.brightness + b.brightness,
-            a.contrast + b.contrast,
-        ],
+        look: [screen.opacity.clamp(0.0, 1.0), 0.0, a.brightness + b.brightness, a.contrast + b.contrast],
         rgb: [a.red + b.red, a.green + b.green, a.blue + b.blue, 0.0],
         card: [hue_rgb(hue)[0], hue_rgb(hue)[1], hue_rgb(hue)[2], 1.0],
+        input: openvj_core::bounds(&slice.input),
+        edges,
+        soft: soft.soft,
+        gamma: soft.gamma,
     }
 }
 

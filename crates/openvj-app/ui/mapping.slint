@@ -59,7 +59,7 @@ component ColorRow inherits HorizontalLayout {
     spacing: 8px;
     height: 24px;
     Text {
-        width: 76px;
+        width: 88px;
         text: root.item.name;
         color: Theme.text-dim;
         font-size: 12px;
@@ -142,6 +142,10 @@ export component MappingWindow inherits Window {
     /// Colour controls of the screen (with Opacity) and of the selected slice.
     in property <[MapColor]> screen-colors;
     in property <[MapColor]> slice-colors;
+    /// The selected slice fades where its input overlaps other Soft Edge slices.
+    in property <bool> selected-soft-edge;
+    /// Soft-edge settings for the whole setup (Power, Luminance, Gammas).
+    in property <[MapColor]> soft-edge-settings;
     /// The selected slice's warp grid (output stage only).
     in property <bool> has-grid;
     in property <int> grid-cols: 4;
@@ -182,6 +186,8 @@ export component MappingWindow inherits Window {
     callback toggle-outlines();
     /// A colour bar moved: slice (true) or screen, control index, new bar position 0 to 1.
     callback color-changed(bool, int, float);
+    callback toggle-soft-edge();
+    callback soft-edge-changed(int, float);
     callback done();
 
     keys := FocusScope {
@@ -588,6 +594,12 @@ export component MappingWindow inherits Window {
                             reset: i == 5 ? 1 : 0.5;
                             changed(v) => { root.color-changed(false, i, v); }
                         }
+                        if !root.has-selection: Heading { text: "SOFT EDGE (ALL SCREENS)"; }
+                        for c[i] in (root.has-selection ? [] : root.soft-edge-settings): ColorRow {
+                            item: c;
+                            reset: i == 0 ? 1.9 / 6.9 : i == 1 ? 0.5 : i == 2 ? 1 : 0.5;
+                            changed(v) => { root.soft-edge-changed(i, v); }
+                        }
                         if !root.has-selection: Text {
                             text: "Pick a slice on the left or click one on the canvas to edit it. Double-click a bar to reset it.";
                             color: Theme.text-dim;
@@ -644,6 +656,28 @@ export component MappingWindow inherits Window {
                         for c[i] in (root.has-selection && !root.selected-is-mask ? root.slice-colors : []): ColorRow {
                             item: c;
                             changed(v) => { root.color-changed(true, i, v); }
+                        }
+                        if root.has-selection && !root.selected-is-mask: HorizontalLayout {
+                            spacing: 8px;
+                            height: 32px;
+                            Text {
+                                text: "Soft edge";
+                                color: Theme.text;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                on: root.selected-soft-edge;
+                                toggled => { root.toggle-soft-edge(); keys.focus(); }
+                            }
+                        }
+                        if root.has-selection && !root.selected-is-mask && root.selected-soft-edge: Text {
+                            text: "Fades where this slice's input overlaps another Soft Edge slice, as in Resolume. Set the curve on the screen panel.";
+                            color: Theme.text-dim;
+                            font-size: Theme.font-body;
+                            wrap: word-wrap;
                         }
                         if root.has-grid: Heading { text: "WARP GRID"; }
                         if root.has-grid: HorizontalLayout {

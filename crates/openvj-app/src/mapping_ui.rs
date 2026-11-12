@@ -11,6 +11,7 @@ use slint::{ComponentHandle, Image, ModelRc, VecModel};
 use super::App;
 use crate::mapping::{
     CORNER_NAMES, Monitor, Stage, color_bars, find_monitor, grid_handles, grid_lines, path_commands, polyline_commands,
+    soft_edge_bars,
 };
 use crate::{MainWindow, MapColor, MapCorner, MapHandle, MapLayer, MapScreen, MappingWindow, OutputWindow};
 
@@ -178,6 +179,14 @@ impl App {
     /// A colour bar moved: `slice` true for the selected slice, false for the screen.
     pub fn map_color(&mut self, slice: bool, control: i32, bar: f32) {
         self.edit_mapping(true, |e, s| e.set_color(s, slice, control.max(0) as usize, bar));
+    }
+
+    pub fn map_toggle_soft_edge(&mut self) {
+        self.edit_mapping(true, |e, s| e.toggle_soft_edge(s));
+    }
+
+    pub fn map_soft_edge(&mut self, control: i32, bar: f32) {
+        self.edit_mapping(true, |e, s| e.set_soft_edge(s, control.max(0) as usize, bar));
     }
 
     pub fn map_toggle_outlines(&mut self) {
@@ -454,6 +463,13 @@ impl App {
         if let Some(s) = screen {
             win.set_screen_colors(bars(&s.color, Some(s.opacity)));
         }
+        if let Some(setup) = self.mapping.setup.as_ref() {
+            let rows: Vec<MapColor> = soft_edge_bars(setup)
+                .into_iter()
+                .map(|(name, value, text)| MapColor { name: name.into(), value, display: text.into() })
+                .collect();
+            win.set_soft_edge_settings(ModelRc::from(Rc::new(VecModel::from(rows))));
+        }
         let mut layers = Vec::new();
         let mut handles = Vec::new();
         let mut corners = Vec::new();
@@ -479,12 +495,14 @@ impl App {
                 }
                 ScreenLayer::Slice(s) if stage == Stage::Output => {
                     win.set_slice_colors(bars(&s.color, None));
+                    win.set_selected_soft_edge(s.soft_edge);
                     let lines = polyline_commands(&grid_lines(&s.warp));
                     grid = Some((s.warp.cols, s.warp.rows, s.warp.mode == PointMode::Bezier, lines));
                     Some(&s.warp)
                 }
                 ScreenLayer::Slice(s) => {
                     win.set_slice_colors(bars(&s.color, None));
+                    win.set_selected_soft_edge(s.soft_edge);
                     None
                 }
             };

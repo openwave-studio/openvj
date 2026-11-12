@@ -25,6 +25,18 @@ pub type Point = [f32; 2];
 /// Four corners, clockwise from top-left: top-left, top-right, bottom-right, bottom-left.
 pub type Quad = [Point; 4];
 
+/// The axis-aligned box around a quad: x0, y0, x1, y1.
+pub fn bounds(q: &Quad) -> [f32; 4] {
+    let xs = q.iter().map(|p| p[0]);
+    let ys = q.iter().map(|p| p[1]);
+    [
+        xs.clone().fold(f32::INFINITY, f32::min),
+        ys.clone().fold(f32::INFINITY, f32::min),
+        xs.fold(f32::NEG_INFINITY, f32::max),
+        ys.fold(f32::NEG_INFINITY, f32::max),
+    ]
+}
+
 /// Builds the quad of an axis-aligned rectangle.
 pub fn rect_quad(x0: f32, y0: f32, x1: f32, y1: f32) -> Quad {
     [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
@@ -39,11 +51,49 @@ pub struct OutputSetup {
     pub screens: Vec<Screen>,
     /// Exponent of the soft-edge falloff where slices overlap (Resolume's "Power", default 2).
     pub soft_edge_power: f32,
+    /// Brightness of the soft edge's midpoint (Resolume's "Luminance", 0 to 1, default 0.5).
+    #[serde(default = "default_luminance")]
+    pub soft_edge_luminance: f32,
+    /// How much of the per-channel gamma applies (Resolume's "Gamma", 0 to 1, default 1).
+    #[serde(default = "default_one")]
+    pub soft_edge_gamma: f32,
+    /// The projectors' gamma per channel (Resolume's "Gamma Red/Green/Blue", 1 to 3, default 2).
+    #[serde(default = "default_gamma_rgb")]
+    pub soft_edge_gamma_rgb: [f32; 3],
+}
+
+fn default_luminance() -> f32 {
+    0.5
+}
+
+fn default_one() -> f32 {
+    1.0
+}
+
+fn default_gamma_rgb() -> [f32; 3] {
+    [2.0; 3]
+}
+
+/// The soft-edge falloff at `x` across a blend (0 at the slice's outer edge, 1 where the slice is
+/// fully on), after Paul Bourke's edge blending, which Resolume's Power and Luminance follow: two
+/// overlapping slices' ramps add up to one when `luminance` is 0.5. Gamma is applied separately.
+pub fn soft_edge_ramp(x: f32, power: f32, luminance: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    let p = power.max(0.01);
+    if x < 0.5 { luminance * (2.0 * x).powf(p) } else { 1.0 - (1.0 - luminance) * (2.0 - 2.0 * x).powf(p) }
 }
 
 impl Default for OutputSetup {
     fn default() -> Self {
-        Self { name: String::new(), composition_size: [1920, 1080], screens: Vec::new(), soft_edge_power: 2.0 }
+        Self {
+            name: String::new(),
+            composition_size: [1920, 1080],
+            screens: Vec::new(),
+            soft_edge_power: 2.0,
+            soft_edge_luminance: default_luminance(),
+            soft_edge_gamma: default_one(),
+            soft_edge_gamma_rgb: default_gamma_rgb(),
+        }
     }
 }
 
@@ -68,6 +118,64 @@ impl OutputSetup {
             layers: vec![ScreenLayer::Slice(slice)],
         };
         Self { composition_size: [width, height], screens: vec![screen], ..Self::default() }
+    }
+
+    /// Soft-edge widths for every slice, as Resolume Arena's soft edge works: where the input
+    /// areas of two enabled slices with Soft Edge on overlap (on any screen), each fades out across
+    /// the overlap on the side facing the other. One entry per screen, one per slice in layer
+    /// order: left, right, top and bottom widths in composition pixels (0: no fade).
+    pub fn soft_edges(&self) -> Vec<Vec<[f32; 4]>> {
+        let boxes: Vec<Vec<Option<[f32; 4]>>> = self
+            .screens
+            .iter()
+            .map(|sc| sc.slices().map(|s| (sc.enabled && s.enabled && s.soft_edge).then(|| bounds(&s.input))).collect())
+            .collect();
+        let all: Vec<(usize, usize, [f32; 4])> = boxes
+            .iter()
+            .enumerate()
+            .flat_map(|(i, v)| v.iter().enumerate().filter_map(move |(j, b)| b.map(|b| (i, j, b))))
+            .collect();
+        boxes
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.iter()
+                    .enumerate()
+                    .map(|(j, b)| {
+                        let mut edges = [0.0f32; 4];
+                        let Some(a) = b else { return edges };
+                        for &(_, _, o) in all.iter().filter(|&&(oi, oj, _)| (oi, oj) != (i, j)) {
+                            let (x0, y0, x1, y1) = (a[0].max(o[0]), a[1].max(o[1]), a[2].min(o[2]), a[3].min(o[3]));
+                            let (w, h) = (x1 - x0, y1 - y0);
+                            if w <= 0.0 || h <= 0.0 {
+                                continue;
+                            }
+                            let (aw, ah) = ((a[2] - a[0]).max(1e-3), (a[3] - a[1]).max(1e-3));
+                            // The overlap must reach exactly one side of the slice to fade there:
+                            // a slice inside another, or two showing the same area, don't blend.
+                            let side = |lo_touch: bool, hi_touch: bool, lo: usize, hi: usize| match (lo_touch, hi_touch)
+                            {
+                                (true, false) => Some(lo),
+                                (false, true) => Some(hi),
+                                _ => None,
+                            };
+                            const EPS: f32 = 0.5;
+                            let horizontal = side(x0 <= a[0] + EPS, x1 >= a[2] - EPS, 0, 1);
+                            let vertical = side(y0 <= a[1] + EPS, y1 >= a[3] - EPS, 2, 3);
+                            // Side by side fades across the overlap's width, stacked across its height.
+                            match (horizontal, vertical) {
+                                (Some(e), None) => edges[e] = edges[e].max(w),
+                                (None, Some(e)) => edges[e] = edges[e].max(h),
+                                (Some(e), Some(_)) if w / aw <= h / ah => edges[e] = edges[e].max(w),
+                                (Some(_), Some(f)) => edges[f] = edges[f].max(h),
+                                (None, None) => {}
+                            }
+                        }
+                        edges
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Scales every input quad so the setup fits a composition of a different size.
@@ -761,6 +869,49 @@ fn catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point, t: f32) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_edge_ramps_add_up() {
+        for x in [0.0, 0.1, 0.3, 0.5, 0.8, 1.0] {
+            let sum = soft_edge_ramp(x, 2.0, 0.5) + soft_edge_ramp(1.0 - x, 2.0, 0.5);
+            assert!((sum - 1.0).abs() < 1e-5, "{x}: {sum}");
+        }
+        assert_eq!(soft_edge_ramp(0.5, 3.0, 0.3), 0.3);
+        assert_eq!((soft_edge_ramp(-1.0, 2.0, 0.5), soft_edge_ramp(2.0, 2.0, 0.5)), (0.0, 1.0));
+    }
+
+    #[test]
+    fn soft_edges_where_inputs_overlap() {
+        // Two screens, each taking 55% of a 2000 px wide composition: a 200 px overlap.
+        let mut setup = OutputSetup::passthrough(2000, 1000);
+        let mut right = setup.screens[0].clone();
+        fn slice(s: &mut Screen) -> &mut Slice {
+            match &mut s.layers[0] {
+                ScreenLayer::Slice(sl) => sl,
+                _ => unreachable!(),
+            }
+        }
+        slice(&mut setup.screens[0]).input = rect_quad(0.0, 0.0, 1100.0, 1000.0);
+        slice(&mut right).input = rect_quad(900.0, 0.0, 2000.0, 1000.0);
+        setup.screens.push(right);
+        assert_eq!(setup.soft_edges(), vec![vec![[0.0; 4]], vec![[0.0; 4]]], "Soft Edge off");
+        slice(&mut setup.screens[0]).soft_edge = true;
+        slice(&mut setup.screens[1]).soft_edge = true;
+        assert_eq!(setup.soft_edges(), vec![vec![[0.0, 200.0, 0.0, 0.0]], vec![[200.0, 0.0, 0.0, 0.0]]]);
+        // Stacked vertically instead.
+        slice(&mut setup.screens[0]).input = rect_quad(0.0, 0.0, 2000.0, 600.0);
+        slice(&mut setup.screens[1]).input = rect_quad(0.0, 400.0, 2000.0, 1000.0);
+        assert_eq!(setup.soft_edges(), vec![vec![[0.0, 0.0, 0.0, 200.0]], vec![[0.0, 0.0, 200.0, 0.0]]]);
+        // Two slices showing the same area don't blend.
+        let full = rect_quad(0.0, 0.0, 2000.0, 1000.0);
+        slice(&mut setup.screens[0]).input = full;
+        slice(&mut setup.screens[1]).input = full;
+        assert_eq!(setup.soft_edges(), vec![vec![[0.0; 4]], vec![[0.0; 4]]]);
+        slice(&mut setup.screens[1]).input = rect_quad(900.0, 0.0, 2000.0, 1000.0);
+        // A disabled screen doesn't blend.
+        setup.screens[1].enabled = false;
+        assert_eq!(setup.soft_edges()[0], vec![[0.0; 4]]);
+    }
 
     #[test]
     fn resize_keeps_the_shape() {

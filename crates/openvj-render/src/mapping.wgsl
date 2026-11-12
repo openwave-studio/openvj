@@ -9,7 +9,36 @@ struct Mapping {
     rgb: vec4f,
     // Test card colour of this slice.
     card: vec4f,
+    // The slice's input box in composition pixels: x0, y0, x1, y1.
+    input: vec4f,
+    // Soft-edge widths in composition pixels: left, right, top, bottom (0: none).
+    edges: vec4f,
+    // x: power, y: luminance.
+    soft: vec4f,
+    // rgb: gamma exponent per channel for the soft edge.
+    gamma: vec4f,
 };
+
+// Paul Bourke's edge-blend falloff, which Resolume's Power and Luminance follow (mirrors
+// openvj_core::soft_edge_ramp).
+fn ramp(x: f32) -> f32 {
+    let t = clamp(x, 0.0, 1.0);
+    let p = max(u.soft.x, 0.01);
+    if t < 0.5 {
+        return u.soft.y * pow(2.0 * t, p);
+    }
+    return 1.0 - (1.0 - u.soft.y) * pow(2.0 - 2.0 * t, p);
+}
+
+// How much of the slice shows at composition pixel `px`, across all four soft edges.
+fn soft_edge(px: vec2f) -> f32 {
+    var w = 1.0;
+    if u.edges.x > 0.0 { w *= ramp((px.x - u.input.x) / u.edges.x); }
+    if u.edges.y > 0.0 { w *= ramp((u.input.z - px.x) / u.edges.y); }
+    if u.edges.z > 0.0 { w *= ramp((px.y - u.input.y) / u.edges.z); }
+    if u.edges.w > 0.0 { w *= ramp((u.input.w - px.y) / u.edges.w); }
+    return w;
+}
 
 @group(0) @binding(0) var<uniform> u: Mapping;
 @group(0) @binding(1) var samp: sampler;
@@ -58,5 +87,9 @@ fn fs_map(in: VsOut) -> @location(0) vec4f {
     c = c * (1.0 + u.rgb.rgb);
     let m = textureSampleLevel(screen_mask, samp, in.pos.xy / u.sizes.xy, 0.0).r
         * textureSampleLevel(slice_mask, samp, uv, 0.0).r;
-    return vec4f(clamp(c, vec3f(0.0), vec3f(1.0)) * u.look.x, m);
+    c = clamp(c, vec3f(0.0), vec3f(1.0));
+    if any(u.edges > vec4f(0.0)) {
+        c *= pow(vec3f(soft_edge(in.src)), u.gamma.rgb);
+    }
+    return vec4f(c * u.look.x, m);
 }

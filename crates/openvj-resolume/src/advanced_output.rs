@@ -72,8 +72,19 @@ pub fn import_output_str(xml: &str) -> Result<ImportedOutput, String> {
         // Arena 5 files keep the composition size under <sizing>.
         setup.composition_size = [attr_u32(input, "width").unwrap_or(1920), attr_u32(input, "height").unwrap_or(1080)];
     }
-    if let Some(power) = child(setup_node, "SoftEdging").and_then(|s| param_f32(s, "Power")) {
-        setup.soft_edge_power = power;
+    if let Some(soft) = child(setup_node, "SoftEdging") {
+        let get = |name, into: &mut f32| {
+            if let Some(v) = param_f32(soft, name) {
+                *into = v;
+            }
+        };
+        get("Power", &mut setup.soft_edge_power);
+        get("Luminance", &mut setup.soft_edge_luminance);
+        get("Gamma", &mut setup.soft_edge_gamma);
+        let [r, g, b] = &mut setup.soft_edge_gamma_rgb;
+        get("Gamma Red", r);
+        get("Gamma Green", g);
+        get("Gamma Blue", b);
     }
 
     for node in child(setup_node, "screens").into_iter().flat_map(|s| s.children().filter(|n| n.is_element())) {

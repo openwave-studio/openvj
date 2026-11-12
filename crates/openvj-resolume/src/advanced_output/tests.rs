@@ -201,6 +201,8 @@ fn reads_display_and_spout_outputs() {
     let kinds: Vec<_> = setup.screens.iter().map(|s| s.device.kind.clone()).collect();
     assert_eq!(kinds, [DeviceKind::Display, DeviceKind::Spout, DeviceKind::Spout]);
     assert_eq!(setup.screens[0].device.name, "Display 1");
+    let soft = (setup.soft_edge_luminance, setup.soft_edge_gamma, setup.soft_edge_gamma_rgb);
+    assert_eq!(soft, (0.5, 1.0, [2.0; 3]));
     assert!(setup.screens.iter().all(|s| s.slices().all(|sl| sl.warp.is_identity())));
 }
 

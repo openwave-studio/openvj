@@ -1349,6 +1349,49 @@ mod tests {
     }
 
     #[test]
+    fn soft_edges_add_up_where_projectors_overlap() {
+        use openvj_core::{ScreenLayer, rect_quad};
+        let Some(mut e) = engine(64, 36) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut comp = Composition::new(64, 36, 1, 1);
+        let img = comp.set_clip(0, 0, ClipSource::Image { path: "white.png".into() }).unwrap();
+        e.set_media_frame(img, 64, 36, &[255u8; 64 * 36 * 4]);
+        comp.trigger(0, 0, 0.0);
+        e.render(&comp, 0.1, &inputs(0.1), None);
+
+        // Two 32 px screens, each taking 40 px of the composition: a 16 px overlap.
+        let mut setup = OutputSetup::passthrough(64, 36);
+        setup.soft_edge_gamma = 0.0; // Linear light, so the two ramps should sum to white.
+        let mut right = setup.screens[0].clone();
+        for (screen, x0) in [(&mut setup.screens[0], 0.0), (&mut right, 24.0)] {
+            screen.device.width = 32;
+            let ScreenLayer::Slice(slice) = &mut screen.layers[0] else { unreachable!() };
+            slice.input = rect_quad(x0, 0.0, x0 + 40.0, 36.0);
+            slice.warp = openvj_core::Warp::identity(rect_quad(0.0, 0.0, 32.0, 36.0), 4, 4);
+            slice.soft_edge = true;
+        }
+        setup.screens.push(right);
+        e.map_output(&setup, false);
+        let (l, r) = (e.read_target(e.screen(0).unwrap()), e.read_target(e.screen(1).unwrap()));
+        // Screen pixel x shows composition x0 + (x + 0.5) * 40/32; each side follows the ramp the
+        // core defines (whose two sides add up to one).
+        let at = |px: &[u8], x: usize| px[(18 * 32 + x) * 4] as f32;
+        assert!(at(&l, 2) > 250.0 && at(&r, 29) > 250.0, "outside the overlap: full");
+        let ramp = |t: f32| 255.0 * openvj_core::soft_edge_ramp(t, 2.0, 0.5);
+        for x in 20..32 {
+            let c = (x as f32 + 0.5) * 1.25;
+            let want_l = if c > 24.0 { ramp((40.0 - c) / 16.0) } else { 255.0 };
+            assert!((at(&l, x) - want_l).abs() < 6.0, "left x {x}: {} vs {want_l}", at(&l, x));
+            let c = 24.0 + (31 - x) as f32 * 1.25 + 0.625;
+            let want_r = if c < 40.0 { ramp((c - 24.0) / 16.0) } else { 255.0 };
+            assert!((at(&r, 31 - x) - want_r).abs() < 6.0, "right x {}: {} vs {want_r}", 31 - x, at(&r, 31 - x));
+        }
+        assert!(at(&l, 31) < 40.0, "fades out at its edge: {}", at(&l, 31));
+    }
+
+    #[test]
     fn renders_layers_and_blends() {
         let Some(mut e) = engine(64, 36) else {
             eprintln!("skipping: no GPU adapter");
