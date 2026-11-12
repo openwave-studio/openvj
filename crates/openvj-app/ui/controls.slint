@@ -535,7 +535,7 @@ export component ModButton inherits Rectangle {
     border-color: root.source != 0 ? Theme.mod-color(root.source) : Theme.border;
 
     Text {
-        text: root.source == 0 ? "map ▾" : ModNames.sources[root.source] + (root.source >= 5 ? " " + ModNames.rates[root.rate] : "");
+        text: root.source == 0 ? "map ▾" : ModNames.sources[root.source] + (root.source >= ModNames.first-tempo ? " " + ModNames.rates[root.rate] : "");
         color: root.source == 0 ? Theme.text-dim : Theme.mod-color(root.source);
         font-size: Theme.font-tiny;
         font-weight: root.source == 0 ? 500 : 700;
@@ -564,19 +564,27 @@ export component ModButton inherits Rectangle {
                     current: root.source == 0;
                     clicked => { root.picked(0); }
                 }
-                MenuHeading { text: "AUDIO FFT"; }
-                for i in 4: MenuItem {
+                // Sources 1–5: band levels and overall Level; 6 up to first-tempo: hits.
+                MenuHeading { text: "AUDIO LEVEL"; }
+                for i in 5: MenuItem {
                     text: ModNames.sources[i + 1];
                     current: root.source == i + 1;
                     dot: Theme.audio;
                     clicked => { root.picked(i + 1); }
                 }
+                MenuHeading { text: "AUDIO HITS"; }
+                for i in ModNames.first-tempo - 6: MenuItem {
+                    text: ModNames.sources[i + 6];
+                    current: root.source == i + 6;
+                    dot: Theme.audio;
+                    clicked => { root.picked(i + 6); }
+                }
                 MenuHeading { text: "TEMPO SYNC"; }
                 for i in 4: MenuItem {
-                    text: ModNames.sources[i + 5];
-                    current: root.source == i + 5;
+                    text: ModNames.sources[i + ModNames.first-tempo];
+                    current: root.source == i + ModNames.first-tempo;
                     dot: Theme.tempo;
-                    clicked => { root.picked(i + 5); }
+                    clicked => { root.picked(i + ModNames.first-tempo); }
                 }
             }
         }
@@ -660,11 +668,11 @@ export component ModParam inherits VerticalLayout {
             fill: Theme.mod-color(root.data.mod-source);
             changed(v) => { root.mod-amount(root.data.index, v); }
         }
-        if root.data.mod-source >= 5: RatePicker {
+        if root.data.mod-source >= ModNames.first-tempo: RatePicker {
             current: root.data.mod-rate;
             picked(r) => { root.mod-rate(root.data.index, r); }
         }
-        if root.data.mod-source < 5: Rectangle {
+        if root.data.mod-source < ModNames.first-tempo: Rectangle {
             width: 64px;
             Text {
                 text: "from audio";

@@ -10,7 +10,7 @@ openVJ's audio reactivity is four band levels plus the beat. Levels follow loudn
 - **New map ▾ sources**: Level, Hits, and Bass / Low mid / High mid / Treble hits, next to today's band levels and tempo shapes.
 - **Synesthesia names in ISF files**: `syn_Level`, `syn_BassLevel`… `syn_*Hits`, `syn_*Presence`, `syn_*Time`, `syn_OnBeat`, `syn_ToggleOnBeat`, `syn_RandomOnBeat`, `syn_BeatTime`, `syn_BPM`, `syn_BPMConfidence`, `syn_BPMSin/2/4/8`, `syn_BPMTri/2/4/8`, `syn_Spectrum`, `_uv`, `_uvc`, `_xy`, `FRAMECOUNT`. Synesthesia's Mid, MidHigh and High map onto Low mid, High mid and Treble.
 - **Spectrum texture**: 256 log-spaced FFT bins and the waveform, uploaded once per frame. Ghost Arcade's `sampleFFT` and `sampleWaveform` read it instead of stepping through the four bands and returning 0.
-- **Reactivity**: one composition-level knob (0–200%, default 100%) in the Composition tab's audio section, saved with the composition, scaling every audio-driven value (mappings and shaders) at once, like Synesthesia's Reactivity.
+- **Reactivity**: one composition-level knob (0–200%, default 100%) in the Composition tab's audio section, saved with the composition, scaling every audio-driven value (mappings and shaders) at once, like Synesthesia's Reactivity. It replaces the existing Gain control (same 0–2× range, which wasn't saved), so there's still one knob, not two.
 
 Out of scope: importing Synesthesia scenes (.synScene), Synesthesia's helper functions (`_rotate`, `_noise`…), `syn_LevelTrail`, `syn_Intensity`, `syn_FadeInOut`, `syn_Media`, automatic BPM detection, and a per-parameter custom frequency range with threshold/attack/release (that belongs to add-parameter-animation's Audio FFT driver).
 

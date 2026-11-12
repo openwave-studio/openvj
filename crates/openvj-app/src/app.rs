@@ -12,9 +12,9 @@ use std::time::Instant;
 
 use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::{
-    BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve, CrossfadeSide,
-    DEFAULT_CLIP_SECS, Effect, GeneratorKind, MOD_RATES, MidiEffect, MidiMessage, ModInputs, ModSource, Modulation,
-    Param, PlayMode, Playing, SYNC_BEATS, TapTempo, apply_midi, library, move_effect,
+    AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve,
+    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage,
+    ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, TapTempo, apply_midi, library, move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
 use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
@@ -74,7 +74,6 @@ const CROSSFADER_INDEX: usize = 3;
 const MAX_DURATION: f32 = 60.0;
 const MAX_SPEED: f32 = 4.0;
 const MAX_TRANSITION: f32 = 4.0;
-const MAX_GAIN: f32 = 2.0;
 const MAX_RELEASE: f32 = 1.0;
 const RATE_LABELS: [&str; MOD_RATES.len()] = ["¼", "½", "1", "2", "4", "8", "16"];
 /// Seconds a live input stays open after its last clip stops, so relaunching is instant.
@@ -387,6 +386,7 @@ impl App {
         let names = ui.global::<ModNames>();
         let sources: Vec<SharedString> = ModSource::ALL.iter().map(|s| s.name().into()).collect();
         names.set_sources(ModelRc::new(VecModel::from(sources)));
+        names.set_first_tempo(ModSource::FIRST_TEMPO as i32);
         let rates: Vec<SharedString> = RATE_LABELS.iter().map(|r| (*r).into()).collect();
         names.set_rates(ModelRc::new(VecModel::from(rates)));
         let levels = ui.global::<AudioLevels>();
@@ -791,7 +791,7 @@ impl App {
         self.update_videos(now, beat);
         self.update_live(now);
         self.update_midi(now);
-        self.inputs = ModInputs { beat, bands: self.update_audio(dt) };
+        self.inputs = self.update_audio(beat, dt);
         let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
         self.syphon_out.before_render(&mut self.engine);
         self.engine.render(&self.comp, now, &self.inputs, preview);
@@ -905,10 +905,24 @@ impl App {
     }
 
     /// Band levels for this frame (zero while the input is off).
-    fn update_audio(&mut self, dt: f32) -> [f32; BAND_COUNT] {
-        let Some(input) = &self.audio else { return [0.0; BAND_COUNT] };
+    /// Analyses this frame's audio (scaled by the composition's Reactivity) and hands the
+    /// spectrum to the engine.
+    fn update_audio(&mut self, beat: f64, dt: f32) -> ModInputs {
+        let Some(input) = &self.audio else {
+            self.engine.set_spectrum(None);
+            return ModInputs { beat, ..Default::default() };
+        };
         input.drain_into(&mut self.analyzer);
-        self.analyzer.analyze(dt).bands
+        self.analyzer.gain = self.comp.reactivity;
+        let l = self.analyzer.analyze(dt);
+        self.engine.set_spectrum(Some(self.analyzer.spectrum()));
+        let signal = |f: openvj_audio::Features| AudioSignal {
+            level: f.level,
+            hits: f.hits,
+            presence: f.presence,
+            clock: f.clock,
+        };
+        ModInputs { beat, bands: l.bands, band_signals: l.band_features.map(signal), overall: signal(l.overall) }
     }
 
     /// Parameter rows change every frame while modulated, so they are rebuilt each sync
@@ -942,12 +956,18 @@ impl App {
         ui.set_live_master(comp.master_value(&inputs));
         ui.set_crossfader(xf.position);
         ui.set_live_crossfader(xf.position_value(&inputs));
-        let gain = self.analyzer.gain;
+        let reactivity = comp.reactivity;
         let release = self.analyzer.release;
         update_model(
             &self.audio_params,
             vec![
-                fixed_row(1, "Gain", gain / MAX_GAIN, 1.0 / MAX_GAIN, format!("{gain:.2}×")),
+                fixed_row(
+                    1,
+                    "Reactivity",
+                    reactivity / MAX_REACTIVITY,
+                    1.0 / MAX_REACTIVITY,
+                    format!("{:.0}%", reactivity * 100.0),
+                ),
                 fixed_row(
                     2,
                     "Release",
@@ -1787,9 +1807,8 @@ impl App {
         let name = (self.audio_device > 0).then(|| self.audio_devices.get(self.audio_device).cloned()).flatten();
         match AudioInput::open(name.as_deref()) {
             Ok(input) => {
-                let (gain, release) = (self.analyzer.gain, self.analyzer.release);
+                let release = self.analyzer.release;
                 self.analyzer = Analyzer::new(input.sample_rate());
-                self.analyzer.gain = gain;
                 self.analyzer.release = release;
                 self.audio_status = format!("{} · {} Hz", input.name(), input.sample_rate());
                 self.set_status(format!("Audio input: {}", input.name()));
@@ -1994,7 +2013,7 @@ impl App {
         match scope {
             scope::COMP => match index {
                 0 => self.comp.master = v,
-                1 => self.analyzer.gain = (v * MAX_GAIN * 100.0).round() / 100.0,
+                1 => self.comp.reactivity = (v * MAX_REACTIVITY * 100.0).round() / 100.0,
                 2 => self.analyzer.release = (v * MAX_RELEASE).max(0.01),
                 CROSSFADER_INDEX => self.comp.crossfader.position = v,
                 _ => {}

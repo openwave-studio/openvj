@@ -18,6 +18,8 @@ export global Scope {
 export global ModNames {
     // ModSource::ALL names.
     in property <[string]> sources;
+    // Index of the first tempo shape in `sources` (ModSource::FIRST_TEMPO); audio sources come before it.
+    in property <int> first-tempo: 11;
     // MOD_RATES labels.
     in property <[string]> rates;
 }

@@ -1,3 +1,12 @@
+## MODIFIED Requirements
+
+### Requirement: Audio bands
+When AUDIO is on, openVJ SHALL analyse the default or chosen input device into four auto-gained bands (Bass, Low mid, High mid, Treble) with adjustable release, shown in the toolbar and the Composition tab.
+
+#### Scenario: Choose input
+- **WHEN** the VJ picks another input device and turns AUDIO on
+- **THEN** the band meters follow that device
+
 ## ADDED Requirements
 
 ### Requirement: Hits, presence and audio clocks
@@ -15,7 +24,7 @@ openVJ SHALL keep a 256-bin, log-spaced, auto-gained spectrum and the latest wav
 - **THEN** it reads the frequency at the position it asks for, not one of four bands
 
 ### Requirement: Reactivity
-The Composition tab SHALL have a Reactivity control (0–200%, default 100%), saved with the composition, that scales every audio-driven value (audio mappings, audio values and spectrum in shaders, and the speed of the audio clocks), like Synesthesia's Reactivity. Values stay capped at full scale.
+The Composition tab SHALL have a Reactivity control, in place of the former Gain, (0–200%, default 100%), saved with the composition, that scales every audio-driven value (audio mappings, audio values and spectrum in shaders, and the speed of the audio clocks), like Synesthesia's Reactivity. Values stay capped at full scale.
 
 #### Scenario: Calm everything
 - **WHEN** the VJ turns Reactivity down to 50%

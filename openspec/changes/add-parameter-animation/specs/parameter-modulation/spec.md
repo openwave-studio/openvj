@@ -34,11 +34,15 @@ Parameter animations in .avc files SHALL import with their driver, duration, env
 ## MODIFIED Requirements
 
 ### Requirement: Map a parameter
-Every normalised parameter (clip parameters, layer opacity, master, effect parameters and mix) SHALL be animatable with one driver. Compositions saved with an audio band or tempo shape and a depth SHALL open with the equivalent driver, envelope preset (Sine, Saw, Square, Pulse) and range [base, base + depth].
+Every normalised parameter (clip parameters, layer opacity, master, effect parameters and mix) SHALL be animatable with one driver. Compositions saved with an audio source (band, Level or hits) or tempo shape and a depth SHALL open with the equivalent driver, envelope preset (Sine, Saw, Square, Pulse) and range [base, base + depth].
 
 #### Scenario: Tempo shape
 - **WHEN** layer opacity is mapped to Sine over 4 beats with 50% depth
 - **THEN** opacity swings by up to half its range once every 4 beats
+
+#### Scenario: Flash on kicks
+- **WHEN** an effect's mix is mapped to Bass hits with 100% depth from 0
+- **THEN** the effect flashes in on each kick and fades out between them
 
 #### Scenario: Old composition
 - **WHEN** a composition saved before this change, with opacity mapped to Bass at 50% depth, is opened

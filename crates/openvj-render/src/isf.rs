@@ -72,6 +72,8 @@ pub(crate) fn glsl_source(def: &EffectDef) -> String {
          \x20   float TIME; float TIMEDELTA; int FRAMEINDEX; int PASSINDEX;\n\
          \x20   vec2 RENDERSIZE; float BEAT; float BPM;\n\
          \x20   vec4 DATE; vec4 AUDIO;\n\
+         \x20   vec4 AUDIO_HITS; vec4 AUDIO_PRESENCE; vec4 AUDIO_TIME;\n\
+         \x20   vec4 AUDIO_ALL; vec4 BEAT_EVENTS;\n\
          };\n\
          layout(set = 0, binding = 1) uniform sampler isf_sampler;\n\
          layout(set = 0, binding = 2) uniform texture2D inputImage;\n",
@@ -79,6 +81,10 @@ pub(crate) fn glsl_source(def: &EffectDef) -> String {
     let mut binding = 3;
     for t in target_names(def) {
         s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {t};\n");
+        binding += 1;
+    }
+    if uses_spectrum(def) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {SPECTRUM};\n");
         binding += 1;
     }
     let mut members = String::new();
@@ -114,6 +120,7 @@ pub(crate) fn glsl_source(def: &EffectDef) -> String {
           #define texture2D(img, c) IMG_NORM_PIXEL(img, c)\n\
           #define renderSize RENDERSIZE\n";
     s += &ghost_arcade_shim(def);
+    s += &synesthesia_shim(def);
     s += "#line 1\n";
     s += &without_redeclared_builtins(&def.glsl);
     s
@@ -131,6 +138,75 @@ const GHOST_ARCADE_NAMES: &[(&str, &str)] = &[
     ("audioSpectralCentroid", "dot(AUDIO, vec4(0.125, 0.375, 0.625, 0.875)) / max(dot(AUDIO, vec4(1.0)), 1e-4)"),
 ];
 
+/// The spectrum texture's name in the generated GLSL: 256 log-spaced bins, laid out like
+/// Synesthesia's `syn_Spectrum` (r raw, g with release, b smooth, a waveform around 0.5).
+pub(crate) const SPECTRUM: &str = "isf_spectrum";
+
+/// Names that read the spectrum texture.
+const SPECTRUM_USERS: &[&str] = &["syn_Spectrum", "sampleFFT", "sampleWaveform"];
+
+fn uses_spectrum(def: &EffectDef) -> bool {
+    SPECTRUM_USERS.iter().any(|n| uses_word(&def.glsl, n))
+}
+
+/// Synesthesia's built-in names, mapped onto openVJ's analysis (its Mid, MidHigh and High
+/// bands are openVJ's Low mid, High mid and Treble) and beat clock.
+const SYNESTHESIA_NAMES: &[(&str, &str)] = &[
+    ("syn_Level", "AUDIO_ALL.x"),
+    ("syn_BassLevel", "AUDIO.x"),
+    ("syn_MidLevel", "AUDIO.y"),
+    ("syn_MidHighLevel", "AUDIO.z"),
+    ("syn_HighLevel", "AUDIO.w"),
+    ("syn_Hits", "AUDIO_ALL.y"),
+    ("syn_BassHits", "AUDIO_HITS.x"),
+    ("syn_MidHits", "AUDIO_HITS.y"),
+    ("syn_MidHighHits", "AUDIO_HITS.z"),
+    ("syn_HighHits", "AUDIO_HITS.w"),
+    ("syn_Presence", "AUDIO_ALL.z"),
+    ("syn_BassPresence", "AUDIO_PRESENCE.x"),
+    ("syn_MidPresence", "AUDIO_PRESENCE.y"),
+    ("syn_MidHighPresence", "AUDIO_PRESENCE.z"),
+    ("syn_HighPresence", "AUDIO_PRESENCE.w"),
+    ("syn_Time", "AUDIO_ALL.w"),
+    ("syn_CurvedTime", "AUDIO_ALL.w"),
+    ("syn_BassTime", "AUDIO_TIME.x"),
+    ("syn_MidTime", "AUDIO_TIME.y"),
+    ("syn_MidHighTime", "AUDIO_TIME.z"),
+    ("syn_HighTime", "AUDIO_TIME.w"),
+    ("syn_OnBeat", "BEAT_EVENTS.x"),
+    ("syn_ToggleOnBeat", "BEAT_EVENTS.y"),
+    ("syn_RandomOnBeat", "BEAT_EVENTS.z"),
+    ("syn_BeatTime", "BEAT"),
+    ("syn_BPMTwitcher", "BEAT"),
+    ("syn_BPM", "BPM"),
+    ("syn_BPMConfidence", "1.0"),
+    ("syn_BPMSin", "(0.5 - 0.5 * cos(6.28318531 * BEAT))"),
+    ("syn_BPMSin2", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 2.0))"),
+    ("syn_BPMSin4", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 4.0))"),
+    ("syn_BPMSin8", "(0.5 - 0.5 * cos(6.28318531 * BEAT / 8.0))"),
+    ("syn_BPMTri", "(1.0 - abs(2.0 * fract(BEAT) - 1.0))"),
+    ("syn_BPMTri2", "(1.0 - abs(2.0 * fract(BEAT / 2.0) - 1.0))"),
+    ("syn_BPMTri4", "(1.0 - abs(2.0 * fract(BEAT / 4.0) - 1.0))"),
+    ("syn_BPMTri8", "(1.0 - abs(2.0 * fract(BEAT / 8.0) - 1.0))"),
+    ("syn_Spectrum", "sampler2D(isf_spectrum, isf_sampler)"),
+    ("FRAMECOUNT", "float(FRAMEINDEX)"),
+    ("_uv", "isf_FragNormCoord"),
+    ("_xy", "(isf_FragNormCoord * RENDERSIZE)"),
+    ("_uvc", "((isf_FragNormCoord - 0.5) * vec2(RENDERSIZE.x / RENDERSIZE.y, 1.0))"),
+];
+
+/// Defines for the Synesthesia names a file uses but doesn't declare itself.
+fn synesthesia_shim(def: &EffectDef) -> String {
+    let glsl = &def.glsl;
+    let mut s = String::new();
+    for (name, expr) in SYNESTHESIA_NAMES {
+        if uses_word(glsl, name) && !def.inputs.iter().any(|i| i.name == *name) {
+            s += &format!("#define {name} {expr}\n");
+        }
+    }
+    s
+}
+
 /// Defines for the Ghost Arcade names a file uses but doesn't declare itself as an input.
 fn ghost_arcade_shim(def: &EffectDef) -> String {
     let glsl = &def.glsl;
@@ -147,11 +223,14 @@ fn ghost_arcade_shim(def: &EffectDef) -> String {
         }
     }
     if uses_word(glsl, "sampleFFT") && !glsl.contains("float sampleFFT(") {
-        // No FFT texture yet: step through the four bands.
-        s += "float sampleFFT(float u) { return AUDIO[int(clamp(u, 0.0, 0.999) * 4.0)]; }\n";
+        s += &format!(
+            "float sampleFFT(float u) {{ return texture(sampler2D({SPECTRUM}, isf_sampler), vec2(u, 0.5)).g; }}\n"
+        );
     }
     if uses_word(glsl, "sampleWaveform") && !glsl.contains("float sampleWaveform(") {
-        s += "float sampleWaveform(float u) { return 0.0; }\n";
+        s += &format!(
+            "float sampleWaveform(float u) {{ return texture(sampler2D({SPECTRUM}, isf_sampler), vec2(u, 0.5)).a * 2.0 - 1.0; }}\n"
+        );
     }
     s
 }
@@ -174,10 +253,9 @@ fn without_redeclared_builtins(glsl: &str) -> String {
         let t = line.trim();
         let redeclared = t.starts_with("uniform ")
             && t.ends_with(';')
-            && t.trim_end_matches(';')
-                .split_whitespace()
-                .last()
-                .is_some_and(|n| PROVIDED.contains(&n) || GHOST_ARCADE_NAMES.iter().any(|(g, _)| *g == n));
+            && t.trim_end_matches(';').split_whitespace().last().is_some_and(|n| {
+                PROVIDED.contains(&n) || GHOST_ARCADE_NAMES.iter().chain(SYNESTHESIA_NAMES).any(|(g, _)| *g == n)
+            });
         if !redeclared && !t.starts_with("precision ") {
             out += line;
         }
@@ -417,6 +495,30 @@ mod tests {
         let def = EffectDef::parse(src, "ga").unwrap();
         parse(&def).unwrap_or_else(|e| panic!("{e}"));
         assert!(uses_word("x audioMid;", "audioMid") && !uses_word("audioMidish", "audioMid"));
+    }
+
+    #[test]
+    fn synesthesia_names_compile() {
+        let src = r#"/*{ "INPUTS": [] }*/
+            void main() {
+                vec2 p = _uvc * (1.0 + syn_BassHits) + _uv + _xy / RENDERSIZE;
+                float t = syn_BassTime + syn_Time + syn_MidHighPresence + syn_HighLevel + syn_Level;
+                float b = syn_OnBeat + syn_ToggleOnBeat + syn_RandomOnBeat + syn_BeatTime + syn_BPMSin4
+                    + syn_BPMTri8 + syn_BPM / 120.0 + syn_BPMConfidence + FRAMECOUNT;
+                vec4 spec = texture(syn_Spectrum, vec2(p.x, 0.5));
+                gl_FragColor = vec4(p, t + b, spec.g);
+            }"#;
+        let def = EffectDef::parse(src, "syn").unwrap();
+        let module = parse(&def).unwrap_or_else(|e| panic!("{e}"));
+        let r = reflect(&module).unwrap();
+        assert!(r.textures.iter().any(|(_, n)| n == SPECTRUM), "{:?}", r.textures);
+    }
+
+    #[test]
+    fn spectrum_is_bound_only_when_used() {
+        let src = r#"/*{ "INPUTS": [] }*/ void main() { gl_FragColor = vec4(syn_BassLevel); }"#;
+        let r = reflect(&parse(&EffectDef::parse(src, "x").unwrap()).unwrap()).unwrap();
+        assert!(!r.textures.iter().any(|(_, n)| n == SPECTRUM));
     }
 
     #[test]

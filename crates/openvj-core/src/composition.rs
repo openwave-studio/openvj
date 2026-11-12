@@ -644,10 +644,21 @@ pub struct Composition {
     pub groups: Vec<LayerGroup>,
     #[serde(default)]
     pub crossfader: Crossfader,
+    /// Scales every audio-driven value (mappings, shader audio, the audio clocks' speed),
+    /// 0..[`MAX_REACTIVITY`], like Synesthesia's Reactivity. 1 leaves them as analysed.
+    #[serde(default = "default_reactivity")]
+    pub reactivity: f32,
     next_id: u64,
     /// Clock reading from the last [`Composition::tick`]: (seconds, beat).
     #[serde(skip)]
     clock: (f64, f64),
+}
+
+/// Upper end of [`Composition::reactivity`] (200%).
+pub const MAX_REACTIVITY: f32 = 2.0;
+
+fn default_reactivity() -> f32 {
+    1.0
 }
 
 impl Default for Composition {
@@ -676,6 +687,7 @@ impl Composition {
             current_deck: 0,
             groups: Vec::new(),
             crossfader: Crossfader::default(),
+            reactivity: 1.0,
             next_id: 1,
             clock: (0.0, 0.0),
         };
@@ -1318,6 +1330,7 @@ mod tests {
         let mut v: serde_json::Value = serde_json::from_str(&c.to_json().unwrap()).unwrap();
         v.as_object_mut().unwrap().remove("effects");
         v.as_object_mut().unwrap().remove("master_mod");
+        v.as_object_mut().unwrap().remove("reactivity");
         let layer = v["layers"][0].as_object_mut().unwrap();
         layer.remove("effects");
         layer.remove("opacity_mod");
@@ -1325,6 +1338,7 @@ mod tests {
         let back = Composition::from_json(&v.to_string()).unwrap();
         assert!(back.layers[0].effects.is_empty());
         assert!(!back.clip(0, 0).unwrap().mods[0].is_active());
+        assert_eq!(back.reactivity, 1.0);
     }
 
     #[test]
@@ -1335,7 +1349,7 @@ mod tests {
         let clip = c.clip_mut(0, 0).unwrap();
         clip.params = [0.0; PARAM_COUNT];
         clip.mods[2] = Modulation { source: ModSource::Treble, amount: 0.5, beats: 1.0 };
-        let inputs = ModInputs { beat: 0.0, bands: [0.0, 0.0, 0.0, 1.0] };
+        let inputs = ModInputs { beat: 0.0, bands: [0.0, 0.0, 0.0, 1.0], ..Default::default() };
         assert_eq!(c.clip(0, 0).unwrap().param_values(&inputs), [0.0, 0.0, 0.5, 0.0]);
         c.layers[0].opacity = 0.2;
         c.layers[0].opacity_mod = Modulation { source: ModSource::Treble, amount: -1.0, beats: 1.0 };
