@@ -968,7 +968,6 @@ impl Engine {
     /// Runs a finished group mix through the group's effects and blends it into the
     /// composition. Returns the composition's new ping-pong slot.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn close_group(
         &mut self,
         passes: &mut Vec<Pass>,
