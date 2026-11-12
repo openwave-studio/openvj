@@ -7,11 +7,11 @@
 
 ## 2. Outlines on the output
 
-- [ ] 2.1 Outlines button in the mapping window; draw slice outlines and the selected point on the output while the window is open
+- [x] 2.1 Outlines button in the mapping window; draw slice outlines and the selected point on the output while the window is open
 
 ## 3. Colour controls
 
-- [ ] 3.1 Screen Opacity, Brightness, Contrast, R/G/B and slice Brightness, Contrast, R/G/B controls in the mapping window
+- [x] 3.1 Screen Opacity, Brightness, Contrast, R/G/B and slice Brightness, Contrast, R/G/B controls in the mapping window
 
 ## 4. One output window per screen
 
