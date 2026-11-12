@@ -353,6 +353,8 @@ fn main() -> Result<()> {
         map_on!(on_toggle_invert, |a| a.map_toggle_invert());
         map_on!(on_layer_toggled, |a, i: i32| a.map_layer_toggled(i));
         map_on!(on_toggle_test_card, |a| a.toggle_test_card());
+        map_on!(on_toggle_outlines, |a| a.map_toggle_outlines());
+        map_on!(on_color_changed, |a, slice: bool, c: i32, v: f32| a.map_color(slice, c, v));
         {
             let (app, w, o) = (app.clone(), w.clone(), o.clone());
             mw.on_import_preset(move || {

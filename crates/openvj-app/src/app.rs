@@ -845,8 +845,8 @@ impl App {
 
     /// Pushes whatever changed since the last call to the UI.
     pub fn sync(&mut self, ui: &MainWindow, out: &OutputWindow) {
-        if self.mapping_window_open && (self.images_dirty || self.mapping_view_dirty) {
-            self.sync_mapping_window(self.images_dirty);
+        if self.mapping_view_dirty || (self.mapping_window_open && self.images_dirty) {
+            self.sync_mapping_window(self.images_dirty, out);
         }
         if self.images_dirty {
             self.images_dirty = false;

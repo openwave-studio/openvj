@@ -5,12 +5,19 @@ use std::path::{Path, PathBuf};
 
 use openvj_core::{Contour, Mask, OutputSetup, Point, PointMode, ScreenLayer, Slice, Warp, rect_quad};
 
-#[derive(Default)]
 pub struct Mapping {
     /// `None`: no mapping, the output window shows the whole composition.
     pub setup: Option<OutputSetup>,
     pub test_card: bool,
+    /// Draw slice outlines on the output while the mapping window is open.
+    pub outlines: bool,
     pub editor: Editor,
+}
+
+impl Default for Mapping {
+    fn default() -> Self {
+        Self { setup: None, test_card: false, outlines: true, editor: Editor::default() }
+    }
 }
 
 impl Mapping {
@@ -136,7 +143,32 @@ pub struct Editor {
 
 pub const CORNER_NAMES: [&str; 4] = ["Top left", "Top right", "Bottom right", "Bottom left"];
 
+/// The colour controls of a slice, then Opacity for a screen, as in Resolume.
+pub const COLOR_NAMES: [&str; 6] = ["Brightness", "Contrast", "Red", "Green", "Blue", "Opacity"];
+
+/// Colour controls as bars: (name, bar position 0 to 1, text). `opacity` adds Opacity.
+pub fn color_bars(trim: &openvj_core::ColorTrim, opacity: Option<f32>) -> Vec<(&'static str, f32, String)> {
+    let offset = |v: f32| ((v + 1.0) / 2.0, format!("{:+.0}%", v * 100.0));
+    let mut bars: Vec<_> = [trim.brightness, trim.contrast, trim.red, trim.green, trim.blue]
+        .into_iter()
+        .zip(COLOR_NAMES)
+        .map(|(v, n)| {
+            let (bar, text) = offset(v);
+            (n, bar, text)
+        })
+        .collect();
+    if let Some(o) = opacity {
+        bars.push((COLOR_NAMES[5], o, format!("{:.0}%", o * 100.0)));
+    }
+    bars
+}
+
 impl Editor {
+    /// The same editor looking at another stage.
+    pub fn at_stage(self, stage: Stage) -> Self {
+        Self { stage, ..self }
+    }
+
     /// The points the selected layer shows as handles at this stage: a slice's four corners
     /// (then, on the output stage, its warp grid points), or a screen mask's outline points
     /// (output stage only).
@@ -327,6 +359,40 @@ impl Editor {
             self.corner = 0; // The grid point it pointed at may be gone.
         }
         changed
+    }
+
+    /// Sets one colour control, from 0 to 1 as its bar shows it: of the selected slice (`slice`),
+    /// or of screen 1. Controls are [`COLOR_NAMES`] in order; Opacity is screen-only.
+    pub fn set_color(&mut self, setup: &mut OutputSetup, slice: bool, control: usize, bar: f32) -> bool {
+        let bar = bar.clamp(0.0, 1.0);
+        let (trim, opacity) = if slice {
+            match self.slice_mut(setup) {
+                Some(s) => (&mut s.color, None),
+                None => return false,
+            }
+        } else {
+            match setup.screens.first_mut() {
+                Some(s) => (&mut s.color, Some(&mut s.opacity)),
+                None => return false,
+            }
+        };
+        let field = match control {
+            0 => &mut trim.brightness,
+            1 => &mut trim.contrast,
+            2 => &mut trim.red,
+            3 => &mut trim.green,
+            4 => &mut trim.blue,
+            5 => match opacity {
+                Some(o) => {
+                    *o = bar;
+                    return true;
+                }
+                None => return false,
+            },
+            _ => return false,
+        };
+        *field = bar * 2.0 - 1.0;
+        true
     }
 
     /// Switches the selected slice's grid between straight lines and a bezier net.
@@ -682,6 +748,25 @@ mod tests {
         e.reset(&mut s);
         let w = slice(&s).warp;
         assert!(w.is_identity() && w.cols == 3 && w.mode == PointMode::Bezier);
+    }
+
+    #[test]
+    fn colour_bars_set_screen_and_slice() {
+        let mut s = setup();
+        let mut e = Editor::default();
+        // No slice selected: the screen's controls, with Opacity.
+        assert!(!e.set_color(&mut s, true, 0, 1.0));
+        assert!(e.set_color(&mut s, false, 4, 0.25));
+        assert!(e.set_color(&mut s, false, 5, 0.5));
+        assert_eq!((s.screens[0].color.blue, s.screens[0].opacity), (-0.5, 0.5));
+        e.selected = Some(0);
+        assert!(e.set_color(&mut s, true, 0, 0.75));
+        assert!(!e.set_color(&mut s, true, 5, 0.0), "slices have no opacity");
+        let ScreenLayer::Slice(sl) = &s.screens[0].layers[0] else { unreachable!() };
+        assert_eq!(sl.color.brightness, 0.5);
+        let bars = color_bars(&sl.color, None);
+        assert_eq!(bars.len(), 5);
+        assert_eq!((bars[0].1, bars[0].2.as_str()), (0.75, "+50%"));
     }
 
     #[test]

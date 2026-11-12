@@ -6,8 +6,8 @@ use openvj_core::{OutputSetup, PointMode, ScreenLayer};
 use slint::{ComponentHandle, Image, ModelRc, VecModel};
 
 use super::App;
-use crate::mapping::{CORNER_NAMES, Stage, grid_handles, grid_lines, path_commands, polyline_commands};
-use crate::{MapCorner, MapHandle, MapLayer, MappingWindow};
+use crate::mapping::{CORNER_NAMES, Stage, color_bars, grid_handles, grid_lines, path_commands, polyline_commands};
+use crate::{MapColor, MapCorner, MapHandle, MapLayer, MappingWindow, OutputWindow};
 
 /// How close to a corner a press grabs it, as a share of the canvas's longer side.
 const REACH: f32 = 0.015;
@@ -126,6 +126,53 @@ impl App {
         self.edit_mapping(true, |e, s| e.set_point_mode(s, mode));
     }
 
+    /// A colour bar moved: `slice` true for the selected slice, false for the screen.
+    pub fn map_color(&mut self, slice: bool, control: i32, bar: f32) {
+        self.edit_mapping(true, |e, s| e.set_color(s, slice, control.max(0) as usize, bar));
+    }
+
+    pub fn map_toggle_outlines(&mut self) {
+        self.mapping.outlines = !self.mapping.outlines;
+        self.mapping_view_dirty = true;
+    }
+
+    /// Slice and mask outlines and the point being edited, on the output window, while the
+    /// mapping window is open (Resolume draws them on the output while you edit).
+    fn sync_output_outlines(&self, out: &OutputWindow) {
+        let ed = self.mapping.editor;
+        let screen = self.mapping.setup.as_ref().and_then(|s| s.screens.first());
+        let show = self.mapping_window_open && self.mapping.outlines;
+        let Some(screen) = screen.filter(|_| show) else {
+            out.set_outlines("".into());
+            out.set_show_point(false);
+            return;
+        };
+        let [w, h] = screen.size();
+        out.set_outline_w(w as f32);
+        out.set_outline_h(h as f32);
+        let out_ed = ed.at_stage(Stage::Output);
+        let mut paths = Vec::new();
+        for layer in &screen.layers {
+            let on = match layer {
+                ScreenLayer::Slice(s) => s.enabled,
+                ScreenLayer::Mask(m) => m.enabled,
+            };
+            if on {
+                paths.extend(out_ed.layer_outline(layer).iter().map(|o| path_commands(o)));
+            }
+        }
+        out.set_outlines(paths.join(" ").into());
+        let point = (ed.stage == Stage::Output)
+            .then(|| ed.selected.and_then(|i| screen.layers.get(i)))
+            .flatten()
+            .and_then(|l| ed.points(l).get(ed.corner).copied());
+        out.set_show_point(point.is_some());
+        if let Some([x, y]) = point {
+            out.set_point_x(x);
+            out.set_point_y(y);
+        }
+    }
+
     pub fn map_add_slice(&mut self) {
         self.edit_mapping(true, |e, s| e.add_slice(s));
     }
@@ -160,13 +207,15 @@ impl App {
     }
 
     /// Pushes the setup to the mapping window. `images`: fetch the canvas picture again.
-    pub(super) fn sync_mapping_window(&mut self, images: bool) {
+    pub(super) fn sync_mapping_window(&mut self, images: bool, out: &OutputWindow) {
         self.mapping_view_dirty = false;
+        self.sync_output_outlines(out);
         let Some(win) = self.mapping_ui.upgrade() else { return };
         let ed = self.mapping.editor;
         let stage = ed.stage;
         win.set_stage(if stage == Stage::Input { 0 } else { 1 });
         win.set_test_card(self.mapping.test_card);
+        win.set_outlines(self.mapping.outlines);
         let [cw, ch] = self.canvas_size();
         win.set_canvas_w(cw);
         win.set_canvas_h(ch);
@@ -184,6 +233,16 @@ impl App {
         win.set_screen_name(screen.map_or("Screen 1".into(), |s| s.name.clone()).into());
         win.set_screen_info(screen.map_or(String::new(), |s| format!("{}×{}", s.size()[0], s.size()[1])).into());
 
+        let bars = |trim, opacity| {
+            let rows: Vec<MapColor> = color_bars(trim, opacity)
+                .into_iter()
+                .map(|(name, value, text)| MapColor { name: name.into(), value, display: text.into() })
+                .collect();
+            ModelRc::from(Rc::new(VecModel::from(rows)))
+        };
+        if let Some(s) = screen {
+            win.set_screen_colors(bars(&s.color, Some(s.opacity)));
+        }
         let mut layers = Vec::new();
         let mut handles = Vec::new();
         let mut corners = Vec::new();
@@ -208,11 +267,15 @@ impl App {
                     None
                 }
                 ScreenLayer::Slice(s) if stage == Stage::Output => {
+                    win.set_slice_colors(bars(&s.color, None));
                     let lines = polyline_commands(&grid_lines(&s.warp));
                     grid = Some((s.warp.cols, s.warp.rows, s.warp.mode == PointMode::Bezier, lines));
                     Some(&s.warp)
                 }
-                ScreenLayer::Slice(_) => None,
+                ScreenLayer::Slice(s) => {
+                    win.set_slice_colors(bars(&s.color, None));
+                    None
+                }
             };
             let grid_index: Vec<usize> = warp.map(|w| grid_handles(w).collect()).unwrap_or_default();
             for (c, p) in ed.points(layer).iter().enumerate() {
