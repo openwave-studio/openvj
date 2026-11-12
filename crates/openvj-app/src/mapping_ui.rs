@@ -1,16 +1,65 @@
 //! The output mapping window: what it shows and what its controls do.
 
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use openvj_core::{OutputSetup, PointMode, ScreenLayer};
+use slint::winit_030::WinitWindowAccessor;
+use slint::winit_030::winit::window::{Fullscreen, Window as WinitWindow};
 use slint::{ComponentHandle, Image, ModelRc, VecModel};
 
 use super::App;
-use crate::mapping::{CORNER_NAMES, Stage, color_bars, grid_handles, grid_lines, path_commands, polyline_commands};
-use crate::{MapColor, MapCorner, MapHandle, MapLayer, MappingWindow, OutputWindow};
+use crate::mapping::{
+    CORNER_NAMES, Monitor, Stage, color_bars, find_monitor, grid_handles, grid_lines, path_commands, polyline_commands,
+};
+use crate::{MainWindow, MapColor, MapCorner, MapHandle, MapLayer, MapScreen, MappingWindow, OutputWindow};
 
 /// How close to a corner a press grabs it, as a share of the canvas's longer side.
 const REACH: f32 = 0.015;
+
+/// How often to look for displays being connected or removed.
+const MONITOR_POLL: Duration = Duration::from_secs(2);
+
+/// The output windows of screens 2 and up (screen 1 uses the main output window).
+#[derive(Default)]
+pub struct ScreenOutputs {
+    windows: Vec<OutputWindow>,
+    /// Per window (screen 1 first): the display it was last put on, once placed.
+    placed: Vec<Option<Option<usize>>>,
+    polled: Option<Instant>,
+    /// Set when the VJ closes one of these windows: all output windows close, as when closing
+    /// the main one.
+    close: Rc<std::cell::Cell<bool>>,
+}
+
+fn list_monitors(w: &WinitWindow) -> Vec<Monitor> {
+    w.available_monitors()
+        .map(|m| Monitor { name: m.name().unwrap_or_default(), size: [m.size().width, m.size().height] })
+        .collect()
+}
+
+/// An output window for an extra screen: F or a double-click toggles fullscreen, Esc leaves it.
+fn new_output_window(close: Rc<std::cell::Cell<bool>>) -> Result<OutputWindow, slint::PlatformError> {
+    let win = OutputWindow::new()?;
+    let weak = win.as_weak();
+    win.on_toggle_fullscreen(move || {
+        if let Some(w) = weak.upgrade() {
+            let fs = w.window().is_fullscreen();
+            w.window().set_fullscreen(!fs);
+        }
+    });
+    let weak = win.as_weak();
+    win.on_exit_fullscreen(move || {
+        if let Some(w) = weak.upgrade() {
+            w.window().set_fullscreen(false);
+        }
+    });
+    win.window().on_close_requested(move || {
+        close.set(true);
+        slint::CloseRequestResponse::KeepWindowShown
+    });
+    Ok(win)
+}
 
 impl App {
     pub fn attach_mapping(&mut self, win: &MappingWindow) {
@@ -64,7 +113,7 @@ impl App {
         match self.mapping.editor.stage {
             Stage::Input => [self.comp.width as f32, self.comp.height as f32],
             Stage::Output => setup
-                .and_then(|s| s.screens.first())
+                .and_then(|s| s.screens.get(self.mapping.editor.screen))
                 .map_or([self.comp.width as f32, self.comp.height as f32], |s| s.size().map(|v| v as f32)),
         }
     }
@@ -136,15 +185,18 @@ impl App {
         self.mapping_view_dirty = true;
     }
 
-    /// Slice and mask outlines and the point being edited, on the output window, while the
-    /// mapping window is open (Resolume draws them on the output while you edit).
-    fn sync_output_outlines(&self, out: &OutputWindow) {
+    /// Slice and mask outlines and the point being edited, on the window showing screen `index`,
+    /// while the mapping window is open and editing that screen (Resolume draws them on the
+    /// output while you edit).
+    fn apply_outlines(&self, out: &OutputWindow, index: usize) {
         let ed = self.mapping.editor;
-        let screen = self.mapping.setup.as_ref().and_then(|s| s.screens.first());
-        let show = self.mapping_window_open && self.mapping.outlines;
+        let show = self.mapping_window_open && self.mapping.outlines && ed.screen == index;
+        let screen = self.mapping.setup.as_ref().and_then(|s| s.screens.get(index));
         let Some(screen) = screen.filter(|_| show) else {
-            out.set_outlines("".into());
-            out.set_show_point(false);
+            if !out.get_outlines().is_empty() || out.get_show_point() {
+                out.set_outlines("".into());
+                out.set_show_point(false);
+            }
             return;
         };
         let [w, h] = screen.size();
@@ -161,7 +213,10 @@ impl App {
                 paths.extend(out_ed.layer_outline(layer).iter().map(|o| path_commands(o)));
             }
         }
-        out.set_outlines(paths.join(" ").into());
+        let paths = paths.join(" ");
+        if out.get_outlines() != paths.as_str() {
+            out.set_outlines(paths.into());
+        }
         let point = (ed.stage == Stage::Output)
             .then(|| ed.selected.and_then(|i| screen.layers.get(i)))
             .flatten()
@@ -171,6 +226,128 @@ impl App {
             out.set_point_x(x);
             out.set_point_y(y);
         }
+    }
+
+    /// Keeps one output window per screen: `out` shows screen 1 and `outs` the rest. Each goes
+    /// fullscreen on its screen's display when that display is connected, else stays a window.
+    /// Call once per frame, after [`App::frame`].
+    pub fn sync_screen_outputs(&mut self, ui: &MainWindow, out: &OutputWindow, outs: &mut ScreenOutputs) {
+        if outs.polled.is_none_or(|t| t.elapsed() >= MONITOR_POLL) {
+            outs.polled = Some(Instant::now());
+            let monitors = ui.window().with_winit_window(list_monitors).unwrap_or_default();
+            if monitors != self.mapping.monitors {
+                self.mapping.monitors = monitors;
+                outs.placed.clear(); // Place every window again.
+                self.mapping_view_dirty = true;
+            }
+        }
+        if outs.close.take() && self.output_open {
+            out.window().set_fullscreen(false);
+            let _ = out.hide();
+            self.output_shown(false);
+        }
+        let screens = self.mapping.setup.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+        let extra = screens.len().saturating_sub(1);
+        while outs.windows.len() < extra {
+            match new_output_window(outs.close.clone()) {
+                Ok(w) => outs.windows.push(w),
+                Err(e) => {
+                    eprintln!("openVJ: could not open an output window: {e}");
+                    break;
+                }
+            }
+        }
+        outs.placed.resize(outs.windows.len() + 1, None);
+        for (i, win) in outs.windows.iter().enumerate() {
+            let screen = screens.get(i + 1);
+            let show = self.output_open && screen.is_some_and(|s| s.enabled);
+            if !show {
+                if win.window().is_visible() {
+                    win.window().set_fullscreen(false);
+                    let _ = win.hide();
+                }
+                outs.placed[i + 1] = None;
+                continue;
+            }
+            if !win.window().is_visible() {
+                let _ = win.show();
+            }
+            let name = screen.map(|s| s.name.as_str()).unwrap_or_default();
+            if win.get_screen_name() != name {
+                win.set_screen_name(name.into());
+            }
+            if let Some(t) = self.engine.screen(i + 1) {
+                win.set_frame(Image::try_from(t.texture.clone()).expect("screen texture is importable"));
+            }
+            self.apply_outlines(win, i + 1);
+            win.window().request_redraw();
+        }
+        if self.output_open {
+            if let Some(s) = screens.first() {
+                let name = s.name.as_str();
+                if out.get_screen_name() != name {
+                    out.set_screen_name(name.into());
+                }
+            }
+            self.apply_outlines(out, 0);
+        } else {
+            outs.placed[0] = None;
+        }
+        // Fullscreen on the chosen display.
+        let all = std::iter::once(out).chain(outs.windows.iter());
+        for (i, (win, screen)) in all.zip(screens).enumerate() {
+            if !win.window().is_visible() {
+                continue;
+            }
+            let want = find_monitor(&screen.device, &self.mapping.monitors);
+            if outs.placed[i] == Some(want) {
+                continue;
+            }
+            let placed = win.window().with_winit_window(|w| {
+                match want.and_then(|m| w.available_monitors().nth(m)) {
+                    Some(m) => w.set_fullscreen(Some(Fullscreen::Borderless(Some(m)))),
+                    // Display gone or none chosen: leave fullscreen if we put it there.
+                    None if outs.placed[i].flatten().is_some() => w.set_fullscreen(None),
+                    None => {}
+                }
+            });
+            if placed.is_some() {
+                outs.placed[i] = Some(want);
+            }
+        }
+    }
+
+    pub fn map_screen_picked(&mut self, i: i32) {
+        self.edit_mapping(false, |e, s| e.pick_screen(s, i.max(0) as usize));
+        self.images_dirty = true;
+    }
+
+    pub fn map_screen_toggled(&mut self, i: i32) {
+        self.edit_mapping(true, |e, s| e.toggle_screen(s, i.max(0) as usize));
+    }
+
+    pub fn map_add_screen(&mut self) {
+        self.edit_mapping(true, |e, s| e.add_screen(s));
+        self.images_dirty = true;
+    }
+
+    pub fn map_remove_screen(&mut self) {
+        self.edit_mapping(true, |e, s| e.remove_screen(s));
+        self.images_dirty = true;
+    }
+
+    pub fn map_rename_screen(&mut self, name: &str) {
+        self.edit_mapping(true, |e, s| e.rename_screen(s, name));
+    }
+
+    /// 0: a window; n: the nth connected display.
+    pub fn map_display_picked(&mut self, choice: i32) {
+        if choice < 0 || choice as usize > self.mapping.monitors.len() {
+            return; // The "not connected" entry: keep the display it names.
+        }
+        let monitor = usize::try_from(choice - 1).ok().and_then(|i| self.mapping.monitors.get(i)).cloned();
+        self.edit_mapping(true, |e, s| e.set_display(s, monitor.as_ref()));
+        self.images_dirty = true;
     }
 
     pub fn map_add_slice(&mut self) {
@@ -207,9 +384,8 @@ impl App {
     }
 
     /// Pushes the setup to the mapping window. `images`: fetch the canvas picture again.
-    pub(super) fn sync_mapping_window(&mut self, images: bool, out: &OutputWindow) {
+    pub(super) fn sync_mapping_window(&mut self, images: bool) {
         self.mapping_view_dirty = false;
-        self.sync_output_outlines(out);
         let Some(win) = self.mapping_ui.upgrade() else { return };
         let ed = self.mapping.editor;
         let stage = ed.stage;
@@ -222,16 +398,51 @@ impl App {
         if images {
             let target = match stage {
                 Stage::Input => Some(self.engine.output()),
-                Stage::Output => self.engine.screen(0),
+                Stage::Output => self.engine.screen(ed.screen),
             };
             if let Some(t) = target {
                 win.set_picture(Image::try_from(t.texture.clone()).expect("texture is importable"));
             }
         }
 
-        let screen = self.mapping.setup.as_ref().and_then(|s| s.screens.first());
+        let screens = self.mapping.setup.as_ref().map(|s| s.screens.as_slice()).unwrap_or_default();
+        let monitors = &self.mapping.monitors;
+        let rows: Vec<MapScreen> = screens
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let [w, h] = s.size();
+                let place = match (find_monitor(&s.device, monitors), &s.device.kind) {
+                    (Some(m), _) => format!("Display {}", m + 1),
+                    (None, openvj_core::DeviceKind::Display) => "not connected".into(),
+                    _ => "window".into(),
+                };
+                MapScreen {
+                    name: s.name.clone().into(),
+                    info: format!("{w}×{h} · {place}").into(),
+                    enabled: s.enabled,
+                    selected: i == ed.screen,
+                }
+            })
+            .collect();
+        win.set_screens(ModelRc::from(Rc::new(VecModel::from(rows))));
+        let screen = screens.get(ed.screen);
         win.set_screen_name(screen.map_or("Screen 1".into(), |s| s.name.clone()).into());
-        win.set_screen_info(screen.map_or(String::new(), |s| format!("{}×{}", s.size()[0], s.size()[1])).into());
+        win.set_can_remove_screen(screens.len() > 1);
+        let mut displays = vec![slint::SharedString::from("Window")];
+        displays.extend(
+            monitors
+                .iter()
+                .enumerate()
+                .map(|(i, m)| format!("Display {}: {} ({}×{})", i + 1, m.name, m.size[0], m.size[1]).into()),
+        );
+        let chosen = screen.and_then(|s| find_monitor(&s.device, monitors)).map_or(0, |m| m as i32 + 1);
+        if let Some(s) = screen.filter(|s| s.device.kind == openvj_core::DeviceKind::Display && chosen == 0) {
+            displays.push(format!("{} (not connected)", s.device.name).into());
+        }
+        let missing = displays.len() > monitors.len() + 1;
+        win.set_displays(ModelRc::from(Rc::new(VecModel::from(displays))));
+        win.set_display_index(if missing { monitors.len() as i32 + 1 } else { chosen });
 
         let bars = |trim, opacity| {
             let rows: Vec<MapColor> = color_bars(trim, opacity)

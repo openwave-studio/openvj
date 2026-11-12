@@ -27,7 +27,7 @@ openvj-resolume.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 wgpu.workspace = true
-slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "compat-1-2", "unstable-wgpu-30", "accessibility"] }
+slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "compat-1-2", "unstable-wgpu-30", "unstable-winit-030", "accessibility"] }
 pollster = "0.4"
 rfd = "0.17"
 midir = "0.11"

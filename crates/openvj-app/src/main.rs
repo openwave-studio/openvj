@@ -354,6 +354,12 @@ fn main() -> Result<()> {
         map_on!(on_layer_toggled, |a, i: i32| a.map_layer_toggled(i));
         map_on!(on_toggle_test_card, |a| a.toggle_test_card());
         map_on!(on_toggle_outlines, |a| a.map_toggle_outlines());
+        map_on!(on_screen_picked, |a, i: i32| a.map_screen_picked(i));
+        map_on!(on_screen_toggled, |a, i: i32| a.map_screen_toggled(i));
+        map_on!(on_add_screen, |a| a.map_add_screen());
+        map_on!(on_remove_screen, |a| a.map_remove_screen());
+        map_on!(on_screen_renamed, |a, t: slint::SharedString| a.map_rename_screen(&t));
+        map_on!(on_display_picked, |a, i: i32| a.map_display_picked(i));
         map_on!(on_color_changed, |a, slice: bool, c: i32, v: f32| a.map_color(slice, c, v));
         {
             let (app, w, o) = (app.clone(), w.clone(), o.clone());
@@ -379,10 +385,12 @@ fn main() -> Result<()> {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
         let snapshot = std::env::var_os("OPENVJ_SNAPSHOT").map(PathBuf::from);
         let mut frame_count = 0u32;
+        let mut screen_outputs = app::ScreenOutputs::default();
         timer.start(TimerMode::Repeated, Duration::from_millis(16), move || {
             let (Some(ui), Some(out)) = (w.upgrade(), o.upgrade()) else { return };
             if let Ok(mut a) = app.try_borrow_mut() {
                 a.frame(&ui, &out);
+                a.sync_screen_outputs(&ui, &out, &mut screen_outputs);
             }
             frame_count += 1;
             // Debug aid: OPENVJ_SNAPSHOT=out.png saves a screenshot of the window after ~2 s and quits.

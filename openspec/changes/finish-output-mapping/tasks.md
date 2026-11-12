@@ -15,11 +15,11 @@
 
 ## 4. One output window per screen
 
-- [ ] 4.1 Model: display choice per screen (name + id), loading old `output-mapping.json` files
-- [ ] 4.2 Render every enabled screen to its own target (today only the first)
-- [ ] 4.3 Open, close and title one output window per enabled screen; fullscreen on the chosen display, fall back to a normal window when it's missing
-- [ ] 4.4 Mapping window: screen list (add, rename, enable, remove, select) and display menu; editor works on the selected screen
-- [ ] 4.5 Tests: two-screen import shows both screens; old setup file loads
+- [x] 4.1 Display choice per screen, stored in the screen's existing output device (old `output-mapping.json` files load unchanged); Resolume's "Display N" names find the Nth display
+- [x] 4.2 Render every enabled screen to its own target (already the case)
+- [x] 4.3 Open, close and title one output window per enabled screen; fullscreen on the chosen display, fall back to a normal window when it's missing
+- [x] 4.4 Mapping window: screen list (add, rename, enable, remove, select) and display menu; editor works on the selected screen
+- [x] 4.5 Tests: add, edit, rename, disable and remove screens; display choice and lookup
 
 ## 5. Soft edge
 

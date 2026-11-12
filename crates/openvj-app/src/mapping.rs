@@ -3,11 +3,15 @@
 
 use std::path::{Path, PathBuf};
 
-use openvj_core::{Contour, Mask, OutputSetup, Point, PointMode, ScreenLayer, Slice, Warp, rect_quad};
+use openvj_core::{
+    Contour, DeviceKind, Mask, OutputDevice, OutputSetup, Point, PointMode, ScreenLayer, Slice, Warp, rect_quad,
+};
 
 pub struct Mapping {
     /// `None`: no mapping, the output window shows the whole composition.
     pub setup: Option<OutputSetup>,
+    /// The displays connected now, in the order the system lists them.
+    pub monitors: Vec<Monitor>,
     pub test_card: bool,
     /// Draw slice outlines on the output while the mapping window is open.
     pub outlines: bool,
@@ -16,7 +20,7 @@ pub struct Mapping {
 
 impl Default for Mapping {
     fn default() -> Self {
-        Self { setup: None, test_card: false, outlines: true, editor: Editor::default() }
+        Self { setup: None, monitors: Vec::new(), test_card: false, outlines: true, editor: Editor::default() }
     }
 }
 
@@ -39,7 +43,7 @@ impl Mapping {
         }
         let msg = format!("Mapping \"{}\" imported: {}.", imported.setup.name, summary(&imported.setup));
         self.setup = Some(imported.setup);
-        self.editor.selected = None;
+        self.editor = Editor { stage: self.editor.stage, ..Editor::default() };
         self.save();
         Ok(msg)
     }
@@ -48,7 +52,7 @@ impl Mapping {
     pub fn clear(&mut self) {
         self.setup = None;
         self.test_card = false;
-        self.editor.selected = None;
+        self.editor = Editor { stage: self.editor.stage, ..Editor::default() };
         self.save();
     }
 
@@ -89,11 +93,7 @@ fn summary(s: &OutputSetup) -> String {
         }
     }
     let n = |k: usize, one: &str| format!("{k} {one}{}", if k == 1 { "" } else { "s" });
-    let mut text = format!("{}, {}, {}", n(screens, "screen"), n(slices, "slice"), n(masks, "mask"));
-    if screens > 1 {
-        text.push_str(" (the output window shows the first screen)");
-    }
-    text
+    format!("{}, {}, {}", n(screens, "screen"), n(slices, "slice"), n(masks, "mask"))
 }
 
 /// `output-mapping.json` in openVJ's settings folder.
@@ -110,6 +110,25 @@ fn settings_file() -> Option<PathBuf> {
             .join("openvj")
     };
     Some(dir.join("output-mapping.json"))
+}
+
+/// A display connected to the computer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Monitor {
+    pub name: String,
+    pub size: [u32; 2],
+}
+
+/// The connected display a screen goes to: the one with its device's name, or for Resolume's
+/// "Display N" names, the Nth display. `None` for virtual screens and missing displays.
+pub fn find_monitor(device: &OutputDevice, monitors: &[Monitor]) -> Option<usize> {
+    if device.kind != DeviceKind::Display {
+        return None;
+    }
+    monitors.iter().position(|m| m.name == device.name).or_else(|| {
+        let n: usize = device.name.strip_prefix("Display ")?.trim().parse().ok()?;
+        (1..=monitors.len()).contains(&n).then(|| n - 1)
+    })
 }
 
 // ---------------------------------------------------------------- editing
@@ -130,11 +149,13 @@ enum Drag {
     Move { last: Point },
 }
 
-/// What the mapping window is editing: always screen 1 of the setup for now.
+/// What the mapping window is editing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Editor {
     pub stage: Stage,
-    /// Index into screen 1's layers.
+    /// Index into the setup's screens.
+    pub screen: usize,
+    /// Index into the screen's layers; `None` edits the screen itself.
     pub selected: Option<usize>,
     /// The corner the arrow keys move, 0 to 3 clockwise from top left.
     pub corner: usize,
@@ -185,12 +206,12 @@ impl Editor {
         }
     }
 
-    /// The selected layer of screen 1.
+    /// The selected layer of the screen being edited.
     fn layer_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut ScreenLayer> {
-        setup.screens.first_mut()?.layers.get_mut(self.selected?)
+        setup.screens.get_mut(self.screen)?.layers.get_mut(self.selected?)
     }
 
-    /// The selected slice of screen 1, if a slice is selected.
+    /// The selected slice of the screen being edited, if a slice is selected.
     pub fn slice_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut Slice> {
         match self.layer_mut(setup)? {
             ScreenLayer::Slice(s) => Some(s),
@@ -236,7 +257,10 @@ impl Editor {
     }
 
     fn selected_points(&self, setup: &OutputSetup) -> Vec<Point> {
-        self.selected.and_then(|i| setup.screens.first()?.layers.get(i)).map(|l| self.points(l)).unwrap_or_default()
+        self.selected
+            .and_then(|i| setup.screens.get(self.screen)?.layers.get(i))
+            .map(|l| self.points(l))
+            .unwrap_or_default()
     }
 
     /// The outline of a layer on the canvas at this stage (empty for masks on the input stage).
@@ -278,7 +302,7 @@ impl Editor {
             self.drag = Some(Drag::Corner(i));
             return true;
         }
-        let Some(screen) = setup.screens.first() else { return false };
+        let Some(screen) = setup.screens.get(self.screen) else { return false };
         let enabled = |l: &ScreenLayer| match l {
             ScreenLayer::Slice(s) => s.enabled,
             ScreenLayer::Mask(m) => m.enabled,
@@ -339,7 +363,8 @@ impl Editor {
         let [w, h] = setup.composition_size;
         let stage = self.stage;
         let Some(i) = self.selected else { return false };
-        let Some(ScreenLayer::Slice(slice)) = setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) else {
+        let Some(ScreenLayer::Slice(slice)) = setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i))
+        else {
             return false;
         };
         match stage {
@@ -362,7 +387,7 @@ impl Editor {
     }
 
     /// Sets one colour control, from 0 to 1 as its bar shows it: of the selected slice (`slice`),
-    /// or of screen 1. Controls are [`COLOR_NAMES`] in order; Opacity is screen-only.
+    /// or of the screen. Controls are [`COLOR_NAMES`] in order; Opacity is screen-only.
     pub fn set_color(&mut self, setup: &mut OutputSetup, slice: bool, control: usize, bar: f32) -> bool {
         let bar = bar.clamp(0.0, 1.0);
         let (trim, opacity) = if slice {
@@ -371,7 +396,7 @@ impl Editor {
                 None => return false,
             }
         } else {
-            match setup.screens.first_mut() {
+            match setup.screens.get_mut(self.screen) {
                 Some(s) => (&mut s.color, Some(&mut s.opacity)),
                 None => return false,
             }
@@ -403,6 +428,97 @@ impl Editor {
         changed
     }
 
+    /// Edits screen `i` (its layers, colour and display).
+    pub fn pick_screen(&mut self, setup: &OutputSetup, i: usize) -> bool {
+        if i >= setup.screens.len() {
+            return false;
+        }
+        if self.screen != i {
+            (self.screen, self.selected, self.corner, self.drag) = (i, None, 0, None);
+        }
+        true
+    }
+
+    /// Adds a screen with one slice showing the whole composition, sized like the screen being
+    /// edited, and edits it. New screens open in a window until they get a display.
+    pub fn add_screen(&mut self, setup: &mut OutputSetup) -> bool {
+        let [cw, ch] = setup.composition_size;
+        let [w, h] = setup.screens.get(self.screen).map_or([cw, ch], |s| s.size());
+        let id = setup.screens.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+        let n = setup.screens.len() + 1;
+        let mut screen = OutputSetup::passthrough(cw, ch).screens.remove(0);
+        screen.id = id;
+        screen.name = format!("Screen {n}");
+        screen.device = OutputDevice {
+            kind: DeviceKind::Virtual,
+            name: screen.name.clone(),
+            id: String::new(),
+            width: w,
+            height: h,
+        };
+        if let Some(ScreenLayer::Slice(slice)) = screen.layers.first_mut() {
+            *slice = Slice::new(
+                1,
+                "Slice 1",
+                rect_quad(0.0, 0.0, cw as f32, ch as f32),
+                rect_quad(0.0, 0.0, w as f32, h as f32),
+            );
+        }
+        setup.screens.push(screen);
+        (self.screen, self.selected, self.corner) = (setup.screens.len() - 1, None, 0);
+        true
+    }
+
+    /// Removes the screen being edited, keeping at least one.
+    pub fn remove_screen(&mut self, setup: &mut OutputSetup) -> bool {
+        if setup.screens.len() < 2 || self.screen >= setup.screens.len() {
+            return false;
+        }
+        setup.screens.remove(self.screen);
+        (self.screen, self.selected, self.corner) = (self.screen.saturating_sub(1), None, 0);
+        true
+    }
+
+    pub fn rename_screen(&mut self, setup: &mut OutputSetup, name: &str) -> bool {
+        let name = name.trim();
+        match setup.screens.get_mut(self.screen).filter(|_| !name.is_empty()) {
+            Some(s) => {
+                s.name = name.into();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn toggle_screen(&mut self, setup: &mut OutputSetup, i: usize) -> bool {
+        match setup.screens.get_mut(i) {
+            Some(s) => {
+                s.enabled = !s.enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sends the screen being edited to a display (its size becomes the display's), or back to a
+    /// window (`None`), like a Resolume screen's Output Device menu.
+    pub fn set_display(&mut self, setup: &mut OutputSetup, display: Option<&Monitor>) -> bool {
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
+        let device = match display {
+            Some(m) => OutputDevice {
+                kind: DeviceKind::Display,
+                name: m.name.clone(),
+                id: String::new(),
+                width: m.size[0],
+                height: m.size[1],
+            },
+            None => OutputDevice { kind: DeviceKind::Virtual, name: screen.name.clone(), ..screen.device.clone() },
+        };
+        let changed = screen.device != device;
+        screen.device = device;
+        changed
+    }
+
     fn next_id(screen: &openvj_core::Screen) -> u64 {
         screen
             .layers
@@ -419,7 +535,7 @@ impl Editor {
     /// Adds a slice showing the whole composition over the whole screen, and selects it.
     pub fn add_slice(&mut self, setup: &mut OutputSetup) -> bool {
         let [cw, ch] = setup.composition_size;
-        let Some(screen) = setup.screens.first_mut() else { return false };
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
         let id = Self::next_id(screen);
         let n = screen.slices().count() + 1;
         let [sw, sh] = screen.size();
@@ -438,7 +554,7 @@ impl Editor {
     /// Adds a rectangular mask over the middle of the screen, inverted as Resolume's are by default
     /// (it shows its inside), and selects it on the output stage.
     pub fn add_mask(&mut self, setup: &mut OutputSetup) -> bool {
-        let Some(screen) = setup.screens.first_mut() else { return false };
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
         let id = Self::next_id(screen);
         let n = screen.masks().count() + 1;
         let [w, h] = screen.size().map(|v| v as f32);
@@ -459,7 +575,7 @@ impl Editor {
     /// Inserts a point halfway between the selected mask's current point and the next one.
     pub fn add_mask_point(&mut self, setup: &mut OutputSetup) -> bool {
         let Some(i) = self.selected else { return false };
-        let Some(ScreenLayer::Mask(mask)) = setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) else {
+        let Some(ScreenLayer::Mask(mask)) = setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) else {
             return false;
         };
         let Some(c) = mask.contours.first_mut() else { return false };
@@ -480,7 +596,7 @@ impl Editor {
     /// hiding it.
     pub fn toggle_invert(&mut self, setup: &mut OutputSetup) -> bool {
         let Some(i) = self.selected else { return false };
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Mask(m)) => {
                 m.invert = !m.invert;
                 true
@@ -491,7 +607,7 @@ impl Editor {
 
     /// Turns the selected slice or mask on or off.
     pub fn toggle_enabled(&mut self, setup: &mut OutputSetup, i: usize) -> bool {
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Slice(s)) => s.enabled = !s.enabled,
             Some(ScreenLayer::Mask(m)) => m.enabled = !m.enabled,
             None => return false,
@@ -502,7 +618,7 @@ impl Editor {
     pub fn rename_selected(&mut self, setup: &mut OutputSetup, name: &str) -> bool {
         let name = name.trim();
         let Some(i) = self.selected.filter(|_| !name.is_empty()) else { return false };
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Slice(s)) => s.name = name.into(),
             Some(ScreenLayer::Mask(m)) => m.name = name.into(),
             None => return false,
@@ -512,7 +628,7 @@ impl Editor {
 
     /// Moves the selected layer up (-1) or down (+1) the list; later layers draw on top.
     pub fn move_selected(&mut self, setup: &mut OutputSetup, delta: i32) -> bool {
-        let (Some(i), Some(screen)) = (self.selected, setup.screens.first_mut()) else { return false };
+        let (Some(i), Some(screen)) = (self.selected, setup.screens.get_mut(self.screen)) else { return false };
         let j = i as i64 + delta as i64;
         if j < 0 || j as usize >= screen.layers.len() {
             return false;
@@ -523,7 +639,7 @@ impl Editor {
     }
 
     pub fn remove_selected(&mut self, setup: &mut OutputSetup) -> bool {
-        let (Some(i), Some(screen)) = (self.selected, setup.screens.first_mut()) else { return false };
+        let (Some(i), Some(screen)) = (self.selected, setup.screens.get_mut(self.screen)) else { return false };
         if i >= screen.layers.len() {
             return false;
         }
@@ -767,6 +883,44 @@ mod tests {
         let bars = color_bars(&sl.color, None);
         assert_eq!(bars.len(), 5);
         assert_eq!((bars[0].1, bars[0].2.as_str()), (0.75, "+50%"));
+    }
+
+    #[test]
+    fn screens_and_displays() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(!e.remove_screen(&mut s), "keeps one screen");
+        assert!(e.add_screen(&mut s));
+        assert_eq!((e.screen, e.selected, s.screens.len()), (1, None, 2));
+        assert_eq!(s.screens[1].name, "Screen 2");
+        assert_eq!(s.screens[1].slices().count(), 1);
+        // Edits go to the screen being edited.
+        e.selected = Some(0);
+        e.set_corner(&mut s, 0, 0, 50.0);
+        assert_eq!(dst(&s)[0], [0.0, 0.0], "screen 1 untouched");
+        let monitors = [
+            Monitor { name: "Built-in".into(), size: [3024, 1964] },
+            Monitor { name: "BenQ".into(), size: [1280, 800] },
+        ];
+        assert!(e.set_display(&mut s, Some(&monitors[1])));
+        assert_eq!(s.screens[1].size(), [1280, 800]);
+        assert_eq!(find_monitor(&s.screens[1].device, &monitors), Some(1));
+        // Resolume's numbered display names find the Nth display.
+        let resolume = OutputDevice {
+            kind: DeviceKind::Display,
+            name: "Display 2".into(),
+            id: String::new(),
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(find_monitor(&resolume, &monitors), Some(1));
+        assert_eq!(find_monitor(&OutputDevice { name: "Display 3".into(), ..resolume.clone() }, &monitors), None);
+        assert!(e.set_display(&mut s, None));
+        assert_eq!(find_monitor(&s.screens[1].device, &monitors), None);
+        assert!(e.rename_screen(&mut s, "Left"));
+        assert!(e.toggle_screen(&mut s, 1) && !s.screens[1].enabled);
+        assert!(e.remove_screen(&mut s));
+        assert_eq!((e.screen, s.screens.len()), (0, 1));
     }
 
     #[test]

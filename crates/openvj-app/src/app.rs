@@ -35,6 +35,7 @@ use crate::{
 // The output mapping window's side of the app.
 #[path = "mapping_ui.rs"]
 mod mapping_ui;
+pub use mapping_ui::ScreenOutputs;
 
 const _: () = assert!(BAND_COUNT == openvj_audio::BAND_COUNT, "core and audio band counts differ");
 
@@ -845,8 +846,8 @@ impl App {
 
     /// Pushes whatever changed since the last call to the UI.
     pub fn sync(&mut self, ui: &MainWindow, out: &OutputWindow) {
-        if self.mapping_view_dirty || (self.mapping_window_open && self.images_dirty) {
-            self.sync_mapping_window(self.images_dirty, out);
+        if self.mapping_window_open && (self.images_dirty || self.mapping_view_dirty) {
+            self.sync_mapping_window(self.images_dirty);
         }
         if self.images_dirty {
             self.images_dirty = false;
