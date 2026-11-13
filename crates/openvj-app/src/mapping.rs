@@ -3,14 +3,25 @@
 
 use std::path::{Path, PathBuf};
 
-use openvj_core::{Contour, Mask, OutputSetup, Point, Quad, ScreenLayer, Slice, rect_quad};
+use openvj_core::{
+    Contour, DeviceKind, Mask, OutputDevice, OutputSetup, Point, PointMode, ScreenLayer, Slice, Warp, rect_quad,
+};
 
-#[derive(Default)]
 pub struct Mapping {
     /// `None`: no mapping, the output window shows the whole composition.
     pub setup: Option<OutputSetup>,
+    /// The displays connected now, in the order the system lists them.
+    pub monitors: Vec<Monitor>,
     pub test_card: bool,
+    /// Draw slice outlines on the output while the mapping window is open.
+    pub outlines: bool,
     pub editor: Editor,
+}
+
+impl Default for Mapping {
+    fn default() -> Self {
+        Self { setup: None, monitors: Vec::new(), test_card: false, outlines: true, editor: Editor::default() }
+    }
 }
 
 impl Mapping {
@@ -32,7 +43,7 @@ impl Mapping {
         }
         let msg = format!("Mapping \"{}\" imported: {}.", imported.setup.name, summary(&imported.setup));
         self.setup = Some(imported.setup);
-        self.editor.selected = None;
+        self.editor = Editor { stage: self.editor.stage, ..Editor::default() };
         self.save();
         Ok(msg)
     }
@@ -41,7 +52,7 @@ impl Mapping {
     pub fn clear(&mut self) {
         self.setup = None;
         self.test_card = false;
-        self.editor.selected = None;
+        self.editor = Editor { stage: self.editor.stage, ..Editor::default() };
         self.save();
     }
 
@@ -82,11 +93,7 @@ fn summary(s: &OutputSetup) -> String {
         }
     }
     let n = |k: usize, one: &str| format!("{k} {one}{}", if k == 1 { "" } else { "s" });
-    let mut text = format!("{}, {}, {}", n(screens, "screen"), n(slices, "slice"), n(masks, "mask"));
-    if screens > 1 {
-        text.push_str(" (the output window shows the first screen)");
-    }
-    text
+    format!("{}, {}, {}", n(screens, "screen"), n(slices, "slice"), n(masks, "mask"))
 }
 
 /// `output-mapping.json` in openVJ's settings folder.
@@ -103,6 +110,25 @@ fn settings_file() -> Option<PathBuf> {
             .join("openvj")
     };
     Some(dir.join("output-mapping.json"))
+}
+
+/// A display connected to the computer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Monitor {
+    pub name: String,
+    pub size: [u32; 2],
+}
+
+/// The connected display a screen goes to: the one with its device's name, or for Resolume's
+/// "Display N" names, the Nth display. `None` for virtual screens and missing displays.
+pub fn find_monitor(device: &OutputDevice, monitors: &[Monitor]) -> Option<usize> {
+    if device.kind != DeviceKind::Display {
+        return None;
+    }
+    monitors.iter().position(|m| m.name == device.name).or_else(|| {
+        let n: usize = device.name.strip_prefix("Display ")?.trim().parse().ok()?;
+        (1..=monitors.len()).contains(&n).then(|| n - 1)
+    })
 }
 
 // ---------------------------------------------------------------- editing
@@ -123,11 +149,13 @@ enum Drag {
     Move { last: Point },
 }
 
-/// What the mapping window is editing: always screen 1 of the setup for now.
+/// What the mapping window is editing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Editor {
     pub stage: Stage,
-    /// Index into screen 1's layers.
+    /// Index into the setup's screens.
+    pub screen: usize,
+    /// Index into the screen's layers; `None` edits the screen itself.
     pub selected: Option<usize>,
     /// The corner the arrow keys move, 0 to 3 clockwise from top left.
     pub corner: usize,
@@ -136,33 +164,127 @@ pub struct Editor {
 
 pub const CORNER_NAMES: [&str; 4] = ["Top left", "Top right", "Bottom right", "Bottom left"];
 
+/// The colour controls of a slice, then Opacity for a screen, as in Resolume.
+pub const COLOR_NAMES: [&str; 6] = ["Brightness", "Contrast", "Red", "Green", "Blue", "Opacity"];
+
+/// The setup's soft-edge controls, as in Resolume's Soft Edge settings: name and range.
+pub const SOFT_EDGE: [(&str, f32, f32); 6] = [
+    ("Power", 0.1, 7.0),
+    ("Luminance", 0.0, 1.0),
+    ("Gamma", 0.0, 1.0),
+    ("Gamma red", 1.0, 3.0),
+    ("Gamma green", 1.0, 3.0),
+    ("Gamma blue", 1.0, 3.0),
+];
+
+fn soft_edge_values(setup: &OutputSetup) -> [f32; 6] {
+    let [r, g, b] = setup.soft_edge_gamma_rgb;
+    [setup.soft_edge_power, setup.soft_edge_luminance, setup.soft_edge_gamma, r, g, b]
+}
+
+/// The soft-edge controls as bars: (name, bar position 0 to 1, text).
+pub fn soft_edge_bars(setup: &OutputSetup) -> Vec<(&'static str, f32, String)> {
+    SOFT_EDGE
+        .iter()
+        .zip(soft_edge_values(setup))
+        .map(|(&(name, lo, hi), v)| (name, ((v - lo) / (hi - lo)).clamp(0.0, 1.0), format!("{v:.2}")))
+        .collect()
+}
+
+/// Colour controls as bars: (name, bar position 0 to 1, text). `opacity` adds Opacity.
+pub fn color_bars(trim: &openvj_core::ColorTrim, opacity: Option<f32>) -> Vec<(&'static str, f32, String)> {
+    let offset = |v: f32| ((v + 1.0) / 2.0, format!("{:+.0}%", v * 100.0));
+    let mut bars: Vec<_> = [trim.brightness, trim.contrast, trim.red, trim.green, trim.blue]
+        .into_iter()
+        .zip(COLOR_NAMES)
+        .map(|(v, n)| {
+            let (bar, text) = offset(v);
+            (n, bar, text)
+        })
+        .collect();
+    if let Some(o) = opacity {
+        bars.push((COLOR_NAMES[5], o, format!("{:.0}%", o * 100.0)));
+    }
+    bars
+}
+
 impl Editor {
-    /// The quad being edited for a slice at this stage.
-    pub fn quad(&self, slice: &Slice) -> Quad {
-        match self.stage {
-            Stage::Input => slice.input,
-            Stage::Output => slice.warp.dst,
-        }
+    /// The same editor looking at another stage.
+    pub fn at_stage(self, stage: Stage) -> Self {
+        Self { stage, ..self }
     }
 
-    /// The points the selected layer shows as handles at this stage: a slice's four corners, or a
-    /// screen mask's outline points (output stage only).
+    /// The points the selected layer shows as handles at this stage: a slice's four corners
+    /// (then, on the output stage, its warp grid points), or a screen mask's outline points
+    /// (output stage only).
     pub fn points(&self, layer: &ScreenLayer) -> Vec<Point> {
         match (layer, self.stage) {
-            (ScreenLayer::Slice(s), _) => self.quad(s).to_vec(),
+            (ScreenLayer::Slice(s), Stage::Input) => s.input.to_vec(),
+            (ScreenLayer::Slice(s), Stage::Output) => {
+                let mut pts = s.warp.dst.to_vec();
+                pts.extend(grid_handles(&s.warp).filter_map(|g| s.warp.screen_point(g)));
+                pts
+            }
             (ScreenLayer::Mask(m), Stage::Output) => m.contours.first().map(|c| c.points.clone()).unwrap_or_default(),
             (ScreenLayer::Mask(_), Stage::Input) => Vec::new(),
         }
     }
 
-    fn points_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut [Point]> {
-        let i = self.selected?;
-        match (setup.screens.first_mut()?.layers.get_mut(i)?, self.stage) {
-            (ScreenLayer::Slice(s), Stage::Input) => Some(&mut s.input[..]),
-            (ScreenLayer::Slice(s), Stage::Output) => Some(&mut s.warp.dst[..]),
-            (ScreenLayer::Mask(m), Stage::Output) => m.contours.first_mut().map(|c| &mut c.points[..]),
-            (ScreenLayer::Mask(_), Stage::Input) => None,
+    /// The selected layer of the screen being edited.
+    fn layer_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut ScreenLayer> {
+        setup.screens.get_mut(self.screen)?.layers.get_mut(self.selected?)
+    }
+
+    /// The selected slice of the screen being edited, if a slice is selected.
+    pub fn slice_mut<'a>(&self, setup: &'a mut OutputSetup) -> Option<&'a mut Slice> {
+        match self.layer_mut(setup)? {
+            ScreenLayer::Slice(s) => Some(s),
+            ScreenLayer::Mask(_) => None,
         }
+    }
+
+    /// Moves point `i` of the selected layer (numbered as [`Editor::points`] lists them) to `p`.
+    fn set_point(&self, setup: &mut OutputSetup, i: usize, p: Point) -> bool {
+        let stage = self.stage;
+        match (self.layer_mut(setup), stage) {
+            (Some(ScreenLayer::Slice(s)), Stage::Input) => s.input.get_mut(i).map(|q| *q = p).is_some(),
+            (Some(ScreenLayer::Slice(s)), Stage::Output) if i < 4 => {
+                s.warp.dst[i] = p;
+                true
+            }
+            (Some(ScreenLayer::Slice(s)), Stage::Output) => {
+                let g = grid_handles(&s.warp).nth(i - 4);
+                g.is_some_and(|g| s.warp.set_screen_point(g, p))
+            }
+            (Some(ScreenLayer::Mask(m)), Stage::Output) => {
+                m.contours.first_mut().and_then(|c| c.points.get_mut(i)).map(|q| *q = p).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves the whole selected layer by `d`: on the output stage a slice moves its corner pin,
+    /// and its grid moves with it.
+    fn shift(&self, setup: &mut OutputSetup, d: Point) -> bool {
+        let stage = self.stage;
+        let quad = |q: &mut [Point]| q.iter_mut().for_each(|q| *q = [q[0] + d[0], q[1] + d[1]]);
+        match (self.layer_mut(setup), stage) {
+            (Some(ScreenLayer::Slice(s)), Stage::Input) => quad(&mut s.input),
+            (Some(ScreenLayer::Slice(s)), Stage::Output) => quad(&mut s.warp.dst),
+            (Some(ScreenLayer::Mask(m)), Stage::Output) => match m.contours.first_mut() {
+                Some(c) => quad(&mut c.points),
+                None => return false,
+            },
+            _ => return false,
+        }
+        true
+    }
+
+    fn selected_points(&self, setup: &OutputSetup) -> Vec<Point> {
+        self.selected
+            .and_then(|i| setup.screens.get(self.screen)?.layers.get(i))
+            .map(|l| self.points(l))
+            .unwrap_or_default()
     }
 
     /// The outline of a layer on the canvas at this stage (empty for masks on the input stage).
@@ -196,15 +318,15 @@ impl Editor {
     /// Returns whether anything changed.
     pub fn press(&mut self, setup: &mut OutputSetup, p: Point, reach: f32) -> bool {
         self.drag = None;
-        if let Some(points) = self.points_mut(setup) {
-            let nearest = (0..points.len()).min_by(|&a, &b| dist(points[a], p).total_cmp(&dist(points[b], p)));
-            if let Some(i) = nearest.filter(|&i| dist(points[i], p) <= reach) {
-                self.corner = i;
-                self.drag = Some(Drag::Corner(i));
-                return true;
-            }
+        let points = self.selected_points(setup);
+        // Corners come first in the list, so they win a tie with a grid point under them.
+        let nearest = (0..points.len()).min_by(|&a, &b| dist(points[a], p).total_cmp(&dist(points[b], p)));
+        if let Some(i) = nearest.filter(|&i| dist(points[i], p) <= reach) {
+            self.corner = i;
+            self.drag = Some(Drag::Corner(i));
+            return true;
         }
-        let Some(screen) = setup.screens.first() else { return false };
+        let Some(screen) = setup.screens.get(self.screen) else { return false };
         let enabled = |l: &ScreenLayer| match l {
             ScreenLayer::Slice(s) => s.enabled,
             ScreenLayer::Mask(m) => m.enabled,
@@ -227,20 +349,13 @@ impl Editor {
     /// The pointer moved to `p` while pressed.
     pub fn drag_to(&mut self, setup: &mut OutputSetup, p: Point) -> bool {
         let Some(drag) = self.drag else { return false };
-        let Some(points) = self.points_mut(setup) else { return false };
         match drag {
-            Drag::Corner(i) => {
-                if let Some(q) = points.get_mut(i) {
-                    *q = p;
-                }
-            }
+            Drag::Corner(i) => self.set_point(setup, i, p),
             Drag::Move { last } => {
-                let d = [p[0] - last[0], p[1] - last[1]];
-                points.iter_mut().for_each(|q| *q = [q[0] + d[0], q[1] + d[1]]);
                 self.drag = Some(Drag::Move { last: p });
+                self.shift(setup, [p[0] - last[0], p[1] - last[1]])
             }
         }
-        true
     }
 
     /// Ends a drag. Returns whether the setup changed and should be saved.
@@ -250,39 +365,206 @@ impl Editor {
 
     /// Moves the current point by `d` pixels.
     pub fn nudge(&mut self, setup: &mut OutputSetup, d: Point) -> bool {
-        let corner = self.corner;
-        let Some(q) = self.points_mut(setup).and_then(|p| p.get_mut(corner)) else { return false };
-        *q = [q[0] + d[0], q[1] + d[1]];
-        true
+        let Some(q) = self.selected_points(setup).get(self.corner).copied() else { return false };
+        self.set_point(setup, self.corner, [q[0] + d[0], q[1] + d[1]])
     }
 
     /// Types one coordinate (`axis` 0 = x, 1 = y) of a point.
     pub fn set_corner(&mut self, setup: &mut OutputSetup, corner: usize, axis: usize, value: f32) -> bool {
-        let Some(q) = self.points_mut(setup).and_then(|p| p.get_mut(corner)) else { return false };
+        let Some(mut q) = self.selected_points(setup).get(corner).copied() else { return false };
         q[axis.min(1)] = value;
         self.corner = corner;
-        true
+        self.set_point(setup, corner, q)
     }
 
     pub fn next_corner(&mut self, setup: &OutputSetup) {
-        let n =
-            self.selected.and_then(|i| setup.screens.first()?.layers.get(i)).map_or(4, |l| self.points(l).len()).max(1);
+        let n = self.selected_points(setup).len().max(1);
         self.corner = (self.corner + 1) % n;
     }
 
-    /// Output: back to the un-pinned corners. Input: the whole composition.
+    /// Output: back to the un-pinned corners and a flat grid. Input: the whole composition.
     pub fn reset(&mut self, setup: &mut OutputSetup) -> bool {
         let [w, h] = setup.composition_size;
         let stage = self.stage;
         let Some(i) = self.selected else { return false };
-        let Some(ScreenLayer::Slice(slice)) = setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) else {
+        let Some(ScreenLayer::Slice(slice)) = setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i))
+        else {
             return false;
         };
         match stage {
-            Stage::Output => slice.warp.dst = slice.warp.src,
+            Stage::Output => slice.warp.reset(),
             Stage::Input => slice.input = rect_quad(0.0, 0.0, w as f32, h as f32),
         }
         true
+    }
+
+    /// Sets the selected slice's warp grid to `cols`×`rows` points, keeping its shape.
+    pub fn set_grid(&mut self, setup: &mut OutputSetup, cols: u32, rows: u32) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        let before = (slice.warp.cols, slice.warp.rows);
+        slice.warp.resize(cols, rows);
+        let changed = before != (slice.warp.cols, slice.warp.rows);
+        if changed && self.corner >= 4 {
+            self.corner = 0; // The grid point it pointed at may be gone.
+        }
+        changed
+    }
+
+    /// Sets one colour control, from 0 to 1 as its bar shows it: of the selected slice (`slice`),
+    /// or of the screen. Controls are [`COLOR_NAMES`] in order; Opacity is screen-only.
+    pub fn set_color(&mut self, setup: &mut OutputSetup, slice: bool, control: usize, bar: f32) -> bool {
+        let bar = bar.clamp(0.0, 1.0);
+        let (trim, opacity) = if slice {
+            match self.slice_mut(setup) {
+                Some(s) => (&mut s.color, None),
+                None => return false,
+            }
+        } else {
+            match setup.screens.get_mut(self.screen) {
+                Some(s) => (&mut s.color, Some(&mut s.opacity)),
+                None => return false,
+            }
+        };
+        let field = match control {
+            0 => &mut trim.brightness,
+            1 => &mut trim.contrast,
+            2 => &mut trim.red,
+            3 => &mut trim.green,
+            4 => &mut trim.blue,
+            5 => match opacity {
+                Some(o) => {
+                    *o = bar;
+                    return true;
+                }
+                None => return false,
+            },
+            _ => return false,
+        };
+        *field = bar * 2.0 - 1.0;
+        true
+    }
+
+    /// Turns Soft Edge on or off for the selected slice.
+    pub fn toggle_soft_edge(&mut self, setup: &mut OutputSetup) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        slice.soft_edge = !slice.soft_edge;
+        true
+    }
+
+    /// Sets one of the setup's soft-edge controls ([`SOFT_EDGE`] order) from its bar, 0 to 1.
+    pub fn set_soft_edge(&mut self, setup: &mut OutputSetup, control: usize, bar: f32) -> bool {
+        let Some(&(_, lo, hi)) = SOFT_EDGE.get(control) else { return false };
+        let v = lo + bar.clamp(0.0, 1.0) * (hi - lo);
+        let [r, g, b] = &mut setup.soft_edge_gamma_rgb;
+        let field = match control {
+            0 => &mut setup.soft_edge_power,
+            1 => &mut setup.soft_edge_luminance,
+            2 => &mut setup.soft_edge_gamma,
+            3 => r,
+            4 => g,
+            _ => b,
+        };
+        *field = v;
+        true
+    }
+
+    /// Switches the selected slice's grid between straight lines and a bezier net.
+    pub fn set_point_mode(&mut self, setup: &mut OutputSetup, mode: PointMode) -> bool {
+        let Some(slice) = self.slice_mut(setup) else { return false };
+        let changed = slice.warp.mode != mode;
+        slice.warp.mode = mode;
+        changed
+    }
+
+    /// Edits screen `i` (its layers, colour and display).
+    pub fn pick_screen(&mut self, setup: &OutputSetup, i: usize) -> bool {
+        if i >= setup.screens.len() {
+            return false;
+        }
+        if self.screen != i {
+            (self.screen, self.selected, self.corner, self.drag) = (i, None, 0, None);
+        }
+        true
+    }
+
+    /// Adds a screen with one slice showing the whole composition, sized like the screen being
+    /// edited, and edits it. New screens open in a window until they get a display.
+    pub fn add_screen(&mut self, setup: &mut OutputSetup) -> bool {
+        let [cw, ch] = setup.composition_size;
+        let [w, h] = setup.screens.get(self.screen).map_or([cw, ch], |s| s.size());
+        let id = setup.screens.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+        let n = setup.screens.len() + 1;
+        let mut screen = OutputSetup::passthrough(cw, ch).screens.remove(0);
+        screen.id = id;
+        screen.name = format!("Screen {n}");
+        screen.device = OutputDevice {
+            kind: DeviceKind::Virtual,
+            name: screen.name.clone(),
+            id: String::new(),
+            width: w,
+            height: h,
+        };
+        if let Some(ScreenLayer::Slice(slice)) = screen.layers.first_mut() {
+            *slice = Slice::new(
+                1,
+                "Slice 1",
+                rect_quad(0.0, 0.0, cw as f32, ch as f32),
+                rect_quad(0.0, 0.0, w as f32, h as f32),
+            );
+        }
+        setup.screens.push(screen);
+        (self.screen, self.selected, self.corner) = (setup.screens.len() - 1, None, 0);
+        true
+    }
+
+    /// Removes the screen being edited, keeping at least one.
+    pub fn remove_screen(&mut self, setup: &mut OutputSetup) -> bool {
+        if setup.screens.len() < 2 || self.screen >= setup.screens.len() {
+            return false;
+        }
+        setup.screens.remove(self.screen);
+        (self.screen, self.selected, self.corner) = (self.screen.saturating_sub(1), None, 0);
+        true
+    }
+
+    pub fn rename_screen(&mut self, setup: &mut OutputSetup, name: &str) -> bool {
+        let name = name.trim();
+        match setup.screens.get_mut(self.screen).filter(|_| !name.is_empty()) {
+            Some(s) => {
+                s.name = name.into();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn toggle_screen(&mut self, setup: &mut OutputSetup, i: usize) -> bool {
+        match setup.screens.get_mut(i) {
+            Some(s) => {
+                s.enabled = !s.enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sends the screen being edited to a display (its size becomes the display's), or back to a
+    /// window (`None`), like a Resolume screen's Output Device menu.
+    pub fn set_display(&mut self, setup: &mut OutputSetup, display: Option<&Monitor>) -> bool {
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
+        let device = match display {
+            Some(m) => OutputDevice {
+                kind: DeviceKind::Display,
+                name: m.name.clone(),
+                id: String::new(),
+                width: m.size[0],
+                height: m.size[1],
+            },
+            None => OutputDevice { kind: DeviceKind::Virtual, name: screen.name.clone(), ..screen.device.clone() },
+        };
+        let changed = screen.device != device;
+        screen.device = device;
+        changed
     }
 
     fn next_id(screen: &openvj_core::Screen) -> u64 {
@@ -301,7 +583,7 @@ impl Editor {
     /// Adds a slice showing the whole composition over the whole screen, and selects it.
     pub fn add_slice(&mut self, setup: &mut OutputSetup) -> bool {
         let [cw, ch] = setup.composition_size;
-        let Some(screen) = setup.screens.first_mut() else { return false };
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
         let id = Self::next_id(screen);
         let n = screen.slices().count() + 1;
         let [sw, sh] = screen.size();
@@ -320,7 +602,7 @@ impl Editor {
     /// Adds a rectangular mask over the middle of the screen, inverted as Resolume's are by default
     /// (it shows its inside), and selects it on the output stage.
     pub fn add_mask(&mut self, setup: &mut OutputSetup) -> bool {
-        let Some(screen) = setup.screens.first_mut() else { return false };
+        let Some(screen) = setup.screens.get_mut(self.screen) else { return false };
         let id = Self::next_id(screen);
         let n = screen.masks().count() + 1;
         let [w, h] = screen.size().map(|v| v as f32);
@@ -341,7 +623,7 @@ impl Editor {
     /// Inserts a point halfway between the selected mask's current point and the next one.
     pub fn add_mask_point(&mut self, setup: &mut OutputSetup) -> bool {
         let Some(i) = self.selected else { return false };
-        let Some(ScreenLayer::Mask(mask)) = setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) else {
+        let Some(ScreenLayer::Mask(mask)) = setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) else {
             return false;
         };
         let Some(c) = mask.contours.first_mut() else { return false };
@@ -362,7 +644,7 @@ impl Editor {
     /// hiding it.
     pub fn toggle_invert(&mut self, setup: &mut OutputSetup) -> bool {
         let Some(i) = self.selected else { return false };
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Mask(m)) => {
                 m.invert = !m.invert;
                 true
@@ -373,7 +655,7 @@ impl Editor {
 
     /// Turns the selected slice or mask on or off.
     pub fn toggle_enabled(&mut self, setup: &mut OutputSetup, i: usize) -> bool {
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Slice(s)) => s.enabled = !s.enabled,
             Some(ScreenLayer::Mask(m)) => m.enabled = !m.enabled,
             None => return false,
@@ -384,7 +666,7 @@ impl Editor {
     pub fn rename_selected(&mut self, setup: &mut OutputSetup, name: &str) -> bool {
         let name = name.trim();
         let Some(i) = self.selected.filter(|_| !name.is_empty()) else { return false };
-        match setup.screens.first_mut().and_then(|s| s.layers.get_mut(i)) {
+        match setup.screens.get_mut(self.screen).and_then(|s| s.layers.get_mut(i)) {
             Some(ScreenLayer::Slice(s)) => s.name = name.into(),
             Some(ScreenLayer::Mask(m)) => m.name = name.into(),
             None => return false,
@@ -394,7 +676,7 @@ impl Editor {
 
     /// Moves the selected layer up (-1) or down (+1) the list; later layers draw on top.
     pub fn move_selected(&mut self, setup: &mut OutputSetup, delta: i32) -> bool {
-        let (Some(i), Some(screen)) = (self.selected, setup.screens.first_mut()) else { return false };
+        let (Some(i), Some(screen)) = (self.selected, setup.screens.get_mut(self.screen)) else { return false };
         let j = i as i64 + delta as i64;
         if j < 0 || j as usize >= screen.layers.len() {
             return false;
@@ -405,7 +687,7 @@ impl Editor {
     }
 
     pub fn remove_selected(&mut self, setup: &mut OutputSetup) -> bool {
-        let (Some(i), Some(screen)) = (self.selected, setup.screens.first_mut()) else { return false };
+        let (Some(i), Some(screen)) = (self.selected, setup.screens.get_mut(self.screen)) else { return false };
         if i >= screen.layers.len() {
             return false;
         }
@@ -413,6 +695,42 @@ impl Editor {
         self.selected = None;
         true
     }
+}
+
+/// The warp grid points the editor shows as handles: all but the four corners, which the corner
+/// pin moves. Handle `4 + k` is the `k`th of these.
+pub fn grid_handles(warp: &Warp) -> impl Iterator<Item = usize> + '_ {
+    (0..warp.points.len()).filter(|&i| !warp.is_corner(i))
+}
+
+/// The inner lines of a slice's warp grid on the screen, as open polylines: one per grid row and
+/// column between the edges.
+pub fn grid_lines(warp: &Warp) -> Vec<Vec<Point>> {
+    const N: u32 = 24;
+    let (cols, rows) = (warp.cols.max(2), warp.rows.max(2));
+    let t = |i: u32| i as f32 / N as f32;
+    let mut lines = Vec::new();
+    for r in 1..rows - 1 {
+        let v = r as f32 / (rows - 1) as f32;
+        lines.push((0..=N).map(|i| warp.map(t(i), v)).collect());
+    }
+    for c in 1..cols - 1 {
+        let u = c as f32 / (cols - 1) as f32;
+        lines.push((0..=N).map(|i| warp.map(u, t(i))).collect());
+    }
+    lines
+}
+
+/// SVG path commands for open polylines.
+pub fn polyline_commands(lines: &[Vec<Point>]) -> String {
+    let mut s = String::new();
+    for line in lines {
+        for (i, p) in line.iter().enumerate() {
+            s.push_str(if i == 0 { " M " } else { " L " });
+            s.push_str(&format!("{:.1} {:.1}", p[0], p[1]));
+        }
+    }
+    s.trim_start().to_owned()
 }
 
 fn dist(a: Point, b: Point) -> f32 {
@@ -449,6 +767,7 @@ pub fn path_commands(poly: &[Point]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openvj_core::Quad;
 
     fn setup() -> OutputSetup {
         OutputSetup::passthrough(1920, 1080)
@@ -556,6 +875,115 @@ mod tests {
         let ScreenLayer::Mask(m) = &s.screens[0].layers[0] else { panic!("mask moved first") };
         assert_eq!(m.name, "Door");
         assert!(!e.move_selected(&mut s, -1));
+    }
+
+    #[test]
+    fn bend_a_slice_with_its_grid() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(e.set_grid(&mut s, 3, 3));
+        assert!(!e.set_grid(&mut s, 3, 3), "same size: nothing to do");
+        let slice = |s: &OutputSetup| match &s.screens[0].layers[0] {
+            ScreenLayer::Slice(sl) => sl.clone(),
+            _ => unreachable!(),
+        };
+        // 4 corners + 5 grid points (a 3×3 grid without its corners).
+        let pts = e.points(&s.screens[0].layers[0]);
+        assert_eq!(pts.len(), 9);
+        // Grab the middle grid point and pull it right: the middle of the slice follows.
+        assert!(e.press(&mut s, [960.0, 540.0], 20.0));
+        assert_eq!(e.corner, 4 + 2, "middle point of the grid");
+        e.drag_to(&mut s, [1060.0, 540.0]);
+        assert!(e.release());
+        let mid = slice(&s).warp.map(0.5, 0.5);
+        assert!((mid[0] - 1060.0).abs() < 0.1, "{mid:?}");
+        // Nudging and typing work on grid points too.
+        e.nudge(&mut s, [0.0, 10.0]);
+        e.set_corner(&mut s, 6, 0, 1000.0);
+        let mid = slice(&s).warp.map(0.5, 0.5);
+        assert!((mid[0] - 1000.0).abs() < 0.1 && (mid[1] - 550.0).abs() < 0.1, "{mid:?}");
+        // Moving the corner pin carries the grid with it.
+        e.press(&mut s, [5.0, 5.0], 20.0);
+        e.drag_to(&mut s, [100.0, 0.0]);
+        e.release();
+        assert!(slice(&s).warp.map(0.5, 0.5)[0] > 1000.0);
+        // Bezier mode keeps the points; reset flattens the grid and keeps its size and mode.
+        assert!(e.set_point_mode(&mut s, PointMode::Bezier));
+        e.reset(&mut s);
+        let w = slice(&s).warp;
+        assert!(w.is_identity() && w.cols == 3 && w.mode == PointMode::Bezier);
+    }
+
+    #[test]
+    fn colour_bars_set_screen_and_slice() {
+        let mut s = setup();
+        let mut e = Editor::default();
+        // No slice selected: the screen's controls, with Opacity.
+        assert!(!e.set_color(&mut s, true, 0, 1.0));
+        assert!(e.set_color(&mut s, false, 4, 0.25));
+        assert!(e.set_color(&mut s, false, 5, 0.5));
+        assert_eq!((s.screens[0].color.blue, s.screens[0].opacity), (-0.5, 0.5));
+        e.selected = Some(0);
+        assert!(e.set_color(&mut s, true, 0, 0.75));
+        assert!(!e.set_color(&mut s, true, 5, 0.0), "slices have no opacity");
+        let ScreenLayer::Slice(sl) = &s.screens[0].layers[0] else { unreachable!() };
+        assert_eq!(sl.color.brightness, 0.5);
+        let bars = color_bars(&sl.color, None);
+        assert_eq!(bars.len(), 5);
+        assert_eq!((bars[0].1, bars[0].2.as_str()), (0.75, "+50%"));
+    }
+
+    #[test]
+    fn screens_and_displays() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(!e.remove_screen(&mut s), "keeps one screen");
+        assert!(e.add_screen(&mut s));
+        assert_eq!((e.screen, e.selected, s.screens.len()), (1, None, 2));
+        assert_eq!(s.screens[1].name, "Screen 2");
+        assert_eq!(s.screens[1].slices().count(), 1);
+        // Edits go to the screen being edited.
+        e.selected = Some(0);
+        e.set_corner(&mut s, 0, 0, 50.0);
+        assert_eq!(dst(&s)[0], [0.0, 0.0], "screen 1 untouched");
+        let monitors = [
+            Monitor { name: "Built-in".into(), size: [3024, 1964] },
+            Monitor { name: "BenQ".into(), size: [1280, 800] },
+        ];
+        assert!(e.set_display(&mut s, Some(&monitors[1])));
+        assert_eq!(s.screens[1].size(), [1280, 800]);
+        assert_eq!(find_monitor(&s.screens[1].device, &monitors), Some(1));
+        // Resolume's numbered display names find the Nth display.
+        let resolume = OutputDevice {
+            kind: DeviceKind::Display,
+            name: "Display 2".into(),
+            id: String::new(),
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(find_monitor(&resolume, &monitors), Some(1));
+        assert_eq!(find_monitor(&OutputDevice { name: "Display 3".into(), ..resolume.clone() }, &monitors), None);
+        assert!(e.set_display(&mut s, None));
+        assert_eq!(find_monitor(&s.screens[1].device, &monitors), None);
+        assert!(e.rename_screen(&mut s, "Left"));
+        assert!(e.toggle_screen(&mut s, 1) && !s.screens[1].enabled);
+        assert!(e.remove_screen(&mut s));
+        assert_eq!((e.screen, s.screens.len()), (0, 1));
+    }
+
+    #[test]
+    fn soft_edge_controls() {
+        let mut s = setup();
+        let mut e = Editor { selected: Some(0), ..Default::default() };
+        assert!(e.toggle_soft_edge(&mut s));
+        let ScreenLayer::Slice(sl) = &s.screens[0].layers[0] else { unreachable!() };
+        assert!(sl.soft_edge);
+        assert!(e.set_soft_edge(&mut s, 1, 0.25));
+        assert!(e.set_soft_edge(&mut s, 5, 1.0));
+        assert_eq!((s.soft_edge_luminance, s.soft_edge_gamma_rgb[2]), (0.25, 3.0));
+        let bars = soft_edge_bars(&s);
+        assert_eq!((bars[1].1, bars[5].2.as_str()), (0.25, "3.00"));
+        assert!(!e.set_soft_edge(&mut s, 6, 0.0));
     }
 
     #[test]

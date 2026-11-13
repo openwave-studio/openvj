@@ -35,6 +35,7 @@ use crate::{
 // The output mapping window's side of the app.
 #[path = "mapping_ui.rs"]
 mod mapping_ui;
+pub use mapping_ui::ScreenOutputs;
 
 const _: () = assert!(BAND_COUNT == openvj_audio::BAND_COUNT, "core and audio band counts differ");
 

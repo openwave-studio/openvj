@@ -1653,11 +1653,21 @@ export component MainWindow inherits Window {
 }
 
 export component OutputWindow inherits Window {
-    title: "openVJ Output";
+    /// The output mapping screen this window shows, if any.
+    in property <string> screen-name;
+    title: root.screen-name == "" ? "openVJ Output" : "openVJ Output · " + root.screen-name;
     preferred-width: 960px;
     preferred-height: 540px;
     background: #000;
     in property <image> frame;
+    /// While the mapping window is open: slice and mask outlines (SVG path commands in screen
+    /// pixels) and the point being edited, drawn over the output as in Resolume.
+    in property <string> outlines;
+    in property <float> outline-w: 1920;
+    in property <float> outline-h: 1080;
+    in property <bool> show-point;
+    in property <float> point-x;
+    in property <float> point-y;
     callback toggle-fullscreen();
     callback exit-fullscreen();
 
@@ -1678,6 +1688,33 @@ export component OutputWindow inherits Window {
             height: parent.height;
             source: root.frame;
             image-fit: contain;
+        }
+        // The same box `contain` puts the frame in.
+        property <float> fit: min(self.width / 1px / root.outline-w, self.height / 1px / root.outline-h);
+        property <length> fit-x: (self.width - root.outline-w * self.fit * 1px) / 2;
+        property <length> fit-y: (self.height - root.outline-h * self.fit * 1px) / 2;
+        if root.outlines != "": Path {
+            x: parent.fit-x;
+            y: parent.fit-y;
+            width: root.outline-w * parent.fit * 1px;
+            height: root.outline-h * parent.fit * 1px;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: root.outline-w;
+            viewbox-height: root.outline-h;
+            commands: root.outlines;
+            fill: transparent;
+            stroke: #4fe6da;
+            stroke-width: 2px;
+        }
+        if root.show-point: Rectangle {
+            x: parent.fit-x + root.point-x * parent.fit * 1px - self.width / 2;
+            y: parent.fit-y + root.point-y * parent.fit * 1px - self.height / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            border-width: 3px;
+            border-color: #4fe6da;
         }
         TouchArea {
             double-clicked => { root.toggle-fullscreen(); }
