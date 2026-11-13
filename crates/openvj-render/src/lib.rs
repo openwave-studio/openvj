@@ -314,6 +314,11 @@ pub struct Engine {
     fx_seen: HashSet<u64>,
     /// A transparent 1×1 texture: the `inputImage` of ISF generators.
     blank: Target,
+    /// The audio spectrum and waveform for ISF files, one texel per bin (see [`Engine::set_spectrum`]).
+    spectrum: wgpu::Texture,
+    spectrum_view: wgpu::TextureView,
+    /// Whether the spectrum texture holds silence.
+    spectrum_silent: bool,
     /// HDR targets by size, for drawing ISF generators meant for LDR targets.
     hdr_stand_ins: HashMap<(u32, u32), Target>,
     mapper: mapping::Mapper,
@@ -325,6 +330,27 @@ pub struct Engine {
     last_passes: usize,
     /// Whether this frame's preview was already drawn from a clip on screen.
     previewed: bool,
+}
+
+/// Width of the spectrum texture (openvj-audio's `SPECTRUM_BINS`).
+pub const SPECTRUM_BINS: u32 = 256;
+
+/// Synesthesia's beat values at a beat position: on beat (1 on the beat, falling fast),
+/// toggle on beat (flips each beat, eased), random on beat (new 0..1 each beat), unused.
+fn beat_events(beat: f64) -> [f32; 4] {
+    let n = beat.floor();
+    let phase = (beat - n) as f32;
+    let on = (1.0 - phase).powi(8);
+    let ease = (phase / 0.15).clamp(0.0, 1.0);
+    let ease = ease * ease * (3.0 - 2.0 * ease);
+    let toggle = if (n as i64).rem_euclid(2) == 1 { ease } else { 1.0 - ease };
+    // A small integer hash, so every machine gets the same "random" sequence for a beat.
+    let mut h = (n as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 32;
+    let random = (h >> 40) as f32 / (1u64 << 24) as f32;
+    [on, toggle, random, 0.0]
 }
 
 const TRANSPARENT: wgpu::Color = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
@@ -432,6 +458,17 @@ impl Engine {
         let fx_uniform_buf = Self::create_uniform_buffer(&device, 64 * UNIFORM_STRIDE);
         let targets = Targets::new(&device, width, height);
         let mapper = mapping::Mapper::new(&device, &queue);
+        let spectrum = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("audio spectrum"),
+            size: wgpu::Extent3d { width: SPECTRUM_BINS, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let spectrum_view = spectrum.create_view(&Default::default());
         Self {
             device,
             queue,
@@ -450,6 +487,9 @@ impl Engine {
             fx_state: HashMap::new(),
             fx_seen: HashSet::new(),
             blank,
+            spectrum,
+            spectrum_view,
+            spectrum_silent: false,
             hdr_stand_ins: HashMap::new(),
             mapper,
             shared: None,
@@ -801,6 +841,13 @@ impl Engine {
             }
         }
         let bands = inputs.bands;
+        let sig = &inputs.band_signals;
+        let all = &inputs.overall;
+        values.set("AUDIO_HITS", &sig.map(|s| s.hits));
+        values.set("AUDIO_PRESENCE", &sig.map(|s| s.presence));
+        values.set("AUDIO_TIME", &sig.map(|s| s.clock));
+        values.set("AUDIO_ALL", &[all.level, all.hits, all.presence, all.clock]);
+        values.set("BEAT_EVENTS", &beat_events(inputs.beat));
         values.set("TIME", &[(time % 3600.0) as f32]);
         values.set("TIMEDELTA", &[delta as f32]);
         values.set("FRAMEINDEX", &[state.frame as f32]);
@@ -857,6 +904,8 @@ impl Engine {
                 .filter_map(|(binding, name)| {
                     let view = if name == "inputImage" {
                         src.view.clone()
+                    } else if name == isf::SPECTRUM {
+                        self.spectrum_view.clone()
                     } else {
                         let buf = state.buffers.get(name)?;
                         buf.pair[buf.latest].view.clone()
@@ -919,7 +968,6 @@ impl Engine {
     /// Runs a finished group mix through the group's effects and blends it into the
     /// composition. Returns the composition's new ping-pong slot.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn close_group(
         &mut self,
         passes: &mut Vec<Pass>,
@@ -951,6 +999,26 @@ impl Engine {
     ///
     /// Every generator and live input clip in `comp` also refreshes its live thumbnail,
     /// at most every [`THUMB_INTERVAL`] (and right away when one is new).
+    /// Uploads this frame's audio spectrum for ISF files: [`SPECTRUM_BINS`] texels laid out
+    /// like Synesthesia's `syn_Spectrum` (r raw, g with release, b smooth, a waveform around
+    /// 0.5), each 0..1. `None` (no audio input) leaves silence.
+    pub fn set_spectrum(&mut self, bins: Option<&[[f32; 4]]>) {
+        if bins.is_none() && self.spectrum_silent {
+            return;
+        }
+        let mut texels = vec![[0u8, 0, 0, 128]; SPECTRUM_BINS as usize];
+        for (t, b) in texels.iter_mut().zip(bins.unwrap_or_default()) {
+            *t = b.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+        self.queue.write_texture(
+            self.spectrum.as_image_copy(),
+            texels.as_flattened(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SPECTRUM_BINS * 4), rows_per_image: None },
+            wgpu::Extent3d { width: SPECTRUM_BINS, height: 1, depth_or_array_layers: 1 },
+        );
+        self.spectrum_silent = bins.is_none();
+    }
+
     pub fn render(&mut self, comp: &Composition, now: f64, inputs: &ModInputs, preview: Option<ClipId>) {
         let thumbs_before = self.thumbs.len();
         for clip in comp.all_clips() {
@@ -1248,7 +1316,7 @@ mod tests {
     use openvj_core::{BlendMode, GeneratorKind, ModSource, Modulation};
 
     fn inputs(now: f64) -> ModInputs {
-        ModInputs { beat: openvj_core::beats(now, 120.0), bands: [0.0; 4] }
+        ModInputs { beat: openvj_core::beats(now, 120.0), ..Default::default() }
     }
 
     fn engine(w: u32, h: u32) -> Option<Engine> {
@@ -1870,6 +1938,57 @@ mod tests {
         set_library(EffectLibrary::builtin());
         e.render(&comp, 0.5, &inputs(0.5), None);
         assert_eq!(mean(&e.read_target(e.output())), [0.0; 3]);
+    }
+
+    #[test]
+    fn synesthesia_names_and_spectrum_reach_shaders() {
+        use openvj_core::{AudioSignal, EffectLibrary, EffectType, isf::EffectDef, set_library};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // Red: bass hits; green: the spectrum's held channel at 3/4; blue: Ghost Arcade's waveform.
+        let src = r#"/*{ "INPUTS": [] }*/
+            void main() {
+                gl_FragColor = vec4(syn_BassHits, texture(syn_Spectrum, vec2(0.75, 0.5)).g,
+                                    sampleWaveform(0.5) * 0.5 + 0.5, 1.0);
+            }"#;
+        let def = EffectDef::parse(src, "syn_test").unwrap();
+        check_effect(&def).unwrap();
+        set_library(
+            EffectLibrary::with(Vec::new(), Vec::new())
+                .with_generators(vec![std::sync::Arc::new(EffectType::new(def, None))]),
+        );
+        let mut comp = Composition::new(32, 32, 1, 1);
+        comp.set_clip(0, 0, ClipSource::isf("syn_test")).unwrap();
+        comp.trigger(0, 0, 0.0);
+        let mut i = inputs(0.0);
+        i.band_signals[0] = AudioSignal { hits: 1.0, ..Default::default() };
+        let bins: Vec<[f32; 4]> =
+            (0..SPECTRUM_BINS).map(|b| [0.0, if b >= SPECTRUM_BINS / 2 { 1.0 } else { 0.0 }, 0.0, 1.0]).collect();
+        e.set_spectrum(Some(&bins));
+        e.render(&comp, 0.0, &i, None);
+        let m = mean(&e.read_target(e.output()));
+        assert!(m[0] > 250.0 && m[1] > 250.0 && m[2] > 250.0, "hits, spectrum, waveform: {m:?}");
+        e.set_spectrum(None);
+        e.render(&comp, 0.0, &inputs(0.0), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!(m[0] < 1.0 && m[1] < 1.0 && (m[2] - 127.5).abs() < 3.0, "silence: {m:?}");
+        set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn beat_events_follow_the_beat() {
+        let [on, toggle, random, _] = beat_events(4.0);
+        assert_eq!(on, 1.0);
+        assert_eq!(toggle, 1.0);
+        assert!(beat_events(4.5)[0] < 0.01, "on beat falls fast");
+        assert_eq!(beat_events(5.5)[1], 1.0, "toggles each beat");
+        assert_eq!(beat_events(6.5)[1], 0.0);
+        assert_eq!(beat_events(4.9)[2], random, "random holds through a beat");
+        assert_ne!(beat_events(5.0)[2], random);
+        assert!((0.0..1.0).contains(&random));
     }
 
     /// Slow (every bundled shader is compiled for the GPU): run after re-importing the pack with

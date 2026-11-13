@@ -15,6 +15,24 @@ pub struct ModInputs {
     pub beat: f64,
     /// Audio band levels, normalised 0..1.
     pub bands: [f32; BAND_COUNT],
+    /// Hits, presence and clock of each band.
+    pub band_signals: [AudioSignal; BAND_COUNT],
+    /// The same for the whole signal.
+    pub overall: AudioSignal,
+}
+
+/// What a band (or the whole signal) is doing, like Synesthesia's `syn_*Level`, `syn_*Hits`,
+/// `syn_*Presence` and `syn_*Time`. Already scaled by the composition's Reactivity.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AudioSignal {
+    /// 0..1.
+    pub level: f32,
+    /// 0..1 spike on transients.
+    pub hits: f32,
+    /// 0..1, slow: high while the band is strong in the song.
+    pub presence: f32,
+    /// Seconds that run faster while the band is loud.
+    pub clock: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -26,6 +44,12 @@ pub enum ModSource {
     LowMid,
     HighMid,
     Treble,
+    Level,
+    BassHits,
+    LowMidHits,
+    HighMidHits,
+    TrebleHits,
+    Hits,
     Sine,
     Saw,
     Square,
@@ -33,12 +57,19 @@ pub enum ModSource {
 }
 
 impl ModSource {
-    pub const ALL: [ModSource; 9] = [
+    /// In menu order: audio sources first, then tempo shapes (see [`ModSource::FIRST_TEMPO`]).
+    pub const ALL: [ModSource; 15] = [
         ModSource::Off,
         ModSource::Bass,
         ModSource::LowMid,
         ModSource::HighMid,
         ModSource::Treble,
+        ModSource::Level,
+        ModSource::BassHits,
+        ModSource::LowMidHits,
+        ModSource::HighMidHits,
+        ModSource::TrebleHits,
+        ModSource::Hits,
         ModSource::Sine,
         ModSource::Saw,
         ModSource::Square,
@@ -52,12 +83,22 @@ impl ModSource {
             ModSource::LowMid => "Low mid",
             ModSource::HighMid => "High mid",
             ModSource::Treble => "Treble",
+            ModSource::Level => "Level",
+            ModSource::BassHits => "Bass hits",
+            ModSource::LowMidHits => "Low mid hits",
+            ModSource::HighMidHits => "High mid hits",
+            ModSource::TrebleHits => "Treble hits",
+            ModSource::Hits => "Hits",
             ModSource::Sine => "Sine",
             ModSource::Saw => "Saw",
             ModSource::Square => "Square",
             ModSource::Pulse => "Pulse",
         }
     }
+
+    /// Index in [`ModSource::ALL`] of the first tempo shape; everything before it except Off
+    /// follows the audio.
+    pub const FIRST_TEMPO: usize = 11;
 
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap()
@@ -110,6 +151,16 @@ impl Modulation {
     pub fn signal(&self, inputs: &ModInputs) -> f32 {
         if let Some(band) = self.source.band() {
             return inputs.bands[band].clamp(0.0, 1.0);
+        }
+        let hits = |b: usize| inputs.band_signals[b].hits.clamp(0.0, 1.0);
+        match self.source {
+            ModSource::Level => return inputs.overall.level.clamp(0.0, 1.0),
+            ModSource::BassHits => return hits(0),
+            ModSource::LowMidHits => return hits(1),
+            ModSource::HighMidHits => return hits(2),
+            ModSource::TrebleHits => return hits(3),
+            ModSource::Hits => return inputs.overall.hits.clamp(0.0, 1.0),
+            _ => {}
         }
         let phase = (inputs.beat / self.beats.max(0.0625) as f64).rem_euclid(1.0) as f32;
         match self.source {
@@ -214,7 +265,23 @@ mod tests {
     use super::*;
 
     fn inputs(beat: f64, bands: [f32; BAND_COUNT]) -> ModInputs {
-        ModInputs { beat, bands }
+        ModInputs { beat, bands, ..Default::default() }
+    }
+
+    #[test]
+    fn hits_and_level_sources() {
+        let mut i = inputs(0.0, [0.0; 4]);
+        i.band_signals[2].hits = 0.7;
+        i.overall = AudioSignal { level: 0.4, hits: 0.9, ..Default::default() };
+        let m = |source| Modulation { source, amount: 1.0, beats: 1.0 };
+        assert!((m(ModSource::HighMidHits).signal(&i) - 0.7).abs() < 1e-6);
+        assert_eq!(m(ModSource::BassHits).signal(&i), 0.0);
+        assert!((m(ModSource::Hits).signal(&i) - 0.9).abs() < 1e-6);
+        assert!((m(ModSource::Level).signal(&i) - 0.4).abs() < 1e-6);
+        assert_eq!(ModSource::ALL[ModSource::FIRST_TEMPO], ModSource::Sine);
+        assert!(ModSource::ALL[..ModSource::FIRST_TEMPO].iter().all(|s| !s.is_beat()));
+        let json = serde_json::to_string(&m(ModSource::BassHits)).unwrap();
+        assert!(json.contains("\"bass_hits\""), "{json}");
     }
 
     #[test]

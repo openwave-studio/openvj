@@ -11,6 +11,8 @@ import "fonts/InterTabular-SemiBold.otf";
 import "fonts/InterTabular-Bold.otf";
 import "fonts/ZenDots-Regular.ttf";
 
+import { ModNames } from "state.slint";
+
 export global Theme {
     // Typefaces: the interface (Inter with tabular digits, so BPM and timecodes
     // don't jitter) and the wordmark.
@@ -85,10 +87,11 @@ export global Theme {
     out property <length> label-w: 74px;
     out property <length> card-w: 300px;
 
-    /// Colour of a modulation source index (see ModSource::ALL): 0 off, 1–4 audio, 5–8 tempo.
+    /// Colour of a modulation source index (see ModSource::ALL): 0 off, then audio sources,
+    /// then tempo shapes from ModNames.first-tempo.
     public pure function mod-color(source: int) -> color {
-        if (source >= 1 && source <= 4) { return self.audio; }
-        if (source >= 5) { return self.tempo; }
+        if (source >= 1 && source < ModNames.first-tempo) { return self.audio; }
+        if (source >= ModNames.first-tempo) { return self.tempo; }
         return self.text-faint;
     }
 

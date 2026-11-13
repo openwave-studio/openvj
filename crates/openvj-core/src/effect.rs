@@ -433,7 +433,7 @@ mod tests {
         let mut fx = Effect::new("pixelate");
         fx.params.get_mut("size").unwrap().modulation = Modulation { source: ModSource::Bass, amount: 0.5, beats: 1.0 };
         fx.params.get_mut("size").unwrap().value = 0.3;
-        let v = fx.values(&ModInputs { beat: 0.0, bands: [1.0, 0.0, 0.0, 0.0] });
+        let v = fx.values(&ModInputs { beat: 0.0, bands: [1.0, 0.0, 0.0, 0.0], ..Default::default() });
         assert!((v[0] - 0.8).abs() < 1e-6);
 
         // Hue wraps instead of stopping at 360°.
@@ -441,7 +441,7 @@ mod tests {
         let hue = c.params.get_mut("hue").unwrap();
         hue.value = 0.75;
         hue.modulation = Modulation { source: ModSource::Bass, amount: 0.5, beats: 1.0 };
-        let v = c.values(&ModInputs { beat: 0.0, bands: [1.0, 0.0, 0.0, 0.0] });
+        let v = c.values(&ModInputs { beat: 0.0, bands: [1.0, 0.0, 0.0, 0.0], ..Default::default() });
         assert!((v[0] - 0.25).abs() < 1e-6, "{v:?}");
     }
 
