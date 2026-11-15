@@ -8,7 +8,7 @@ The Shadertoy names (`iTime`, `mainImage`…) are still handled by a preamble in
 
 ## Passes
 
-Shadertoy runs Buffer A, B, C, D, then Image, each frame; a buffer reading itself (or a later buffer) sees last frame's result. ISF `PASSES` run in order with `PERSISTENT` targets that keep the previous frame, so the mapping is direct: each buffer becomes a full-size, float, persistent pass named `BufferA`…`BufferD`, and the Image pass is the last, unnamed pass. Each pass's `iChannelN` becomes a `#define` to the matching pass target for that pass, so name clashes between passes (the known failure of VDMX's importer) are avoided by putting each pass's own code inside `if (PASSINDEX == n)` branches with renamed `mainImage` functions (`mainImage_BufferA`…).
+Shadertoy runs Buffer A, B, C, D, then Image, each frame; a buffer reading itself (or a later buffer) sees last frame's result. ISF `PASSES` run in order with `PERSISTENT` targets that keep the previous frame, so the mapping is direct: each buffer becomes a full-size, float, persistent pass named `BufferA`…`BufferD`, and the Image pass is the last, unnamed pass. Each pass's code gets its own renamed `mainImage` (`mainImage_BufferA`…), and its `iChannelN` names are rewritten to the pass targets that channel reads in that pass. `main` calls the function for the current `PASSINDEX`. This avoids the name clashes between passes that VDMX's importer runs into. Functions and globals that two passes both define are suffixed per pass; code from Shadertoy's Common tab is emitted once.
 
 ## Audio texture
 
