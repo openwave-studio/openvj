@@ -9,6 +9,8 @@
 import { Theme, CloseIcon } from "theme.slint";
 import { Scope, ParamData } from "state.slint";
 import { BlendPicker, BandMeters, ModParam, FlatButton } from "controls.slint";
+import { LineEdit } from "std-widgets.slint";
+import { Shadertoy } from "shadertoy.slint";
 
 /// The gear on the toolbar.
 export component GearIcon inherits Path {
@@ -284,7 +286,7 @@ export component SettingsOverlay inherits Rectangle {
         { name: "Audio", words: "audio input device microphone line analyser fft bands gain smoothing" },
         { name: "Tempo", words: "tempo bpm ableton link sync tap beat" },
         { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
-        { name: "Media", words: "media folder files browser relink missing" },
+        { name: "Media", words: "media folder files browser relink missing shadertoy api key import" },
         { name: "Keyboard", words: "keyboard shortcuts keys" },
         { name: "About", words: "about version license licence credits syphon ffmpeg ghost arcade fonts help" },
     ];
@@ -583,6 +585,16 @@ export component SettingsOverlay inherits Rectangle {
                                     primary: root.missing-media > 0;
                                     clicked => { root.relink-media(); }
                                 }
+                            }
+                            PrefRow {
+                                title: "Shadertoy API key";
+                                detail: "Lets Import from Shadertoy (in the Sources tab) fetch shaders by link. Get a key at shadertoy.com/myapps. Imports use the Shadertoy.com API, and only shaders their authors set to Public + API can be fetched.";
+                            }
+                            LineEdit {
+                                placeholder-text: "Your Shadertoy API key";
+                                input-type: password;
+                                text: Shadertoy.api-key;
+                                edited(t) => { Shadertoy.key-edited(t); }
                             }
                         }
 

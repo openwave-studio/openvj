@@ -5,6 +5,7 @@ mod browser;
 mod link;
 mod mapping;
 mod midi;
+mod shadertoy_import;
 mod syphon_out;
 
 use std::cell::RefCell;
@@ -154,6 +155,47 @@ fn main() -> Result<()> {
     on!(on_param_mod_rate, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_rate(s, o, i as usize, r.max(0) as usize));
     on!(on_effect_add, |a, s: i32, k: i32| a.effect_add(s, k.max(0) as usize));
     on!(on_open_effects_folder, |a| a.open_effects_folder());
+
+    // Import from Shadertoy (ui/shadertoy.slint).
+    {
+        let g = ui.global::<Shadertoy>();
+        g.set_api_key(shadertoy_import::api_key().into());
+        let w2 = w.clone();
+        g.on_key_edited(move |key| {
+            let Some(ui) = w2.upgrade() else { return };
+            ui.global::<Shadertoy>().set_api_key(key.clone());
+            if let Err(e) = shadertoy_import::set_api_key(&key) {
+                eprintln!("openVJ: {e}");
+            }
+        });
+        g.on_open_link(|url| {
+            if let Err(e) = shadertoy_import::open_url(&url) {
+                eprintln!("openVJ: couldn't open {url}: {e}");
+            }
+        });
+        let w2 = w.clone();
+        g.on_import(move || {
+            let Some(ui) = w2.upgrade() else { return };
+            let g = ui.global::<Shadertoy>();
+            if g.get_busy() {
+                return;
+            }
+            g.set_busy(true);
+            g.set_message("".into());
+            let request = shadertoy_import::Request { link: g.get_link().into(), code: g.get_code().into() };
+            let w3 = w2.clone();
+            shadertoy_import::start(request, move || {
+                let _ = w3.upgrade_in_event_loop(|ui| ui.global::<Shadertoy>().invoke_finished());
+            });
+        });
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        g.on_finished(move || {
+            let (Some(ui), Some(out)) = (w.upgrade(), o.upgrade()) else { return };
+            let Ok(mut a) = app.try_borrow_mut() else { return };
+            a.shadertoy_finished(&ui);
+            a.sync(&ui, &out);
+        });
+    }
     on!(on_effect_toggle, |a, s: i32, i: i32| a.effect_toggle(s, i.max(0) as usize));
     on!(on_effect_remove, |a, s: i32, i: i32| a.effect_remove(s, i.max(0) as usize));
     on!(on_effect_move, |a, s: i32, i: i32, d: i32| a.effect_move(s, i.max(0) as usize, d));

@@ -6,9 +6,10 @@ import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
+import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner }
 
-export { Theme, Scope, ModNames, AudioLevels }
+export { Theme, Scope, ModNames, AudioLevels, Shadertoy }
 
 component ClipCell inherits Rectangle {
     in property <CellData> data;
@@ -908,17 +909,25 @@ component Browser inherits Rectangle {
         if root.tab == 0: ScrollView {
             property <int> gen-rows: ceil(root.generators.length / 3);
             property <int> input-rows: max(1, ceil(root.inputs.length / 3));
-            content-height: (gen-rows + input-rows) * 54px + 64px;
+            content-height: (gen-rows + input-rows) * 54px + 68px;
             VerticalLayout {
                 alignment: start;
                 spacing: 4px;
-                Text {
-                    height: 20px;
-                    text: "GENERATORS";
-                    color: Theme.text-faint;
-                    font-size: 10px;
-                    font-weight: 700;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    height: 24px;
+                    spacing: 8px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "GENERATORS";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    FlatButton {
+                        text: "Import from Shadertoy…";
+                        clicked => { Shadertoy.open = true; }
+                    }
                 }
                 for row in gen-rows: HorizontalLayout {
                     spacing: 4px;
@@ -1247,6 +1256,7 @@ export component MainWindow inherits Window {
     in property <string> clip-kind;
     in property <string> clip-detail;
     in property <string> clip-path;
+    in property <string> clip-source-url;
     in-out property <string> clip-name;
     in property <[ParamData]> clip-params;
 
@@ -1513,6 +1523,7 @@ export component MainWindow inherits Window {
                     clip-kind: root.clip-kind;
                     clip-detail: root.clip-detail;
                     clip-path: root.clip-path;
+                    clip-source-url: root.clip-source-url;
                     clip-name <=> root.clip-name;
                     clip-params: root.clip-params;
                     param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
@@ -1648,6 +1659,13 @@ export component MainWindow inherits Window {
             choose-folder => { root.browser-choose-folder(); }
             relink-media => { root.relink-media(); }
             closed => { root.settings-open = false; keys.focus(); }
+        }
+
+        if Shadertoy.open: ShadertoyDialog {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
         }
     }
 }

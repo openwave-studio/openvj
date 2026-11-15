@@ -49,6 +49,8 @@ export struct ParamData {
 export struct EffectData {
     name: string,
     enabled: bool,
+    /// Where the effect came from, such as its Shadertoy page; empty for most.
+    source: string,
     params: [ParamData],
 }
 
