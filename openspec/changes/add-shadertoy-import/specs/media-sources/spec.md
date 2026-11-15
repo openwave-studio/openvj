@@ -24,3 +24,10 @@ openVJ SHALL import a Shadertoy shader from its link or ID, using the VJ's own S
 - **GIVEN** an imported shader that reads a music channel
 - **WHEN** it plays with audio input on
 - **THEN** it reacts to openVJ's audio input as it does to music on Shadertoy
+
+### Requirement: Open on Shadertoy
+A clip or effect from an imported Shadertoy shader SHALL show an "Open on Shadertoy" link in its panel that opens the shader's page in the browser.
+
+#### Scenario: Find the original
+- **WHEN** the VJ clicks Open on Shadertoy in the panel of an imported shader's clip
+- **THEN** the shader's Shadertoy page opens in the default browser

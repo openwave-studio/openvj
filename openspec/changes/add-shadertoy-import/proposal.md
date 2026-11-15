@@ -11,6 +11,7 @@ Shadertoy is the largest public library of GLSL visuals, and VJs already pull sh
 - **API key in Settings** (Settings → Sources): the VJ's own key from shadertoy.com/myapps. No key ships in the public repo. Without a key, only Paste code is offered. Settings names the "Shadertoy.com API", as its terms require.
 - **Shadertoy names in ISF files**: `mainImage`, `iTime`, `iTimeDelta`, `iFrame`, `iResolution`, `iDate`, `iMouse` (centre of the frame, not pressed), `iChannelResolution`, `iChannelTime` and `iSampleRate` work in any ISF file, like the Synesthesia and Ghost Arcade names. So a `.fs` or `.glsl` file with a hand-copied `mainImage` also plays.
 - **Channels**: a music, sound or microphone channel reads openVJ's audio as Shadertoy's 512×2 texture (spectrum on row 0, waveform on row 1). Buffers A–D become persistent ISF passes in Shadertoy's order, then the Image pass. A channel that reads the shader's own buffer keeps its previous frame.
+- Clips and effects from an imported shader show an **Open on Shadertoy** link in their panel, from the link saved in the file.
 - A shader whose `iChannel0` is a video or webcam input imports as an **effect** (its `iChannel0` becomes `inputImage`); every other shader imports as a generator.
 - Unsupported channels (keyboard, cubemaps, volumes, textures, video files) are left unbound, reading black, and the import says which ones were dropped. Sound-output shaders (`mainSound`) are refused.
 
@@ -39,8 +40,8 @@ Out of scope: browsing or searching Shadertoy inside openVJ, bundling any Shader
 - PR #12 (hide the macOS title bar): touches main.slint only at the top bar. Trivial rebase.
 - add-parameter-animation (no PR yet): no overlap.
 
-## Open questions
+## Decided (Seba, 2026-11-15)
 
-- Is `~/Documents/openVJ/Effects/Shadertoy/` the right place, or should imports go straight into the Effects folder?
-- Should the import also offer a one-click "Open on Shadertoy" link in the clip panel (from the saved link)?
-- Is it OK that Paste code is the only path without an API key, or should openVJ try the public shader page without a key? (Shadertoy blocks most automated page fetches, so I'd skip it.)
+- Imports go in the `Shadertoy` subfolder of the Effects folder.
+- The clip panel shows an "Open on Shadertoy" link for imported shaders.
+- Without an API key, Paste code is the only path for now.

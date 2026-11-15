@@ -14,7 +14,8 @@
 ## 3. Import UI
 - [ ] 3.1 Settings → Sources: API key field, "uses the Shadertoy.com API" note
 - [ ] 3.2 Sources tab: Import from Shadertoy dialog (link/ID, or paste code), fetch on a worker thread, errors in the dialog
-- [ ] 3.3 Write to `~/Documents/openVJ/Effects/Shadertoy/`, never overwrite without asking
+- [ ] 3.3 Open on Shadertoy link in the clip and effect panels (from `OPENVJ.SOURCE`)
+- [ ] 3.4 Write to `~/Documents/openVJ/Effects/Shadertoy/`, never overwrite without asking
 
 ## 4. Finish
 - [ ] 4.1 README "What works" and THIRD_PARTY_NOTICES
