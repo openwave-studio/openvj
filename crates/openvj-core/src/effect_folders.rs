@@ -167,7 +167,7 @@ fn clash(path: &Path, t: &EffectType, other: &str) -> EffectError {
     }
 }
 
-/// Collects `.fs` files under `dir`, skipping hidden entries.
+/// Collects `.fs` files (and Shadertoy `.glsl` files) under `dir`, skipping hidden entries.
 fn find_fs(dir: &Path, out: &mut Vec<(PathBuf, Stamp)>, depth: usize) {
     if depth > 8 {
         return;
@@ -181,11 +181,18 @@ fn find_fs(dir: &Path, out: &mut Vec<(PathBuf, Stamp)>, depth: usize) {
         let Ok(meta) = std::fs::metadata(&path) else { continue };
         if meta.is_dir() {
             find_fs(&path, out, depth + 1);
-        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fs")) {
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fs")) || is_shadertoy_glsl(&path) {
             let has_vs = path.with_extension("vs").is_file();
             out.push((path, Stamp { modified: meta.modified().ok(), len: meta.len(), has_vs }));
         }
     }
+}
+
+/// A `.glsl` file holding Shadertoy code (a `mainImage` function), copied from the site.
+/// Other `.glsl` files are left alone: they may be includes for other apps.
+fn is_shadertoy_glsl(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("glsl"))
+        && std::fs::read_to_string(path).is_ok_and(|s| crate::shadertoy::uses_word(&s, "mainImage"))
 }
 
 fn load(path: &Path, stamp: Stamp, check: Check) -> Loaded {

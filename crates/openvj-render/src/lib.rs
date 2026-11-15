@@ -319,6 +319,9 @@ pub struct Engine {
     spectrum_view: wgpu::TextureView,
     /// Whether the spectrum texture holds silence.
     spectrum_silent: bool,
+    /// The same audio in Shadertoy's 512×2 sound-channel layout.
+    shadertoy_audio: wgpu::Texture,
+    shadertoy_audio_view: wgpu::TextureView,
     /// HDR targets by size, for drawing ISF generators meant for LDR targets.
     hdr_stand_ins: HashMap<(u32, u32), Target>,
     mapper: mapping::Mapper,
@@ -469,6 +472,18 @@ impl Engine {
             view_formats: &[],
         });
         let spectrum_view = spectrum.create_view(&Default::default());
+        let (sw, sh) = isf::SHADERTOY_AUDIO_SIZE;
+        let shadertoy_audio = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadertoy audio"),
+            size: wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let shadertoy_audio_view = shadertoy_audio.create_view(&Default::default());
         Self {
             device,
             queue,
@@ -490,6 +505,8 @@ impl Engine {
             spectrum,
             spectrum_view,
             spectrum_silent: false,
+            shadertoy_audio,
+            shadertoy_audio_view,
             hdr_stand_ins: HashMap::new(),
             mapper,
             shared: None,
@@ -906,6 +923,8 @@ impl Engine {
                         src.view.clone()
                     } else if name == isf::SPECTRUM {
                         self.spectrum_view.clone()
+                    } else if name == isf::SHADERTOY_AUDIO {
+                        self.shadertoy_audio_view.clone()
                     } else {
                         let buf = state.buffers.get(name)?;
                         buf.pair[buf.latest].view.clone()
@@ -1015,6 +1034,14 @@ impl Engine {
             texels.as_flattened(),
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SPECTRUM_BINS * 4), rows_per_image: None },
             wgpu::Extent3d { width: SPECTRUM_BINS, height: 1, depth_or_array_layers: 1 },
+        );
+        let (sw, sh) = isf::SHADERTOY_AUDIO_SIZE;
+        let st = shadertoy_audio_texels(bins.unwrap_or_default());
+        self.queue.write_texture(
+            self.shadertoy_audio.as_image_copy(),
+            st.as_flattened(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(sw * 4), rows_per_image: None },
+            wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
         );
         self.spectrum_silent = bins.is_none();
     }
@@ -1308,6 +1335,46 @@ fn cover_scale(sw: u32, sh: u32, tw: u32, th: u32) -> [f32; 2] {
     let src = sw as f32 / sh as f32;
     let dst = tw as f32 / th as f32;
     if src > dst { [dst / src, 1.0] } else { [1.0, src / dst] }
+}
+
+/// Lowest and highest frequency of the spectrum bins (openvj-audio's `SPECTRUM_LO_HZ` and
+/// `SPECTRUM_HI_HZ`).
+const SPECTRUM_LO_HZ: f32 = 20.0;
+const SPECTRUM_HI_HZ: f32 = 16_000.0;
+/// Shadertoy's sound texture covers 0 Hz to about 11 kHz in 512 linear bins (half of a
+/// 2048-point FFT at 44.1 kHz).
+const SHADERTOY_TOP_HZ: f32 = 11_025.0;
+
+/// Builds Shadertoy's sound texture from openVJ's spectrum bins: row 0 the spectrum,
+/// resampled from log-spaced to linear bins, row 1 the waveform (0.5 is silence). Every
+/// channel holds the value, so `.r`, `.x` and `.g` all read it.
+fn shadertoy_audio_texels(bins: &[[f32; 4]]) -> Vec<[u8; 4]> {
+    let (w, _) = isf::SHADERTOY_AUDIO_SIZE;
+    let w = w as usize;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let grey = |v: u8| [v, v, v, 255];
+    let mut out = vec![grey(0); w];
+    out.extend(std::iter::repeat_n(grey(128), w));
+    let n = bins.len();
+    if n == 0 {
+        return out;
+    }
+    let ratio = (SPECTRUM_HI_HZ / SPECTRUM_LO_HZ).ln();
+    for x in 0..w {
+        let hz = (x as f32 + 0.5) / w as f32 * SHADERTOY_TOP_HZ;
+        let pos = (hz.max(SPECTRUM_LO_HZ) / SPECTRUM_LO_HZ).ln() / ratio * n as f32 - 0.5;
+        let i = pos.floor().clamp(0.0, (n - 1) as f32) as usize;
+        let j = (i + 1).min(n - 1);
+        let t = (pos - i as f32).clamp(0.0, 1.0);
+        // Green: the level with a release, like Shadertoy's smoothed analyser.
+        out[x] = grey(byte(bins[i][1] * (1.0 - t) + bins[j][1] * t));
+        let wpos = (x as f32 + 0.5) / w as f32 * n as f32 - 0.5;
+        let a = wpos.floor().clamp(0.0, (n - 1) as f32) as usize;
+        let b = (a + 1).min(n - 1);
+        let t = (wpos - a as f32).clamp(0.0, 1.0);
+        out[w + x] = grey(byte(bins[a][3] * (1.0 - t) + bins[b][3] * t));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2019,6 +2086,100 @@ mod tests {
         let m = mean(&e.read_target(e.output()));
         assert!(m[0] < 1.0 && m[1] < 1.0 && (m[2] - 127.5).abs() < 3.0, "silence: {m:?}");
         set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_buffers_audio_and_orientation() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // Buffer A adds a quarter each frame to its last frame. The Image shows it in red,
+        // Shadertoy's y (0 at the bottom) in green, and the sound texture's top bins in blue.
+        let json = serde_json::json!({"Shader": {"info": {"id": "Test12", "name": "Test"}, "renderpass": [
+            { "type": "image", "name": "Image",
+              "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}, {"id": 1, "ctype": "music", "channel": 1}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { vec2 uv = f / iResolution.xy;\n\
+                       c = vec4(texture(iChannel0, uv).r, uv.y, texture(iChannel1, vec2(0.9, 0.25)).x, 0.0); }" },
+            { "type": "buffer", "name": "Buffer A", "outputs": [{"id": "4dXGR8", "channel": 0}],
+              "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = texture(iChannel0, f / iResolution.xy) + 0.25; }" },
+        ]}})
+        .to_string();
+        let def = EffectDef::parse(&shadertoy::from_api_json(&json).unwrap().source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(
+            EffectLibrary::with(Vec::new(), Vec::new())
+                .with_generators(vec![std::sync::Arc::new(EffectType::new(def, None))]),
+        );
+        let mut comp = Composition::new(32, 32, 1, 1);
+        comp.set_clip(0, 0, ClipSource::isf(&id)).unwrap();
+        comp.trigger(0, 0, 0.0);
+        let bins: Vec<[f32; 4]> = (0..SPECTRUM_BINS).map(|_| [1.0, 1.0, 1.0, 0.5]).collect();
+        e.set_spectrum(Some(&bins));
+        for k in 0..3 {
+            e.render(&comp, k as f64 / 60.0, &inputs(0.0), None);
+        }
+        let px = e.read_target(e.output());
+        let row = |y: usize| mean(&px[y * 32 * 4..(y + 1) * 32 * 4]);
+        let (top, bottom) = (row(0), row(31));
+        assert!((top[0] - 191.0).abs() < 4.0, "three frames of a quarter: {top:?}");
+        assert!(top[1] > 240.0 && bottom[1] < 15.0, "y grows upwards: top {top:?}, bottom {bottom:?}");
+        assert!(top[2] > 250.0, "sound texture: {top:?}");
+        set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_video_input_reads_upright() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let json = serde_json::json!({"Shader": {"info": {"id": "Video1", "name": "Pass"}, "renderpass": [
+            { "type": "image", "name": "Image", "inputs": [{"id": 1, "ctype": "webcam", "channel": 0}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = texture(iChannel0, f / iResolution.xy); }" },
+        ]}})
+        .to_string();
+        let def = EffectDef::parse(&shadertoy::from_api_json(&json).unwrap().source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(EffectLibrary::with(vec![std::sync::Arc::new(EffectType::new(def, None))], Vec::new()));
+        // White on top, black below.
+        let mut comp = Composition::new(32, 32, 1, 1);
+        let img = comp.set_clip(0, 0, ClipSource::Image { path: "top.png".into() }).unwrap();
+        e.set_media_frame(img, 1, 2, &[255, 255, 255, 255, 0, 0, 0, 255]);
+        comp.trigger(0, 0, 0.0);
+        comp.layers[0].effects = vec![Effect::new(&id)];
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        let px = e.read_target(e.output());
+        let row = |y: usize| mean(&px[y * 32 * 4..(y + 1) * 32 * 4]);
+        assert!(row(2)[0] > 200.0 && row(29)[0] < 50.0, "top {:?}, bottom {:?}", row(2), row(29));
+        set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_sound_texture_layout() {
+        assert_eq!(shadertoy_audio_texels(&[]).len(), 1024);
+        // Only the bins around 1 kHz are loud.
+        let bins: Vec<[f32; 4]> = (0..SPECTRUM_BINS as usize)
+            .map(|b| {
+                let hz =
+                    SPECTRUM_LO_HZ * (SPECTRUM_HI_HZ / SPECTRUM_LO_HZ).powf((b as f32 + 0.5) / SPECTRUM_BINS as f32);
+                let loud = (800.0..1250.0).contains(&hz);
+                [0.0, if loud { 1.0 } else { 0.0 }, 0.0, if b % 2 == 0 { 1.0 } else { 0.0 }]
+            })
+            .collect();
+        let t = shadertoy_audio_texels(&bins);
+        let at_hz = |hz: f32| t[(hz / SHADERTOY_TOP_HZ * 512.0) as usize][0];
+        assert_eq!(at_hz(1000.0), 255);
+        assert_eq!(at_hz(100.0), 0);
+        assert_eq!(at_hz(5000.0), 0);
+        assert!(t[512..].iter().any(|p| p[0] > 200) && t[512..].iter().any(|p| p[0] < 50), "waveform row");
     }
 
     #[test]

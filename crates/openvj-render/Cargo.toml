@@ -14,3 +14,4 @@ bytemuck.workspace = true
 
 [dev-dependencies]
 pollster = "0.4"
+serde_json.workspace = true

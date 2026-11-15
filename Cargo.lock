@@ -3913,6 +3913,7 @@ dependencies = [
  "naga",
  "openvj-core",
  "pollster",
+ "serde_json",
  "wgpu",
 ]
 
