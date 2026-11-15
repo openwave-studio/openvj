@@ -157,8 +157,8 @@ pub fn from_image_code(code: &str, name: &str, link: &str) -> Result<Converted, 
     }
     let id = parse_id(link).unwrap_or_default();
     let name = match name.trim() {
-        "" if id.is_empty() => "Shadertoy shader".to_owned(),
-        "" => id.clone(),
+        "" => title_from_comment(code)
+            .unwrap_or_else(|| if id.is_empty() { "Shadertoy shader".to_owned() } else { format!("Shadertoy {id}") }),
         n => n.to_owned(),
     };
     let mut channels: [Option<Channel>; 4] = Default::default();
@@ -175,6 +175,14 @@ pub fn from_image_code(code: &str, name: &str, link: &str) -> Result<Converted, 
     let mut out = convert(meta, String::new(), vec![Pass { buffer: None, code: code.to_owned(), channels }], vec![]);
     out.notes = notes;
     Ok(out)
+}
+
+/// A title from the code's first line when it's a short `//` comment, as many shaders start.
+fn title_from_comment(code: &str) -> Option<String> {
+    let first = code.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let title = first.strip_prefix("//")?.trim().trim_matches(|c: char| c == '-' || c == '=' || c == '*').trim();
+    let ok = !title.is_empty() && title.chars().count() <= 48 && !title.to_ascii_lowercase().contains("licen");
+    ok.then(|| title.to_owned())
 }
 
 fn api_error(err: &str) -> String {
@@ -395,7 +403,11 @@ fn convert(meta: Meta, common: String, passes: Vec<Pass>, mut notes: Vec<String>
     let source = format!("/*{header}*/\n\n{glsl}");
 
     let base = sanitize_file_name(&meta.name);
-    let file_name = if meta.id.is_empty() { format!("{base}.fs") } else { format!("{base} ({}).fs", meta.id) };
+    let file_name = if meta.id.is_empty() || base.contains(&meta.id) {
+        format!("{base}.fs")
+    } else {
+        format!("{base} ({}).fs", meta.id)
+    };
     Converted { id: meta.id, name: meta.name, file_name, source, is_effect, notes }
 }
 
@@ -732,7 +744,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.id, "XsXXDn");
+        assert_eq!(c.name, "Shadertoy XsXXDn");
+        assert_eq!(c.file_name, "Shadertoy XsXXDn.fs");
         assert_eq!(c.notes.len(), 1);
+        let c =
+            from_image_code("// Rainbow rings\nvoid mainImage(out vec4 c, in vec2 f) { c = vec4(1.0); }", "", "XsXXDn")
+                .unwrap();
+        assert_eq!(c.file_name, "Rainbow rings (XsXXDn).fs");
         let def = EffectDef::parse(&c.source, "x").unwrap();
         assert_eq!(def.source, "https://www.shadertoy.com/view/XsXXDn");
         assert!(from_image_code("void main() {}", "", "").is_err());

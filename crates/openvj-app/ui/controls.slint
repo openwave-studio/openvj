@@ -184,7 +184,7 @@ export component FlatButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        color: root.primary ? Theme.on-accent : root.active ? root.tint : Theme.text;
+        color: !root.enabled ? Theme.text-dim : root.primary ? Theme.on-accent : root.active ? root.tint : Theme.text;
         font-size: Theme.font-body;
         font-weight: 700;
         horizontal-alignment: center;

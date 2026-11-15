@@ -7,13 +7,13 @@ Shadertoy is the largest public library of GLSL visuals, and VJs already pull sh
 ## What Changes
 
 - **Import from Shadertoy** in the Sources tab: the VJ pastes a Shadertoy link or ID, openVJ fetches the shader through the Shadertoy API and writes it as an ISF `.fs` file in `~/Documents/openVJ/Effects/Shadertoy/`, named after the shader. Hot reload then lists it like any folder generator. The file's header keeps the title, author, link and licence (`CREDIT`, `DESCRIPTION`, `OPENVJ.SOURCE`).
-- **Paste code** in the same dialog, for shaders the API doesn't return (only "Public + API" shaders are visible to it): the VJ pastes the Image tab's code, and buffers if any, plus an optional link for the credit.
-- **API key in Settings** (Settings → Sources): the VJ's own key from shadertoy.com/myapps. No key ships in the public repo. Without a key, only Paste code is offered. Settings names the "Shadertoy.com API", as its terms require.
-- **Shadertoy names in ISF files**: `mainImage`, `iTime`, `iTimeDelta`, `iFrame`, `iResolution`, `iDate`, `iMouse` (centre of the frame, not pressed), `iChannelResolution`, `iChannelTime` and `iSampleRate` work in any ISF file, like the Synesthesia and Ghost Arcade names. So a `.fs` or `.glsl` file with a hand-copied `mainImage` also plays.
+- **Paste code** in the same dialog, for shaders the API doesn't return (only "Public + API" shaders are visible to it): the VJ pastes the Image tab's code, plus an optional link for the credit. Pasted code is one pass: its channels read black.
+- **API key in Settings** (Settings → Media): the VJ's own key from shadertoy.com/myapps. No key ships in the public repo. Without a key, only Paste code is offered. Settings names the "Shadertoy.com API", as its terms require.
+- **Shadertoy names in ISF files**: `mainImage`, `iTime`, `iTimeDelta`, `iFrame`, `iResolution`, `iDate`, `iMouse` (zero, as on Shadertoy before a click), `iChannelResolution`, `iChannelTime` and `iSampleRate` work in any ISF file, like the Synesthesia and Ghost Arcade names. So a `.fs` or `.glsl` file with a hand-copied `mainImage` also plays.
 - **Channels**: a music, sound or microphone channel reads openVJ's audio as Shadertoy's 512×2 texture (spectrum on row 0, waveform on row 1). Buffers A–D become persistent ISF passes in Shadertoy's order, then the Image pass. A channel that reads the shader's own buffer keeps its previous frame.
 - Clips and effects from an imported shader show an **Open on Shadertoy** link in their panel, from the link saved in the file.
 - A shader whose `iChannel0` is a video or webcam input imports as an **effect** (its `iChannel0` becomes `inputImage`); every other shader imports as a generator.
-- Unsupported channels (keyboard, cubemaps, volumes, textures, video files) are left unbound, reading black, and the import says which ones were dropped. Sound-output shaders (`mainSound`) are refused.
+- Unsupported channels (keyboard, cubemaps, volumes, textures, video files) are left unbound, reading black, and the import says which ones were dropped. A Sound tab is left out, with a note.
 
 Out of scope: browsing or searching Shadertoy inside openVJ, bundling any Shadertoy shader, Shadertoy textures (needs ISF `IMPORTED` images, a separate change), Common tab code beyond pasting it into every pass, mouse and keyboard interaction, VR shaders.
 
@@ -28,7 +28,7 @@ Out of scope: browsing or searching Shadertoy inside openVJ, bundling any Shader
 - New dependency: a small blocking HTTP client (`ureq` with rustls) in crates/openvj-app, used only by the import.
 - crates/openvj-core: new `shadertoy.rs` (API JSON → ISF `.fs` text, pure and unit-tested), `effect_folders.rs` (also scan `.glsl` files that define `mainImage`).
 - crates/openvj-render: `isf.rs` (Shadertoy preamble and `mainImage` wrapper; 512×2 audio texture next to `isf_spectrum`).
-- crates/openvj-app: `app.rs` (import dialog, fetch on a worker thread), `ui/main.slint` (Sources tab button), `ui/settings.slint` (API key), prefs for the key.
+- crates/openvj-app: new `shadertoy_import.rs` (fetch on a worker thread, save, API key in `preferences.json`), new `ui/shadertoy.slint` (dialog and a `Shadertoy` global), `app.rs`, `main.rs`, `ui/main.slint` (Sources tab button), `ui/settings.slint` (API key), `ui/properties.slint` (Open on Shadertoy), `ui/state.slint` (`EffectData.source`), `ui/controls.slint` (disabled button label).
 - README.md "What works", THIRD_PARTY_NOTICES.md (Shadertoy.com API mention).
 - Specs: media-sources, effects.
 - Shared hot spots: app.rs, main.slint, README.md.

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Shadertoy import
-openVJ SHALL import a Shadertoy shader from its link or ID, using the VJ's own Shadertoy API key from Settings, or from pasted code without a key. The import SHALL write an ISF file into `~/Documents/openVJ/Effects/Shadertoy/` with the shader's title, author, link and licence in its header, after which it plays like any folder generator. openVJ SHALL NOT bundle Shadertoy shaders, and Settings SHALL say that the import uses the Shadertoy.com API.
+openVJ SHALL import a Shadertoy shader from its link or ID, using the VJ's own Shadertoy API key from Settings, or from pasted code without a key. Settings → Media SHALL hold the key. The import SHALL write an ISF file into `~/Documents/openVJ/Effects/Shadertoy/` with the shader's title, author, link and licence in its header, after which it plays like any folder generator. openVJ SHALL NOT bundle Shadertoy shaders, and Settings SHALL say that the import uses the Shadertoy.com API.
 
 #### Scenario: Import by link
 - **GIVEN** a Shadertoy API key in Settings
@@ -14,7 +14,11 @@ openVJ SHALL import a Shadertoy shader from its link or ID, using the VJ's own S
 
 #### Scenario: Paste code
 - **WHEN** the VJ pastes a shader's Image code and its link without an API key
-- **THEN** a generator with that code and credit is written and listed
+- **THEN** a generator with that code and credit is written and listed, and its channels read black
+
+#### Scenario: Import again
+- **WHEN** the VJ imports a shader that was imported before
+- **THEN** its file is replaced with the new version
 
 #### Scenario: Unsupported channels
 - **WHEN** an imported shader reads a keyboard or cubemap channel
