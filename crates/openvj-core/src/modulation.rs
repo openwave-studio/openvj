@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub const BAND_COUNT: usize = 4;
 
 /// Beat lengths a tempo-synced modulator can cycle over, in beats.
-pub const MOD_RATES: [f32; 7] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
+pub const MOD_RATES: [f32; 9] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
 
 /// Live inputs that modulators read, sampled once per frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -19,6 +19,9 @@ pub struct ModInputs {
     pub band_signals: [AudioSignal; BAND_COUNT],
     /// The same for the whole signal.
     pub overall: AudioSignal,
+    /// Beat the clip being drawn was launched on, for tempo shapes that restart on launch.
+    /// Zero outside a clip.
+    pub launch_beat: f64,
 }
 
 /// What a band (or the whole signal) is doing, like Synesthesia's `syn_*Level`, `syn_*Hits`,
@@ -52,13 +55,17 @@ pub enum ModSource {
     Hits,
     Sine,
     Saw,
+    RampDown,
+    Triangle,
     Square,
     Pulse,
+    Random,
+    SmoothRandom,
 }
 
 impl ModSource {
     /// In menu order: audio sources first, then tempo shapes (see [`ModSource::FIRST_TEMPO`]).
-    pub const ALL: [ModSource; 15] = [
+    pub const ALL: [ModSource; 19] = [
         ModSource::Off,
         ModSource::Bass,
         ModSource::LowMid,
@@ -72,8 +79,12 @@ impl ModSource {
         ModSource::Hits,
         ModSource::Sine,
         ModSource::Saw,
+        ModSource::RampDown,
+        ModSource::Triangle,
         ModSource::Square,
         ModSource::Pulse,
+        ModSource::Random,
+        ModSource::SmoothRandom,
     ];
 
     pub fn name(self) -> &'static str {
@@ -93,6 +104,10 @@ impl ModSource {
             ModSource::Saw => "Saw",
             ModSource::Square => "Square",
             ModSource::Pulse => "Pulse",
+            ModSource::RampDown => "Ramp down",
+            ModSource::Triangle => "Triangle",
+            ModSource::Random => "Random",
+            ModSource::SmoothRandom => "Smooth random",
         }
     }
 
@@ -121,7 +136,12 @@ impl ModSource {
 
     /// True for the shapes that cycle with the tempo.
     pub fn is_beat(self) -> bool {
-        matches!(self, ModSource::Sine | ModSource::Saw | ModSource::Square | ModSource::Pulse)
+        self.index() >= Self::FIRST_TEMPO
+    }
+
+    /// True for the shapes that pick random values, which need a seed.
+    pub fn is_random(self) -> bool {
+        matches!(self, ModSource::Random | ModSource::SmoothRandom)
     }
 }
 
@@ -134,11 +154,18 @@ pub struct Modulation {
     pub amount: f32,
     /// Cycle length in beats for tempo-synced shapes.
     pub beats: f32,
+    /// Offset into the cycle for tempo shapes, 0..1.
+    pub phase: f32,
+    /// Tempo shapes on a clip start their cycle when the clip is launched, not on the
+    /// global beat.
+    pub restart: bool,
+    /// Varies Random and Smooth random, so two mappings don't move together.
+    pub seed: u32,
 }
 
 impl Default for Modulation {
     fn default() -> Self {
-        Self { source: ModSource::Off, amount: 1.0, beats: 1.0 }
+        Self { source: ModSource::Off, amount: 1.0, beats: 1.0, phase: 0.0, restart: false, seed: 0 }
     }
 }
 
@@ -162,12 +189,23 @@ impl Modulation {
             ModSource::Hits => return inputs.overall.hits.clamp(0.0, 1.0),
             _ => {}
         }
-        let phase = (inputs.beat / self.beats.max(0.0625) as f64).rem_euclid(1.0) as f32;
+        let beat = if self.restart { inputs.beat - inputs.launch_beat } else { inputs.beat };
+        let x = beat / self.beats.max(0.0625) as f64 + self.phase as f64;
+        let cycle = x.floor();
+        let phase = (x - cycle) as f32;
+        let random = |c: f64| random_unit(self.seed, c as i64);
         match self.source {
             ModSource::Sine => 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos(),
             ModSource::Saw => phase,
+            ModSource::RampDown => 1.0 - phase,
+            ModSource::Triangle => 1.0 - (2.0 * phase - 1.0).abs(),
             ModSource::Square => (phase < 0.5) as u8 as f32,
             ModSource::Pulse => (1.0 - phase).powi(4),
+            ModSource::Random => random(cycle),
+            ModSource::SmoothRandom => {
+                let t = phase * phase * (3.0 - 2.0 * phase);
+                random(cycle - 1.0) + (random(cycle) - random(cycle - 1.0)) * t
+            }
             _ => 0.0,
         }
     }
@@ -222,6 +260,15 @@ impl Param {
     }
 }
 
+/// A repeatable random value in 0..1 for cycle `n` (SplitMix64).
+fn random_unit(seed: u32, n: i64) -> f32 {
+    let mut z = ((seed as u64) << 32 ^ n as u64).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
+}
+
 /// Keeps the beat position continuous when the tempo changes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BeatClock {
@@ -273,7 +320,7 @@ mod tests {
         let mut i = inputs(0.0, [0.0; 4]);
         i.band_signals[2].hits = 0.7;
         i.overall = AudioSignal { level: 0.4, hits: 0.9, ..Default::default() };
-        let m = |source| Modulation { source, amount: 1.0, beats: 1.0 };
+        let m = |source| Modulation { source, amount: 1.0, beats: 1.0, ..Default::default() };
         assert!((m(ModSource::HighMidHits).signal(&i) - 0.7).abs() < 1e-6);
         assert_eq!(m(ModSource::BassHits).signal(&i), 0.0);
         assert!((m(ModSource::Hits).signal(&i) - 0.9).abs() < 1e-6);
@@ -292,7 +339,7 @@ mod tests {
 
     #[test]
     fn audio_band_adds_scaled_level_and_clamps() {
-        let m = Modulation { source: ModSource::HighMid, amount: 0.5, beats: 1.0 };
+        let m = Modulation { source: ModSource::HighMid, amount: 0.5, beats: 1.0, ..Default::default() };
         let i = inputs(0.0, [0.0, 0.0, 0.8, 0.0]);
         assert!((m.apply(0.2, &i) - 0.6).abs() < 1e-6);
         assert_eq!(m.apply(0.9, &i), 1.0);
@@ -302,7 +349,7 @@ mod tests {
 
     #[test]
     fn beat_shapes_follow_the_phase() {
-        let saw = Modulation { source: ModSource::Saw, amount: 1.0, beats: 2.0 };
+        let saw = Modulation { source: ModSource::Saw, amount: 1.0, beats: 2.0, ..Default::default() };
         assert!((saw.signal(&inputs(1.0, [0.0; 4])) - 0.5).abs() < 1e-6);
         assert!((saw.signal(&inputs(3.0, [0.0; 4])) - 0.5).abs() < 1e-6);
         let sine = Modulation { source: ModSource::Sine, ..saw };
@@ -314,6 +361,47 @@ mod tests {
         let pulse = Modulation { source: ModSource::Pulse, beats: 1.0, ..saw };
         assert_eq!(pulse.signal(&inputs(4.0, [0.0; 4])), 1.0);
         assert!(pulse.signal(&inputs(4.5, [0.0; 4])) < 0.1);
+    }
+
+    #[test]
+    fn new_tempo_shapes() {
+        let at =
+            |source, beat: f64| Modulation { source, beats: 1.0, ..Default::default() }.signal(&inputs(beat, [0.0; 4]));
+        assert!((at(ModSource::RampDown, 0.25) - 0.75).abs() < 1e-6);
+        assert!((at(ModSource::Triangle, 0.5) - 1.0).abs() < 1e-6);
+        assert!((at(ModSource::Triangle, 0.25) - 0.5).abs() < 1e-6);
+        assert!(at(ModSource::Triangle, 0.0).abs() < 1e-6);
+        // Random holds through a cycle and changes between cycles.
+        let r = |beat| at(ModSource::Random, beat);
+        assert_eq!(r(3.1), r(3.9));
+        assert_ne!(r(3.5), r(4.5));
+        assert!((0.0..1.0).contains(&r(7.5)));
+        // Smooth random starts each cycle where the last one ended.
+        let s = |beat| at(ModSource::SmoothRandom, beat);
+        assert!((s(5.0) - s(4.999_999)).abs() < 1e-3);
+        assert!((s(5.0) - r(4.5)).abs() < 1e-6);
+        // Seeds differ.
+        let seeded = Modulation { source: ModSource::Random, seed: 7, ..Default::default() };
+        assert_ne!(seeded.signal(&inputs(2.5, [0.0; 4])), r(2.5));
+        assert!(ModSource::ALL[ModSource::FIRST_TEMPO..].iter().all(|s| s.is_beat()));
+    }
+
+    #[test]
+    fn phase_offsets_the_cycle() {
+        let a = Modulation { source: ModSource::Sine, beats: 2.0, ..Default::default() };
+        let b = Modulation { phase: 0.5, ..a };
+        let i = inputs(1.0, [0.0; 4]);
+        assert!((a.signal(&i) - 1.0).abs() < 1e-6);
+        assert!(b.signal(&i).abs() < 1e-6);
+    }
+
+    #[test]
+    fn restart_counts_from_the_launch() {
+        let m = Modulation { source: ModSource::Saw, beats: 4.0, restart: true, ..Default::default() };
+        let i = ModInputs { beat: 10.0, launch_beat: 9.0, ..Default::default() };
+        assert!((m.signal(&i) - 0.25).abs() < 1e-6);
+        let global = Modulation { restart: false, ..m };
+        assert!((global.signal(&i) - 0.5).abs() < 1e-6);
     }
 
     #[test]

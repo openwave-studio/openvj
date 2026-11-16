@@ -580,7 +580,7 @@ export component ModButton inherits Rectangle {
                     clicked => { root.picked(i + 6); }
                 }
                 MenuHeading { text: "TEMPO SYNC"; }
-                for i in 4: MenuItem {
+                for i in ModNames.sources.length - ModNames.first-tempo: MenuItem {
                     text: ModNames.sources[i + ModNames.first-tempo];
                     current: root.source == i + ModNames.first-tempo;
                     dot: Theme.tempo;
@@ -620,7 +620,8 @@ export component ModParam inherits VerticalLayout {
     callback set(int, float);
     callback mod-source(int, int);
     callback mod-amount(int, float);
-    callback mod-rate(int, int);
+    // A rate index, or a phase or restart code (see ModNames).
+    callback mod-tempo(int, int);
     spacing: 2px;
 
     HorizontalLayout {
@@ -670,7 +671,7 @@ export component ModParam inherits VerticalLayout {
         }
         if root.data.mod-source >= ModNames.first-tempo: RatePicker {
             current: root.data.mod-rate;
-            picked(r) => { root.mod-rate(root.data.index, r); }
+            picked(r) => { root.mod-tempo(root.data.index, r); }
         }
         if root.data.mod-source < ModNames.first-tempo: Rectangle {
             width: 64px;
@@ -678,6 +679,54 @@ export component ModParam inherits VerticalLayout {
                 text: "from audio";
                 color: Theme.audio;
                 font-size: 9px;
+            }
+        }
+    }
+    // Tempo shapes: where in the cycle to start, and whether to count from the clip's launch.
+    if root.data.mod-source >= ModNames.first-tempo: HorizontalLayout {
+        spacing: 6px;
+        height: 14px;
+        Text {
+            width: Theme.label-w;
+            text: "↳ phase";
+            color: Theme.text-faint;
+            font-size: 9px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+        HorizontalLayout {
+            spacing: 1px;
+            alignment: start;
+            for label[i] in ["0", "¼", "½", "¾"]: Rectangle {
+                width: 18px;
+                border-radius: 3px;
+                background: i == root.data.mod-phase ? Theme.tempo.with-alpha(0.14) : phase-ta.has-hover ? Theme.raised : Theme.track;
+                border-width: 1px;
+                border-color: i == root.data.mod-phase ? Theme.tempo : transparent;
+                Text {
+                    text: label;
+                    color: i == root.data.mod-phase ? Theme.tempo : Theme.text-dim;
+                    font-size: 9px;
+                }
+                phase-ta := TouchArea {
+                    clicked => { root.mod-tempo(root.data.index, ModNames.phase-code + i); }
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if root.data.restartable: Rectangle {
+            width: restart-label.preferred-width + 10px;
+            border-radius: 3px;
+            background: root.data.mod-restart ? Theme.tempo.with-alpha(0.14) : restart-ta.has-hover ? Theme.raised : Theme.track;
+            border-width: 1px;
+            border-color: root.data.mod-restart ? Theme.tempo : transparent;
+            restart-label := Text {
+                text: "from launch";
+                color: root.data.mod-restart ? Theme.tempo : Theme.text-dim;
+                font-size: 9px;
+            }
+            restart-ta := TouchArea {
+                clicked => { root.mod-tempo(root.data.index, ModNames.restart-code + (root.data.mod-restart ? 0 : 1)); }
             }
         }
     }

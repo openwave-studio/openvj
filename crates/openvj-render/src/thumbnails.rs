@@ -109,7 +109,7 @@ fn synthetic_inputs(time: f64) -> ModInputs {
     let level = |base: f32| base + 0.15 * pulse;
     let bands = [level(0.3), level(0.2), level(0.15), level(0.1)];
     let signal = |l: f32| AudioSignal { level: l, hits: pulse * 0.5, presence: 0.3, clock: time as f32 };
-    ModInputs { beat, bands, band_signals: bands.map(signal), overall: signal(level(0.2)) }
+    ModInputs { beat, bands, band_signals: bands.map(signal), overall: signal(level(0.2)), ..Default::default() }
 }
 
 /// A quiet sine with a kick on the beat, as MilkDrop's audio for one frame.

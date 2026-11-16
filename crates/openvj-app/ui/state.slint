@@ -22,6 +22,10 @@ export global ModNames {
     in property <int> first-tempo: 11;
     // MOD_RATES labels.
     in property <[string]> rates;
+    // Codes sent through `mod-tempo` besides a rate index (must match `TEMPO_*` in app.rs):
+    // phase-code + 0..3 sets the phase in quarters; restart-code + 0/1 sets restart on launch.
+    out property <int> phase-code: 100;
+    out property <int> restart-code: 200;
 }
 
 /// Live audio levels, updated every frame.
@@ -44,6 +48,11 @@ export struct ParamData {
     mod-source: int,
     mod-amount: float,
     mod-rate: int,
+    // Phase in quarters of a cycle (0..3), and restart on launch, for tempo shapes.
+    mod-phase: int,
+    mod-restart: bool,
+    // Restart on launch makes sense here (clip parameters and clip effects).
+    restartable: bool,
 }
 
 export struct EffectData {

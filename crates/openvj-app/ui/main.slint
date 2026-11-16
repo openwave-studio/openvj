@@ -1251,7 +1251,7 @@ export component MainWindow inherits Window {
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
     callback param-mod-amount(int, int, int, float);
-    callback param-mod-rate(int, int, int, int);
+    callback param-mod-tempo(int, int, int, int);
     callback open-effects-folder();
     callback open-milk-folder();
     callback effect-toggle(int, int);
@@ -1578,7 +1578,7 @@ export component MainWindow inherits Window {
                     param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                     param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                     param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                    param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                    param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                     effect-toggle(s, i) => { root.effect-toggle(s, i); }
                     effect-remove(s, i) => { root.effect-remove(s, i); }
                     effect-move(s, i, d) => { root.effect-move(s, i, d); }

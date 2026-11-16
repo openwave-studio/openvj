@@ -1281,18 +1281,21 @@ impl Engine {
                 }
             }
             let layer_opacity = comp.layer_opacity(layer, inputs);
+            // Clip modulation that restarts on launch counts from each clip's own launch.
+            let inc_inputs = ModInputs { launch_beat: frame.launch_beats.0, ..*inputs };
+            let out_inputs = ModInputs { launch_beat: frame.launch_beats.1, ..*inputs };
             let (src, opacity) = match (frame.incoming, frame.outgoing) {
                 (Some((clip, time)), None) => {
-                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, inputs, preview, 0);
+                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, &inc_inputs, preview, 0);
                     (&t.clip_a, layer_opacity * frame.mix)
                 }
                 (None, Some((clip, time))) => {
-                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, inputs, preview, 0);
+                    self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, &out_inputs, preview, 0);
                     (&t.clip_a, layer_opacity * (1.0 - frame.mix))
                 }
                 (Some((inc, inc_t)), Some((out, out_t))) => {
-                    self.draw_clip(&mut passes, &t, out, out_t, &t.clip_a, now, inputs, preview, 0);
-                    self.draw_clip(&mut passes, &t, inc, inc_t, &t.clip_b, now, inputs, preview, 0);
+                    self.draw_clip(&mut passes, &t, out, out_t, &t.clip_a, now, &out_inputs, preview, 0);
+                    self.draw_clip(&mut passes, &t, inc, inc_t, &t.clip_b, now, &inc_inputs, preview, 0);
                     passes.push(Self::blend_pass(&t.layer_mix, &t.clip_a, &t.clip_b, MODE_MIX, frame.mix));
                     (&t.layer_mix, layer_opacity)
                 }
@@ -2110,7 +2113,8 @@ mod tests {
         e.set_media_frame(white, 1, 1, &[255; 4]);
         comp.trigger(0, 0, 0.0);
         comp.layers[0].opacity = 0.0;
-        comp.layers[0].opacity_mod = Modulation { source: ModSource::Bass, amount: 1.0, beats: 1.0 };
+        comp.layers[0].opacity_mod =
+            Modulation { source: ModSource::Bass, amount: 1.0, beats: 1.0, ..Default::default() };
         let mut i = inputs(0.1);
         e.render(&comp, 0.1, &i, None);
         assert_eq!(mean(&e.read_target(e.output())), [0.0; 3]);

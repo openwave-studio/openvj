@@ -211,7 +211,7 @@ fn main() -> Result<()> {
     on!(on_param_set, |a, s: i32, o: i32, i: i32, v: f32| a.param_set(s, o, i as usize, v));
     on!(on_param_mod, |a, s: i32, o: i32, i: i32, m: i32| a.param_mod(s, o, i as usize, m.max(0) as usize));
     on!(on_param_mod_amount, |a, s: i32, o: i32, i: i32, v: f32| a.param_mod_amount(s, o, i as usize, v));
-    on!(on_param_mod_rate, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_rate(s, o, i as usize, r.max(0) as usize));
+    on!(on_param_mod_tempo, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_tempo(s, o, i as usize, r));
     on!(on_open_effects_folder, |a| a.open_effects_folder());
 
     // The library grid (ui/library.slint).

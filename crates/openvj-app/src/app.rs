@@ -79,7 +79,10 @@ const MAX_DURATION: f32 = 60.0;
 const MAX_SPEED: f32 = 4.0;
 const MAX_TRANSITION: f32 = 4.0;
 const MAX_RELEASE: f32 = 1.0;
-const RATE_LABELS: [&str; MOD_RATES.len()] = ["¼", "½", "1", "2", "4", "8", "16"];
+const RATE_LABELS: [&str; MOD_RATES.len()] = ["¼", "½", "1", "2", "4", "8", "16", "32", "64"];
+/// Codes sent with `param-mod-tempo` besides a rate index; must match `ModNames` in state.slint.
+const TEMPO_PHASE: i32 = 100;
+const TEMPO_RESTART: i32 = 200;
 /// Seconds a live input stays open after its last clip stops, so relaunching is instant.
 const LIVE_LINGER: f64 = 3.0;
 /// Seconds before reconnecting an input that failed (unplugged camera, app not running).
@@ -375,9 +378,9 @@ impl App {
             comp_fx: EffectModels::default(),
             layer_fx: EffectModels::default(),
             group_fx: EffectModels::default(),
-            clip_fx: EffectModels::default(),
+            clip_fx: EffectModels { restartable: true, ..Default::default() },
             layer_tf: EffectModels::default(),
-            clip_tf: EffectModels::default(),
+            clip_tf: EffectModels { restartable: true, ..Default::default() },
             grid_dirty: true,
             props_dirty: true,
             effects_generation: None,
@@ -1011,7 +1014,13 @@ impl App {
             presence: f.presence,
             clock: f.clock,
         };
-        ModInputs { beat, bands: l.bands, band_signals: l.band_features.map(signal), overall: signal(l.overall) }
+        ModInputs {
+            beat,
+            bands: l.bands,
+            band_signals: l.band_features.map(signal),
+            overall: signal(l.overall),
+            launch_beat: 0.0,
+        }
     }
 
     /// Parameter rows change every frame while modulated, so they are rebuilt each sync
@@ -1148,6 +1157,9 @@ impl App {
                 let reset = DEFAULT_CLIP_SECS / MAX_DURATION;
                 rows.push(fixed_row(DURATION_INDEX, "Duration", d / MAX_DURATION, reset, format!("{d:.1} s")));
             }
+        }
+        for row in rows.iter_mut().filter(|r| r.modulatable) {
+            row.restartable = true;
         }
         update_model(&self.clip_params, rows);
     }
@@ -2185,8 +2197,12 @@ impl App {
     }
 
     pub fn param_mod(&mut self, scope: i32, owner: i32, index: usize, source: usize) {
+        let seed = random_seed();
         if let Some(m) = self.modulation_mut(scope, owner, index) {
             m.source = ModSource::from_index(source);
+            if m.source.is_random() && m.seed == 0 {
+                m.seed = seed;
+            }
             self.grid_dirty = true;
         }
     }
@@ -2197,9 +2213,15 @@ impl App {
         }
     }
 
-    pub fn param_mod_rate(&mut self, scope: i32, owner: i32, index: usize, rate: usize) {
+    /// Sets a tempo shape's rate (an index into [`MOD_RATES`]), phase (`TEMPO_PHASE` + quarters)
+    /// or restart on launch (`TEMPO_RESTART` + 0 or 1).
+    pub fn param_mod_tempo(&mut self, scope: i32, owner: i32, index: usize, code: i32) {
         if let Some(m) = self.modulation_mut(scope, owner, index) {
-            m.beats = MOD_RATES[rate.min(MOD_RATES.len() - 1)];
+            match code {
+                TEMPO_RESTART.. => m.restart = code > TEMPO_RESTART,
+                TEMPO_PHASE.. => m.phase = (code - TEMPO_PHASE).clamp(0, 3) as f32 / 4.0,
+                _ => m.beats = MOD_RATES[(code.max(0) as usize).min(MOD_RATES.len() - 1)],
+            }
         }
     }
 
@@ -3042,7 +3064,16 @@ fn param_row(
         mod_source: m.source.index() as i32,
         mod_amount: m.amount,
         mod_rate: m.rate_index() as i32,
+        mod_phase: (m.phase * 4.0).round() as i32 % 4,
+        mod_restart: m.restart,
+        restartable: false,
     }
+}
+
+/// A seed for a new Random mapping, so two mappings set up the same way still differ.
+fn random_seed() -> u32 {
+    use std::hash::{BuildHasher, RandomState};
+    (RandomState::new().hash_one(Instant::now()) as u32).max(1)
 }
 
 /// A row without a modulator (speed, transition, analyser settings).
@@ -3065,6 +3096,8 @@ fn fixed_row(index: usize, name: &str, value: f32, reset: f32, display: String) 
 struct EffectModels {
     effects: Rc<VecModel<EffectData>>,
     params: Vec<Rc<VecModel<ParamData>>>,
+    /// A clip's chain: its tempo mappings can restart when the clip launches.
+    restartable: bool,
 }
 
 impl EffectModels {
@@ -3086,6 +3119,7 @@ impl EffectModels {
                 None => Vec::new(),
             };
             params.push(param_row(MIX_INDEX, "Mix", &fx.mix, 1.0, inputs, pct));
+            params.iter_mut().for_each(|p| p.restartable = self.restartable);
             update_model(model, params);
             let source =
                 fx.ty().map(|t| t.def.source.clone()).filter(|u| u.starts_with("https://")).unwrap_or_default();

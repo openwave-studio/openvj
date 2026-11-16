@@ -498,6 +498,9 @@ pub struct LayerFrame<'a> {
     pub incoming: Option<(&'a Clip, f64)>,
     /// The clip being faded away from, with its local time in seconds.
     pub outgoing: Option<(&'a Clip, f64)>,
+    /// Beats the incoming and outgoing clips were launched on, for modulation that restarts
+    /// on launch.
+    pub launch_beats: (f64, f64),
     /// Crossfade position: 0 = all outgoing, 1 = all incoming.
     pub mix: f32,
 }
@@ -604,7 +607,11 @@ impl Layer {
         if incoming.is_none() && outgoing.is_none() {
             return None;
         }
-        Some(LayerFrame { incoming, outgoing, mix })
+        let launch_beats = (
+            self.active.map_or(0.0, |p| p.started_beat),
+            self.fade.and_then(|f| f.from).map_or(0.0, |p| p.started_beat),
+        );
+        Some(LayerFrame { incoming, outgoing, launch_beats, mix })
     }
 }
 
@@ -753,11 +760,11 @@ impl Composition {
         // Show off modulation and effects: the plasma warps with the bass, the base layer
         // cycles its hue over four bars, and the top generator layer splits on the bass.
         use crate::{Effect, ModSource};
-        let bass = Modulation { source: ModSource::Bass, amount: 0.6, beats: 1.0 };
+        let bass = Modulation { source: ModSource::Bass, amount: 0.6, beats: 1.0, ..Default::default() };
         comp.clip_mut(0, 0).expect("demo clip").mods[3] = bass;
         let mut color = Effect::new("color");
         color.params.get_mut("hue").expect("hue").modulation =
-            Modulation { source: ModSource::Saw, amount: 1.0, beats: 16.0 };
+            Modulation { source: ModSource::Saw, amount: 1.0, beats: 16.0, ..Default::default() };
         comp.layers[0].effects.push(color);
         let mut split = Effect::new("rgb_split");
         let amount = split.params.get_mut("amount").expect("amount");
@@ -1369,11 +1376,12 @@ mod tests {
         c.set_clip(0, 0, generator(GeneratorKind::Plasma));
         let clip = c.clip_mut(0, 0).unwrap();
         clip.params = [0.0; PARAM_COUNT];
-        clip.mods[2] = Modulation { source: ModSource::Treble, amount: 0.5, beats: 1.0 };
+        clip.mods[2] = Modulation { source: ModSource::Treble, amount: 0.5, beats: 1.0, ..Default::default() };
         let inputs = ModInputs { beat: 0.0, bands: [0.0, 0.0, 0.0, 1.0], ..Default::default() };
         assert_eq!(c.clip(0, 0).unwrap().param_values(&inputs), [0.0, 0.0, 0.5, 0.0]);
         c.layers[0].opacity = 0.2;
-        c.layers[0].opacity_mod = Modulation { source: ModSource::Treble, amount: -1.0, beats: 1.0 };
+        c.layers[0].opacity_mod =
+            Modulation { source: ModSource::Treble, amount: -1.0, beats: 1.0, ..Default::default() };
         assert_eq!(c.layers[0].opacity_value(&inputs), 0.0);
         assert_eq!(c.master_value(&inputs), 1.0);
     }
