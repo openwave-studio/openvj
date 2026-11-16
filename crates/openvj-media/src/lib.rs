@@ -528,13 +528,16 @@ mod tests {
 
         let mut dec = VideoDecoder::open(&path, 160, 160).unwrap();
         let mut got = None;
+        // Wait until frame 2 itself is up: while it decodes, an earlier frame can be shown
+        // first, and going back to frame 0 below would then be no change.
         for _ in 0..200 {
-            got = got.or(dec.frame_at(0.1).map(<[u8]>::to_vec));
-            if got.is_some() {
+            got = dec.frame_at(0.1).map(<[u8]>::to_vec).or(got);
+            if dec.shown == 2 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert_eq!(dec.shown, 2);
         assert_eq!(got.unwrap().len(), 160 * 120 * 4);
         assert!(dec.frame_at(0.1).is_none(), "the same frame isn't handed out twice");
         assert!(dec.frame_at(0.0).is_some(), "going back to a decoded frame comes from the cache");
