@@ -578,6 +578,9 @@ component Toolbar inherits Rectangle {
     callback save-comp();
     callback relink-media();
     callback open-settings();
+    /// Room on the left for the macOS window buttons, which sit on this bar.
+    in property <length> titlebar-inset;
+    callback toggle-maximized();
 
     height: 48px;
     background: Theme.bg;
@@ -587,8 +590,16 @@ component Toolbar inherits Rectangle {
         background: Theme.separator;
     }
 
+    // The bar doubles as the window's title bar: drag empty space to move the window,
+    // double-click it to zoom. Buttons on top of it take their clicks first.
+    WindowMoveArea {
+        TouchArea {
+            double-clicked => { root.toggle-maximized(); }
+        }
+    }
+
     HorizontalLayout {
-        padding-left: 14px;
+        padding-left: 14px + root.titlebar-inset;
         padding-right: 10px;
         spacing: 10px;
         alignment: stretch;
@@ -1420,6 +1431,10 @@ export component MainWindow inherits Window {
         keys.focus();
     }
 
+    // On macOS the system title bar is hidden and the window buttons overlay the toolbar.
+    in property <length> titlebar-inset;
+    callback toggle-maximized();
+
     // Settings window (settings.slint).
     in-out property <bool> settings-open;
     in-out property <int> settings-page;
@@ -1469,6 +1484,8 @@ export component MainWindow inherits Window {
                 save-comp => { root.save-comp(); }
                 relink-media => { root.relink-media(); }
                 open-settings => { root.settings-open = true; }
+                titlebar-inset: root.titlebar-inset;
+                toggle-maximized => { root.toggle-maximized(); }
             }
 
             // Clip grid, with the monitors on the right.
