@@ -2,11 +2,11 @@
 
 ## 1. Library model (own PR)
 
-- [ ] 1.1 `library.rs`: item ids for ISF, MilkDrop, Shadertoy and preset items; status, favorite, intensity, tags, crates, usage
-- [ ] 1.2 `library.json` read/write in the settings folder, versioned, with tests; missing files keep their entries
-- [ ] 1.3 Audio-reactive detection from shader inputs, with tests
+- [x] 1.1 `library.rs`: item ids for ISF, MilkDrop, Shadertoy and preset items; status, favorite, intensity, tags, crates, usage
+- [x] 1.2 `library.json` read/write in the settings folder, versioned, with tests; missing files keep their entries
+- [x] 1.3 Audio-reactive detection from shader inputs, with tests
 - [ ] 1.4 Presets as `.ovjpreset` files reusing the Player's `Preset`, load/save with tests
-- [ ] 1.5 First-launch starter set (per the answer to open question 1)
+- [x] 1.5 First-launch starter set (proposed default: built-ins, bundled effects, one bundled generator per category up to 30)
 
 ## 2. Thumbnails (own PR)
 
