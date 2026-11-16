@@ -31,7 +31,7 @@ jobs:
       contents: write # create draft releases
       pull-requests: read # name dev builds after their PR
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -76,7 +76,7 @@ jobs:
       # The bundled FFmpeg only changes with its build script, so it's built once and cached.
       - name: Restore FFmpeg
         id: ffmpeg-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/ffmpeg
           key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
@@ -111,7 +111,7 @@ jobs:
         run: echo "slug=$(tr '[:upper:]' '[:lower:]' <<<"$GITHUB_REF_NAME" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')" >>"$GITHUB_OUTPUT"
       - name: Upload the app
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: openVJ-macOS-${{ steps.build.outputs.slug }}-${{ github.sha }}
           path: target/macos/*.zip
