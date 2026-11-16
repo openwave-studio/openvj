@@ -18,6 +18,7 @@ context: |
   - Parameter animation: one driver per parameter for now (stacking later), Resolume's model.
   - UI follows openDJ's look with one cyan accent (#4fe6da); colours and sizes come from theme.slint.
     Resolume-style elements stay only where the maintainer confirmed them (parameter bars, spaced clip grid).
+    Exception: the Synthesis layout uses standardized knobs for macros and parameters (the maintainer, 2026-11-15).
   - Varda (github.com/im-knots/varda, MIT) is the reference to borrow projection mapping and shader code from.
   - Ask the maintainer at real design points (formats, UX, scope) instead of going deep on a guess.
   - The maintainer's own files (sample .avc, presets) must not be added as fixtures without asking: the repo is public.

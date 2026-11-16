@@ -6,6 +6,7 @@ import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
+import { Layouts, LayoutPicker, LayoutPlaceholder } from "layouts.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner }
 
@@ -565,6 +566,8 @@ component Toolbar inherits Rectangle {
     in property <bool> link-on;
     in property <int> link-peers;
     in property <bool> midi-on;
+    in property <int> layout;
+    callback layout-picked(int);
     callback audio-toggle();
     callback link-toggle();
     callback midi-toggle();
@@ -603,6 +606,17 @@ component Toolbar inherits Rectangle {
         padding-right: 10px;
         spacing: 10px;
         alignment: stretch;
+
+        // Layout menu (Mixer, Player, Synthesis), at the top left as in openDJ.
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            LayoutPicker {
+                current: root.layout;
+                picked(i) => { root.layout-picked(i); }
+            }
+        }
 
         // Wordmark, in openDJ's typeface with the mark in the accent.
         HorizontalLayout {
@@ -1431,6 +1445,17 @@ export component MainWindow inherits Window {
         keys.focus();
     }
 
+    // Which layout fills the window (see Layouts in layouts.slint).
+    in-out property <int> layout;
+    // Called after the layout changes, so the app can remember it.
+    callback layout-changed(int);
+    public function set-layout(i: int) {
+        if (i != root.layout) {
+            root.layout = i;
+            root.layout-changed(i);
+        }
+    }
+
     // On macOS the system title bar is hidden and the window buttons overlay the toolbar.
     in property <length> titlebar-inset;
     callback toggle-maximized();
@@ -1447,6 +1472,10 @@ export component MainWindow inherits Window {
                 } else {
                     root.settings-open = true;
                 }
+                return accept;
+            }
+            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "1" || e.text == "2" || e.text == "3")) {
+                root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : 2);
                 return accept;
             }
             if (root.settings-open && e.text == Key.Escape) {
@@ -1471,6 +1500,8 @@ export component MainWindow inherits Window {
                 link-on: root.link-on;
                 link-peers: root.link-peers;
                 midi-on: root.midi-on;
+                layout: root.layout;
+                layout-picked(i) => { root.set-layout(i); keys.focus(); }
                 audio-toggle => { root.audio-toggle(); }
                 link-toggle => { root.link-toggle(); }
                 midi-toggle => { root.midi-toggle(); }
@@ -1488,8 +1519,15 @@ export component MainWindow inherits Window {
                 toggle-maximized => { root.toggle-maximized(); }
             }
 
-            // Clip grid, with the monitors on the right.
-            HorizontalLayout {
+            // Player and Synthesis aren't built yet.
+            if root.layout != Layouts.mixer: LayoutPlaceholder {
+                vertical-stretch: 1;
+                layout: root.layout;
+                output-image: root.output-image;
+            }
+
+            // Mixer: clip grid, with the monitors on the right.
+            if root.layout == Layouts.mixer: HorizontalLayout {
                 vertical-stretch: 1;
                 padding: 8px;
                 spacing: 8px;
@@ -1565,8 +1603,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Properties dock and browser.
-            HorizontalLayout {
+            // Mixer: properties dock and browser.
+            if root.layout == Layouts.mixer: HorizontalLayout {
                 height: 318px;
                 padding-left: 8px;
                 padding-right: 8px;

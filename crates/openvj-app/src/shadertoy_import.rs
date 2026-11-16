@@ -171,21 +171,9 @@ fn save(c: &Converted) -> Result<PathBuf, String> {
 
 // ---- The API key, kept in openVJ's preferences file. ----
 
-/// openVJ's settings folder: `~/Library/Application Support/openVJ` on macOS,
-/// `%APPDATA%\openVJ` on Windows, `$XDG_CONFIG_HOME/openvj` elsewhere.
+/// openVJ's preferences file (see [`crate::prefs`]); the key lives beside the layout.
 fn prefs_file() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dir = if cfg!(target_os = "macos") {
-        home?.join("Library/Application Support/openVJ")
-    } else if cfg!(windows) {
-        PathBuf::from(std::env::var_os("APPDATA")?).join("openVJ")
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home.map(|h| h.join(".config")))?
-            .join("openvj")
-    };
-    Some(dir.join("preferences.json"))
+    Some(crate::prefs::settings_dir()?.join("preferences.json"))
 }
 
 fn read_prefs() -> serde_json::Map<String, serde_json::Value> {

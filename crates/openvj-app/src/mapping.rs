@@ -98,18 +98,7 @@ fn summary(s: &OutputSetup) -> String {
 
 /// `output-mapping.json` in openVJ's settings folder.
 fn settings_file() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dir = if cfg!(target_os = "macos") {
-        home?.join("Library/Application Support/openVJ")
-    } else if cfg!(windows) {
-        PathBuf::from(std::env::var_os("APPDATA")?).join("openVJ")
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home.map(|h| h.join(".config")))?
-            .join("openvj")
-    };
-    Some(dir.join("output-mapping.json"))
+    Some(crate::prefs::settings_dir()?.join("output-mapping.json"))
 }
 
 /// A display connected to the computer.

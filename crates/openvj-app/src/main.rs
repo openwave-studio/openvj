@@ -5,6 +5,7 @@ mod browser;
 mod link;
 mod mapping;
 mod midi;
+mod prefs;
 mod shadertoy_import;
 mod syphon_out;
 
@@ -144,6 +145,9 @@ fn main() -> Result<()> {
         });
     }
     let out = OutputWindow::new()?;
+    // Open in the layout used last time (Mixer the first time).
+    ui.set_layout(prefs::layout());
+    ui.on_layout_changed(prefs::set_layout);
     {
         let mut a = app.borrow_mut();
         a.attach(&ui);
