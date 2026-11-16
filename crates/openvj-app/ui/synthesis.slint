@@ -1,0 +1,495 @@
+// The Synthesis layout: one visual at a time, laid out like a hardware synth, to perform
+// with. Knobs are used here only (the maintainer, 2026-11-15); the rest of the app keeps
+// Resolume-style bars.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Scope, ParamData, EffectData } from "state.slint";
+import { ModButton, FlatButton } from "controls.slint";
+
+/// One layer in the Synthesis strip.
+export struct SynthLayer {
+    index: int,
+    name: string,
+    // Name of the clip it plays, or "".
+    clip: string,
+    thumb: image,
+    has-thumb: bool,
+    focused: bool,
+}
+
+/// A knob for a 0..1 parameter: drag up or down, double-click to reset. The arc shows the
+/// value; a dot shows the live value when a driver or macro moves it. In map mode a click
+/// puts the parameter on (or takes it off) the macro being mapped.
+export component Knob inherits Rectangle {
+    in property <ParamData> data;
+    in property <length> size: 46px;
+    in property <color> tint: Theme.accent;
+    // A macro is being mapped: clicks map instead of turning.
+    in property <bool> map-mode;
+    // The macro being mapped, to light the knobs it already moves.
+    in property <int> map-macro: -1;
+    callback set(int, float);
+    callback toggled(int);
+
+    property <float> v: clamp(root.data.value, 0, 1);
+    property <float> lv: clamp(root.data.live, 0, 1);
+    property <float> r: 20;
+    property <angle> a0: -135deg;
+    property <angle> a1: root.a0 + 270deg * root.v;
+    property <angle> al: root.a0 + 270deg * root.lv;
+    property <bool> on-map: root.map-mode && root.data.macro-index == root.map-macro;
+    property <float> start-value;
+
+    width: root.size + 22px;
+    height: root.size + 38px;
+
+    Rectangle {
+        x: 2px;
+        y: 0;
+        width: parent.width - 4px;
+        height: root.size + 4px;
+        border-radius: Theme.radius;
+        background: root.on-map ? root.tint.with-alpha(0.22) : root.map-mode && ta.has-hover ? Theme.raised : transparent;
+        border-width: root.map-mode ? 1px : 0;
+        border-color: root.on-map ? root.tint : Theme.border;
+    }
+
+    Path {
+        x: (parent.width - root.size) / 2;
+        y: 2px;
+        width: root.size;
+        height: root.size;
+        viewbox-width: 48;
+        viewbox-height: 48;
+        stroke: Theme.chosen;
+        stroke-width: 3px;
+        fill: transparent;
+        commands: "M " + (24 + root.r * sin(root.a0)) + " " + (24 - root.r * cos(root.a0))
+            + " A " + root.r + " " + root.r + " 0 1 1 " + (24 + root.r * sin(root.a0 + 270deg)) + " " + (24 - root.r * cos(root.a0 + 270deg));
+    }
+    if root.v > 0.002: Path {
+        x: (parent.width - root.size) / 2;
+        y: 2px;
+        width: root.size;
+        height: root.size;
+        viewbox-width: 48;
+        viewbox-height: 48;
+        stroke: root.data.macro-index >= 0 ? root.tint.darker(0.25) : root.tint;
+        stroke-width: 3px;
+        fill: transparent;
+        commands: "M " + (24 + root.r * sin(root.a0)) + " " + (24 - root.r * cos(root.a0))
+            + " A " + root.r + " " + root.r + " 0 " + (root.v > 0.6667 ? 1 : 0) + " 1 " + (24 + root.r * sin(root.a1)) + " " + (24 - root.r * cos(root.a1));
+    }
+    // Pointer.
+    Path {
+        x: (parent.width - root.size) / 2;
+        y: 2px;
+        width: root.size;
+        height: root.size;
+        viewbox-width: 48;
+        viewbox-height: 48;
+        stroke: Theme.text;
+        stroke-width: 2px;
+        fill: transparent;
+        commands: "M " + (24 + 7 * sin(root.a1)) + " " + (24 - 7 * cos(root.a1)) + " L " + (24 + 15 * sin(root.a1)) + " " + (24 - 15 * cos(root.a1));
+    }
+    // Live value, when something moves it.
+    if abs(root.lv - root.v) > 0.004: Rectangle {
+        x: (parent.width - root.size) / 2 + (24 + root.r * sin(root.al)) / 48 * root.size - 3px;
+        y: 2px + (24 - root.r * cos(root.al)) / 48 * root.size - 3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.data.mod-source != 0 ? Theme.mod-color(root.data.mod-source) : Theme.text;
+    }
+    if root.data.macro-index >= 0: Text {
+        x: parent.width - self.width - 2px;
+        y: 0;
+        text: "M" + (root.data.macro-index + 1);
+        color: root.tint;
+        font-size: Theme.font-tiny;
+        font-weight: 700;
+    }
+
+    Text {
+        y: root.size + 6px;
+        width: parent.width;
+        text: root.data.name;
+        color: root.data.mod-source != 0 ? Theme.mod-color(root.data.mod-source) : Theme.text-dim;
+        font-size: Theme.font-small;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        y: root.size + 20px;
+        width: parent.width;
+        text: root.data.display;
+        color: Theme.text;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.map-mode ? pointer : ns-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.start-value = root.data.value;
+            }
+        }
+        moved => {
+            if (!root.map-mode && self.pressed) {
+                root.set(root.data.index, clamp(root.start-value + (self.pressed-y - self.mouse-y) / 160px, 0, 1));
+            }
+        }
+        clicked => {
+            if (root.map-mode) {
+                root.toggled(root.data.index);
+            }
+        }
+        double-clicked => {
+            if (!root.map-mode) {
+                root.set(root.data.index, root.data.reset);
+            }
+        }
+    }
+}
+
+/// A titled panel of knobs, laid out in rows of `columns`.
+component KnobSection inherits Rectangle {
+    in property <string> title;
+    in property <color> title-color: Theme.text-dim;
+    in property <[ParamData]> params;
+    in property <int> columns: 4;
+    in property <bool> map-mode;
+    in property <int> map-macro;
+    in property <bool> dimmed;
+    callback set(int, float);
+    callback toggled(int);
+
+    property <length> kw: 68px;
+    property <length> kh: 86px;
+    property <int> cols: min(root.columns, max(1, root.params.length));
+
+    width: root.cols * root.kw + 20px;
+    height: 34px + ceil(root.params.length / root.cols) * root.kh + 8px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.separator;
+    border-radius: Theme.radius;
+    opacity: root.dimmed ? 0.5 : 1;
+
+    Text {
+        x: 10px;
+        y: 8px;
+        width: parent.width - 20px;
+        text: root.title;
+        color: root.title-color;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+        overflow: elide;
+    }
+    for p[i] in root.params: Knob {
+        x: 10px + mod(i, root.cols) * root.kw + (root.kw - self.width) / 2;
+        y: 30px + floor(i / root.cols) * root.kh;
+        data: p;
+        map-mode: root.map-mode;
+        map-macro: root.map-macro;
+        set(k, v) => { root.set(k, v); }
+        toggled(k) => { root.toggled(k); }
+    }
+}
+
+export component SynthesisLayout inherits Rectangle {
+    in property <image> output-image;
+    in property <image> preview-image;
+    in property <[SynthLayer]> layers;
+    in property <string> clip-title;
+    in property <bool> has-clip;
+    in property <[ParamData]> macros;
+    // How many parameters each macro moves.
+    in property <[int]> macro-counts;
+    in property <[ParamData]> clip-params;
+    in property <[EffectData]> clip-effects;
+    in property <[ParamData]> layer-params;
+    in property <[ParamData]> comp-params;
+    callback focus-layer(int);
+    callback param-set(int, int, int, float);
+    callback param-mod(int, int, int, int);
+    callback param-mod-rate(int, int, int, int);
+    callback macro-toggle(int, int, int, int);
+    callback macro-clear(int);
+    callback add-to-playlist();
+
+    // The macro being mapped, or -1.
+    in-out property <int> map-macro: -1;
+
+    background: Theme.bg;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // Layers, top first, each with what it plays.
+        Rectangle {
+            width: 180px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.separator;
+            border-radius: Theme.radius;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+                alignment: start;
+                Text {
+                    height: 20px;
+                    text: "LAYERS";
+                    color: Theme.text-dim;
+                    font-size: Theme.font-small;
+                    font-weight: 600;
+                    letter-spacing: 0.6px;
+                }
+                for l in root.layers: Rectangle {
+                    height: 52px;
+                    border-radius: Theme.radius;
+                    background: l.focused ? Theme.accent.with-alpha(0.14) : lta.has-hover ? Theme.raised : transparent;
+                    border-width: l.focused ? 1px : 0;
+                    border-color: Theme.accent;
+                    HorizontalLayout {
+                        padding: 6px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 64px;
+                            background: Theme.track;
+                            if l.has-thumb: Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: l.thumb;
+                                image-fit: cover;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: l.name;
+                                color: l.focused ? Theme.accent : Theme.text;
+                                font-size: Theme.font-body;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: l.clip == "" ? "nothing playing" : l.clip;
+                                color: Theme.text-faint;
+                                font-size: Theme.font-small;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                    lta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.focus-layer(l.index); }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+
+            // The visual, large, and the output beside it.
+            HorizontalLayout {
+                vertical-stretch: 1;
+                min-height: 220px;
+                spacing: 8px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.track;
+                    border-radius: Theme.radius;
+                    Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: root.preview-image;
+                        image-fit: contain;
+                    }
+                    Rectangle {
+                        x: 8px;
+                        y: 8px;
+                        width: title.preferred-width + 16px;
+                        height: 24px;
+                        border-radius: Theme.radius;
+                        background: #000000a0;
+                        title := Text {
+                            text: root.has-clip ? root.clip-title : "Pick a layer that plays something";
+                            color: Theme.text;
+                            font-size: Theme.font-normal;
+                            font-weight: 600;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    width: 300px;
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: "OUTPUT";
+                        color: Theme.accent;
+                        font-size: Theme.font-small;
+                        font-weight: 600;
+                        letter-spacing: 0.6px;
+                    }
+                    Rectangle {
+                        height: self.width * 9 / 16;
+                        background: Theme.track;
+                        Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: root.output-image;
+                            image-fit: contain;
+                        }
+                    }
+                    FlatButton {
+                        text: "Add to playlist";
+                        enabled: root.has-clip;
+                        clicked => { root.add-to-playlist(); }
+                    }
+                }
+            }
+
+            // Macros.
+            Rectangle {
+                height: 150px;
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: root.map-macro >= 0 ? Theme.accent : Theme.separator;
+                border-radius: Theme.radius;
+                opacity: root.has-clip ? 1 : 0.5;
+                Text {
+                    x: 10px;
+                    y: 8px;
+                    text: root.map-macro >= 0
+                        ? "MAPPING MACRO " + (root.map-macro + 1) + ": click knobs below to add or remove them, then Done"
+                        : "MACROS";
+                    color: root.map-macro >= 0 ? Theme.accent : Theme.text-dim;
+                    font-size: Theme.font-small;
+                    font-weight: 600;
+                    letter-spacing: 0.6px;
+                }
+                HorizontalLayout {
+                    y: 26px;
+                    height: parent.height - 30px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 4px;
+                    alignment: start;
+                    for m[i] in root.macros: VerticalLayout {
+                        spacing: 2px;
+                        Knob {
+                            size: 52px;
+                            data: m;
+                            set(k, v) => { root.param-set(Scope.clip-macro, 0, k, v); }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            alignment: center;
+                            ModButton {
+                                width: 44px;
+                                source: m.mod-source;
+                                rate: m.mod-rate;
+                                picked(s) => { root.param-mod(Scope.clip-macro, 0, i, s); }
+                            }
+                            Rectangle {
+                                width: 28px;
+                                height: 20px;
+                                border-radius: Theme.radius-small;
+                                background: root.map-macro == i ? Theme.accent : map-ta.has-hover ? Theme.raised : Theme.panel-2;
+                                border-width: 1px;
+                                border-color: root.map-macro == i ? Theme.accent : Theme.border;
+                                Text {
+                                    text: root.map-macro == i ? "Done" : "Map";
+                                    color: root.map-macro == i ? Theme.on-accent : root.macro-counts[i] > 0 ? Theme.accent : Theme.text-dim;
+                                    font-size: Theme.font-tiny;
+                                    font-weight: 700;
+                                }
+                                map-ta := TouchArea {
+                                    enabled: root.has-clip;
+                                    mouse-cursor: pointer;
+                                    clicked => { root.map-macro = root.map-macro == i ? -1 : i; }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.macro-counts[i] == 0 ? "empty" : root.macro-counts[i] == 1 ? "1 param" : root.macro-counts[i] + " params";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-tiny;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Sections: the source, each effect, and the output.
+            ScrollView {
+                height: 210px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    if root.clip-params.length > 0: KnobSection {
+                        y: 0;
+                        title: "SOURCE";
+                        title-color: Theme.gen;
+                        params: root.clip-params;
+                        columns: 6;
+                        map-mode: root.map-macro >= 0;
+                        map-macro: root.map-macro;
+                        set(k, v) => { root.param-set(Scope.clip, 0, k, v); }
+                        toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip, 0, k); }
+                    }
+                    for fx[e] in root.clip-effects: KnobSection {
+                        y: 0;
+                        title: "FX · " + fx.name;
+                        params: fx.params;
+                        columns: 4;
+                        dimmed: !fx.enabled;
+                        map-mode: root.map-macro >= 0;
+                        map-macro: root.map-macro;
+                        set(k, v) => { root.param-set(Scope.clip-fx, e, k, v); }
+                        toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip-fx, e, k); }
+                    }
+                    Rectangle {
+                        width: 2 * 68px + 20px;
+                        height: 34px + 86px + 8px;
+                        background: Theme.panel;
+                        border-width: 1px;
+                        border-color: Theme.separator;
+                        border-radius: Theme.radius;
+                        opacity: root.map-macro >= 0 ? 0.5 : 1;
+                        Text {
+                            x: 10px;
+                            y: 8px;
+                            text: "OUTPUT";
+                            color: Theme.accent;
+                            font-size: Theme.font-small;
+                            font-weight: 600;
+                            letter-spacing: 0.6px;
+                        }
+                        if root.layer-params.length > 0: Knob {
+                            x: 10px + (68px - self.width) / 2;
+                            y: 30px;
+                            data: root.layer-params[0];
+                            set(k, v) => { root.param-set(Scope.layer, -1, k, v); }
+                        }
+                        if root.comp-params.length > 0: Knob {
+                            x: 10px + 68px + (68px - self.width) / 2;
+                            y: 30px;
+                            data: root.comp-params[0];
+                            set(k, v) => { root.param-set(Scope.comp, 0, k, v); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

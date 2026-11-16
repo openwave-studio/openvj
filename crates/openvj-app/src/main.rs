@@ -323,6 +323,21 @@ fn main() -> Result<()> {
             }
         });
     }
+    // Synthesis layout.
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_synth_focus(move |l| with_app(&app, &w, &o, |a| a.synth_focus(l as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_macro_toggle(move |m, scope, owner, index| {
+            with_app(&app, &w, &o, |a| a.macro_toggle(m as usize, scope, owner, index as usize))
+        });
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_macro_clear(move |m| with_app(&app, &w, &o, |a| a.macro_clear(m as usize)));
+    }
     // Player layout.
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());

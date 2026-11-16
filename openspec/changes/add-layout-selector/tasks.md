@@ -22,10 +22,11 @@
 
 ## 4. Synthesis
 
-- [ ] 4.1 Macro model in openvj-core (8 per layer, targets with ranges), saved in compositions and presets, with tests
-- [ ] 4.2 Synthesis screen: layer strip, preview, macro row, SOURCE / FX / OUTPUT sections
-- [ ] 4.3 Assigning macro targets; MIDI learn and drivers on macros
-- [ ] 4.4 Save preset and Add to playlist
+- [x] 4.1 Macro model in openvj-core (8 per visual, targets with ranges), saved in compositions and presets, with tests
+- [x] 4.2 Synthesis screen: layer strip, preview, macro row, SOURCE / FX / OUTPUT sections, knobs
+- [x] 4.3 Assigning macro targets (Map / Done) and drivers on macros
+- [x] 4.4 Add to playlist (Save preset waits for the preset library being designed in the library thread)
+- [ ] 4.5 MIDI learn for macros (no MIDI learn in openVJ yet), renaming macros, editing target ranges
 
 ## 5. Wrap up
 

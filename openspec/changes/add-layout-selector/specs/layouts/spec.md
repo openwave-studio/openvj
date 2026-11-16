@@ -72,16 +72,16 @@ Each preset SHALL react to the music through its own audio and tempo mappings, a
 - **THEN** every preset reacts less to the music
 
 ### Requirement: Synthesis layout
-The Synthesis layout SHALL be a zoomed-in view of one layer, laid out like a hardware synthesizer: a strip of layer thumbnails to pick the layer, a large preview, a row of 8 macros, and sections that are the same for every generator: SOURCE (the generator's parameters), one section per effect, and OUTPUT (opacity, blend mode, transform). The clip grid SHALL be hidden.
+The Synthesis layout SHALL be a zoomed-in view of one layer, laid out like a hardware synthesizer: a strip of layer thumbnails to pick the layer, a large preview, a row of 8 macros, and sections that are the same for every generator: SOURCE (the generator's parameters), one section per effect, and OUTPUT (layer opacity and master). The clip grid SHALL be hidden.
 
 Macros and section parameters in Synthesis SHALL be standardized knobs; elsewhere parameters stay bars.
 
 #### Scenario: Focus a layer
 - **WHEN** the VJ clicks the second layer's thumbnail in Synthesis
-- **THEN** the panel shows that layer's generator, effects and macros
+- **THEN** the panel shows the generator that layer plays, its effects and its macros
 
 ### Requirement: Macros
-Each layer SHALL have 8 macros. A macro SHALL move any number of the layer's generator and effect parameters, each over its own range, and SHALL be playable with the mouse and mappable to MIDI. A macro SHALL take one driver (LFO, audio, tempo) like any parameter. Macros SHALL save with the composition and inside presets.
+Each visual (clip) SHALL have 8 macros, so they travel with it into presets and playlists. A macro SHALL move any number of the visual's generator and effect parameters, each over its own range, and SHALL be playable with the mouse (MIDI mapping comes with MIDI learn). A macro SHALL take one driver (audio or tempo shape) like any parameter. Macros SHALL save with the composition and inside presets.
 
 #### Scenario: One knob, many parameters
 - **WHEN** macro 1 targets the generator's Zoom from 1 to 4 and a Blur effect's amount from 0 to 0.6, and the VJ turns it halfway
@@ -92,7 +92,7 @@ Each layer SHALL have 8 macros. A macro SHALL move any number of the layer's gen
 - **THEN** every parameter it targets moves together with the beat
 
 ### Requirement: Presets from Synthesis
-Synthesis SHALL offer "Save preset" and "Add to playlist" for the focused layer, capturing its generator, parameter values, mappings, macros and effects.
+Synthesis SHALL offer "Add to playlist" for the focused visual, capturing its generator, parameter values, mappings, macros and effects. "Save preset" follows with the preset library.
 
 #### Scenario: Shape a look, then queue it
 - **WHEN** the VJ shapes a look in Synthesis and chooses "Add to playlist"

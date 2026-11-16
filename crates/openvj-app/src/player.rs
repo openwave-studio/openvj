@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use openvj_core::{
-    Automix, AutomixFrame, BlendMode, Clip, ClipId, ClipSource, Composition, Playing, Playlist, Preset, Span,
+    Automix, AutomixFrame, BlendMode, Clip, ClipId, ClipSource, Composition, ModInputs, Playing, Playlist, Preset, Span,
 };
 
 /// Clip ids for the Player's two layers, far above any composition's, so textures and
@@ -131,7 +131,14 @@ impl PlayerState {
 
     /// Advances Automix and returns the composition to render, or `None` when the Player
     /// isn't live. `main` lends the master level and size.
-    pub fn frame(&mut self, main: &Composition, now: f64, beat: f64, bpm: f32) -> Option<&Composition> {
+    pub fn frame(
+        &mut self,
+        main: &Composition,
+        now: f64,
+        beat: f64,
+        bpm: f32,
+        inputs: &ModInputs,
+    ) -> Option<&Composition> {
         let automix = self.automix.as_mut()?;
         let before = automix.current();
         let frame = automix.tick(&self.playlist, now, beat, bpm);
@@ -150,6 +157,9 @@ impl PlayerState {
         self.comp.height = main.height;
         self.comp.bpm = main.bpm;
         self.comp.tick(now, beat);
+        for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten()) {
+            clip.apply_macros(inputs);
+        }
         Some(&self.comp)
     }
 
@@ -227,20 +237,20 @@ mod tests {
             p.set_play_for(p.playlist.presets.len() - 1, Span::Bars(2.0));
         }
         assert!(p.start(0.0, 0.0, 120.0));
-        let c = p.frame(&main, 0.5, 1.0, 120.0).unwrap();
+        let c = p.frame(&main, 0.5, 1.0, 120.0, &ModInputs::default()).unwrap();
         assert_eq!(c.layers[0].opacity, 1.0);
         assert!(c.layers[1].active.is_none());
         // Two bars in, plus half a bar: b comes in on layer 1 while a keeps playing on layer 0.
-        let c = p.frame(&main, 5.0, 10.0, 120.0).unwrap();
+        let c = p.frame(&main, 5.0, 10.0, 120.0, &ModInputs::default()).unwrap();
         assert!((c.layers[1].opacity - 0.5).abs() < 1e-6);
         assert!((c.layers[0].opacity - 0.5).abs() < 1e-6);
         assert!(c.layers[0].active.is_some() && c.layers[1].active.is_some());
         // Transition over: a is gone.
-        let c = p.frame(&main, 6.25, 12.5, 120.0).unwrap();
+        let c = p.frame(&main, 6.25, 12.5, 120.0, &ModInputs::default()).unwrap();
         assert!(c.layers[0].active.is_none());
         assert_eq!(c.layers[1].opacity, 1.0);
         p.stop();
-        assert!(p.frame(&main, 7.0, 14.0, 120.0).is_none());
+        assert!(p.frame(&main, 7.0, 14.0, 120.0, &ModInputs::default()).is_none());
     }
 
     #[test]
@@ -249,7 +259,7 @@ mod tests {
         let mut p = PlayerState::default();
         p.add(&clip("a")).unwrap();
         p.start(0.0, 0.0, 120.0);
-        let c = p.frame(&main, 0.0, 0.0, 120.0).unwrap();
+        let c = p.frame(&main, 0.0, 0.0, 120.0, &ModInputs::default()).unwrap();
         assert!(c.all_clips().all(|c| c.id.0 >= PLAYER_IDS));
     }
 
