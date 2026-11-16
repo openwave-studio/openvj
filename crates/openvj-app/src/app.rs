@@ -13,9 +13,9 @@ use std::time::Instant;
 use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::milkdrop::milk_library;
 use openvj_core::{
-    AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve,
-    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage, ModInputs, ModSource,
-    Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle, apply_midi, library,
+    AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition, CrossfadeCurve,
+    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiClock, MidiEffect, MidiMessage, ModInputs,
+    ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle, apply_midi, library,
     move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
@@ -181,6 +181,11 @@ pub struct App {
     tap: TapTempo,
     beat_clock: BeatClock,
     link: Link,
+    /// CLOCK: the tempo follows MIDI clock instead of BPM, TAP or Link.
+    clock_on: bool,
+    midi_clock: MidiClock,
+    /// The input the clock is following; another input's clock is ignored until it goes quiet.
+    clock_port: Option<String>,
     /// Beat and audio levels for this frame.
     inputs: ModInputs,
     last_frame: f64,
@@ -200,6 +205,7 @@ pub struct App {
     /// The last message received, for checking a controller is talking to openVJ.
     midi_last: String,
     midi_dirty: bool,
+    clock_dirty: bool,
     /// Where things in the last imported `.avc` ended up, for resolving MIDI presets.
     /// Cleared when another composition is opened.
     resolume_refs: Option<openvj_resolume::ResolumeRefs>,
@@ -303,6 +309,9 @@ impl App {
             tap: TapTempo::default(),
             beat_clock: BeatClock::new(comp.bpm),
             link: Link::new(comp.bpm),
+            clock_on: false,
+            midi_clock: MidiClock::new(),
+            clock_port: None,
             inputs: ModInputs::default(),
             last_frame: 0.0,
             analyzer: Analyzer::new(48_000),
@@ -316,6 +325,7 @@ impl App {
             midi_status: "Off".into(),
             midi_last: String::new(),
             midi_dirty: true,
+            clock_dirty: true,
             resolume_refs: None,
             selected: None,
             selected_layer: 0,
@@ -382,6 +392,9 @@ impl App {
         };
         app.set_composition(comp, None);
         app.open_midi();
+        if crate::prefs::flag("midi_clock") {
+            app.set_clock(true);
+        }
         app
     }
 
@@ -870,6 +883,13 @@ impl App {
         ui.set_beat(self.inputs.beat.rem_euclid(1024.0) as f32);
         ui.set_link_on(self.link.is_enabled());
         ui.set_link_peers(self.link.peers() as i32);
+        let waiting = self.clock_on && self.midi_clock.is_waiting(now);
+        if self.clock_dirty || waiting != ui.get_clock_waiting() {
+            self.clock_dirty = false;
+            ui.set_clock_on(self.clock_on);
+            ui.set_clock_waiting(waiting);
+            ui.set_clock_port(self.clock_port.clone().unwrap_or_default().into());
+        }
         self.frames += 1;
         let elapsed = self.fps_since.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
@@ -950,7 +970,15 @@ impl App {
 
     /// Beat position for this frame, from Ableton Link when it's on.
     fn update_tempo(&mut self, now: f64) -> f64 {
-        if self.link.is_enabled() {
+        let clock = if self.clock_on { self.midi_clock.bpm().zip(self.midi_clock.beat_at(now)) } else { None };
+        if let Some((bpm, beat)) = clock {
+            let shown = (bpm * 10.0).round() / 10.0;
+            if shown != self.comp.bpm {
+                self.comp.bpm = shown;
+                self.grid_dirty = true;
+            }
+            self.beat_clock.sync(now, beat, bpm);
+        } else if self.link.is_enabled() {
             let (beat, bpm) = self.link.capture();
             let shown = (bpm * 10.0).round() / 10.0;
             if shown != self.comp.bpm {
@@ -1778,12 +1806,18 @@ impl App {
 
     pub fn tap(&mut self) {
         let now = self.now();
+        if self.clock_on {
+            return;
+        }
         if let Some(bpm) = self.tap.tap(now) {
             self.set_bpm((bpm * 10.0).round() / 10.0);
         }
     }
 
     pub fn nudge_bpm(&mut self, delta: f32) {
+        if self.clock_on {
+            return;
+        }
         self.set_bpm((self.comp.bpm + delta).clamp(20.0, 300.0).round());
     }
 
@@ -1811,6 +1845,10 @@ impl App {
             return;
         }
         let on = !self.link.is_enabled();
+        if on && self.clock_on {
+            self.set_clock(false);
+            crate::prefs::set_flag("midi_clock", false);
+        }
         self.link.set_enabled(on, self.comp.bpm);
         self.set_status(if on {
             "Ableton Link on: tempo and beat follow the Link session"
@@ -1906,8 +1944,13 @@ impl App {
         }
         let Some(ports) = &self.midi else { return };
         let connected: Vec<String> = ports.names().map(str::to_owned).collect();
-        let messages: Vec<(String, Vec<u8>)> = ports.drain().into_iter().map(|(p, m)| (p.to_owned(), m)).collect();
-        for (port, bytes) in messages {
+        let messages: Vec<(String, Instant, Vec<u8>)> =
+            ports.drain().into_iter().map(|(p, at, m)| (p.to_owned(), at, m)).collect();
+        for (port, at, bytes) in messages {
+            if let Some(clock) = ClockMessage::parse(&bytes) {
+                self.clock_message(&port, clock, at.saturating_duration_since(self.clock).as_secs_f64());
+                continue;
+            }
             let Some(msg) = MidiMessage::parse(&bytes) else { continue };
             let actions = self.comp.midi.handle_from(msg, &port, &connected);
             self.midi_last =
@@ -1934,7 +1977,7 @@ impl App {
                         self.column_clicked(col);
                     }
                     MidiEffect::ResyncTempo => {
-                        if !self.link.is_enabled() {
+                        if !self.link.is_enabled() && !self.clock_on {
                             self.beat_clock.sync(now, 0.0, self.comp.bpm);
                         }
                     }
@@ -1942,6 +1985,48 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Feeds a MIDI clock message that arrived at `t` (app seconds) from `port`.
+    fn clock_message(&mut self, port: &str, msg: ClockMessage, t: f64) {
+        if !self.clock_on {
+            return;
+        }
+        // Follow one input at a time: the first that sends clock, until it goes quiet.
+        let quiet = self.midi_clock.is_waiting(t) && msg == ClockMessage::Pulse;
+        match &self.clock_port {
+            Some(p) if p != port && !quiet => return,
+            Some(p) if p == port => {}
+            _ => {
+                self.clock_port = Some(port.to_owned());
+                self.clock_dirty = true;
+                self.set_status(format!("MIDI clock from {port}"));
+            }
+        }
+        self.midi_clock.message(msg, t);
+    }
+
+    pub fn clock_toggle(&mut self) {
+        self.set_clock(!self.clock_on);
+        crate::prefs::set_flag("midi_clock", self.clock_on);
+    }
+
+    fn set_clock(&mut self, on: bool) {
+        self.clock_on = on;
+        self.midi_clock = MidiClock::new();
+        self.clock_port = None;
+        self.clock_dirty = true;
+        if !on {
+            self.set_status("MIDI clock off");
+            return;
+        }
+        if self.link.is_enabled() {
+            self.link.set_enabled(false, self.comp.bpm);
+        }
+        if self.midi.is_none() {
+            self.open_midi();
+        }
+        self.set_status("MIDI clock on: tempo and beat follow the first MIDI input that sends clock");
     }
 
     /// Loads a Resolume MIDI shortcut preset into the composition, replacing its mappings.

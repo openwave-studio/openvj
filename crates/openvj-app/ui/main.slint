@@ -566,6 +566,9 @@ component Toolbar inherits Rectangle {
     in property <bool> link-available;
     in property <bool> link-on;
     in property <int> link-peers;
+    in property <bool> clock-on;
+    in property <bool> clock-waiting;
+    in property <string> clock-port;
     in property <bool> midi-on;
     in property <int> layout;
     callback layout-picked(int);
@@ -574,6 +577,7 @@ component Toolbar inherits Rectangle {
     callback automix-stop();
     callback audio-toggle();
     callback link-toggle();
+    callback clock-toggle();
     callback midi-toggle();
     callback tap();
     callback nudge-bpm(float);
@@ -730,9 +734,17 @@ component Toolbar inherits Rectangle {
                     clicked => { root.link-toggle(); }
                 }
             }
+            // MIDI clock in: tempo follows a groovebox or DAW. Dimmed while it waits for clock.
+            FlatButton {
+                text: root.clock-on ? (root.clock-waiting ? "CLOCK …" : "CLOCK ●") : "CLOCK";
+                active: root.clock-on;
+                opacity: root.clock-on && root.clock-waiting ? 0.6 : 1;
+                clicked => { root.clock-toggle(); }
+            }
             FlatButton {
                 text: "−";
                 width: 24px;
+                enabled: !root.clock-on;
                 clicked => { root.nudge-bpm(-1); }
             }
             Rectangle {
@@ -751,11 +763,13 @@ component Toolbar inherits Rectangle {
             FlatButton {
                 text: "+";
                 width: 24px;
+                enabled: !root.clock-on;
                 clicked => { root.nudge-bpm(1); }
             }
             FlatButton {
                 text: "TAP";
                 width: 44px;
+                enabled: !root.clock-on;
                 clicked => { root.tap(); }
             }
             for i in 4: Rectangle {
@@ -1130,6 +1144,9 @@ export component MainWindow inherits Window {
     in property <bool> link-available;
     in property <bool> link-on;
     in property <int> link-peers;
+    in property <bool> clock-on;
+    in property <bool> clock-waiting;
+    in property <string> clock-port;
     in property <bool> midi-on;
     in property <string> midi-status;
     in property <string> midi-preset;
@@ -1217,6 +1234,7 @@ export component MainWindow inherits Window {
     callback audio-toggle();
     callback audio-pick(int);
     callback link-toggle();
+    callback clock-toggle();
     callback midi-toggle();
     callback midi-import();
     callback midi-clear();
@@ -1349,6 +1367,9 @@ export component MainWindow inherits Window {
                 link-available: root.link-available;
                 link-on: root.link-on;
                 link-peers: root.link-peers;
+                clock-on: root.clock-on;
+                clock-waiting: root.clock-waiting;
+                clock-port: root.clock-port;
                 midi-on: root.midi-on;
                 layout: root.layout;
                 layout-picked(i) => { root.set-layout(i); keys.focus(); }
@@ -1356,6 +1377,7 @@ export component MainWindow inherits Window {
                 automix-stop => { root.automix-toggle(); }
                 audio-toggle => { root.audio-toggle(); }
                 link-toggle => { root.link-toggle(); }
+                clock-toggle => { root.clock-toggle(); }
                 midi-toggle => { root.midi-toggle(); }
                 tap => { root.tap(); }
                 nudge-bpm(d) => { root.nudge-bpm(d); }
