@@ -29,5 +29,5 @@
 
 ## 5. Wrap up
 
-- [ ] 5.1 README "What works"
-- [ ] 5.2 `openspec archive add-library-browser -y`
+- [x] 5.1 README "What works"
+- [x] 5.2 `openspec archive add-library-browser -y`
