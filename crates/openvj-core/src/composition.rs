@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::playback::position;
 use crate::{
-    ClipTime, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MidiMap, ModInputs, Modulation, PARAM_COUNT, PlayMode,
+    Autopilot, ClipTime, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MidiMap, ModInputs, Modulation, PARAM_COUNT,
+    PlayMode, TriggerStyle,
 };
 
 /// File extensions treated as still images.
@@ -235,6 +236,16 @@ pub struct Clip {
     /// Applied to the clip alone, top to bottom, before it reaches its layer.
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// What to launch when the clip finishes a pass.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub autopilot: Autopilot,
+    /// How launching the clip behaves.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub trigger: TriggerStyle,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 /// A fresh fixed Transform for a clip or layer.
@@ -278,6 +289,8 @@ impl Clip {
             media_secs: None,
             transform: default_transform(),
             effects: Vec::new(),
+            autopilot: Autopilot::Off,
+            trigger: TriggerStyle::Normal,
         }
     }
 
@@ -292,15 +305,21 @@ impl Clip {
         }
     }
 
+    /// Passes through the clip after playing for `secs` seconds, or `beats` beats (1.0 = one
+    /// full length), or `None` for a clip without a length (live inputs).
+    pub fn passes(&self, secs: f64, beats: f64) -> Option<f64> {
+        let len = self.length()?;
+        Some(match self.sync_beats {
+            Some(b) if b > 0.0 => beats / b as f64,
+            _ => secs * self.speed as f64 / len,
+        })
+    }
+
     /// Where the clip is after playing for `secs` seconds, or `beats` beats.
     pub fn time_at(&self, secs: f64, beats: f64) -> ClipTime {
         let speed = self.speed as f64;
-        let Some(len) = self.length() else {
+        let (Some(len), Some(cycles)) = (self.length(), self.passes(secs, beats)) else {
             return ClipTime { secs: secs.max(0.0) * speed, ended: false };
-        };
-        let cycles = match self.sync_beats {
-            Some(b) if b > 0.0 => beats / b as f64,
-            _ => secs * speed / len,
         };
         let wrap = !self.source.is_generator();
         position(self.play_mode, cycles, beats, len, wrap, self.id.0)
@@ -439,9 +458,15 @@ pub struct Playing {
     pub started_at: f64,
     /// Beat (tempo clock) the clip was launched on, for beat-synced clips.
     pub started_beat: f64,
+    /// Opacity from the launch: a Piano clip's note velocity, otherwise 1.
+    pub gain: f32,
 }
 
 impl Playing {
+    pub fn new(clip_id: ClipId, started_at: f64, started_beat: f64) -> Self {
+        Self { clip_id, started_at, started_beat, gain: 1.0 }
+    }
+
     /// How far into `clip` this playback is at `now` / `beat`.
     pub fn time(&self, clip: &Clip, now: f64, beat: f64) -> ClipTime {
         clip.time_at(now - self.started_at, beat - self.started_beat)
@@ -501,6 +526,8 @@ pub struct LayerFrame<'a> {
     /// Beats the incoming and outgoing clips were launched on, for modulation that restarts
     /// on launch.
     pub launch_beats: (f64, f64),
+    /// Opacity of the incoming and outgoing clips from their launch (Piano velocity).
+    pub gains: (f32, f32),
     /// Crossfade position: 0 = all outgoing, 1 = all incoming.
     pub mix: f32,
 }
@@ -549,7 +576,11 @@ impl Layer {
     }
 
     fn launch(&mut self, clip_id: ClipId, now: f64, beat: f64) {
-        let next = Playing { clip_id, started_at: now, started_beat: beat };
+        self.launch_playing(Playing::new(clip_id, now, beat), now);
+    }
+
+    fn launch_playing(&mut self, next: Playing, now: f64) {
+        let clip_id = next.clip_id;
         let retrigger = self.active.is_some_and(|p| p.clip_id == clip_id);
         if self.transition_secs > 0.0 && !retrigger {
             self.fade = Some(Fade { from: self.active, started_at: now, duration: self.transition_secs as f64 });
@@ -577,16 +608,44 @@ impl Layer {
         if self.fade.is_some_and(|f| now - f.started_at >= f.duration) {
             self.fade = None;
         }
-        let ended = self.active.is_some_and(|p| {
+        if self.autopilot(now, beat) {
+            // Launched the next clip.
+        } else if self.active.is_some_and(|p| {
             self.clip_by_id(p.clip_id).is_some_and(|c| c.play_mode == PlayMode::OnceClear && p.time(c, now, beat).ended)
-        });
-        if ended {
+        }) {
             self.clear(now);
         }
         if !self.held.is_empty() {
             let live: Vec<ClipId> = self.live_ids().collect();
             self.held.retain(|c| live.contains(&c.id));
         }
+    }
+
+    /// Launches the playing clip's Autopilot target once it has finished a pass. Returns
+    /// whether it launched one.
+    fn autopilot(&mut self, now: f64, beat: f64) -> bool {
+        let Some(p) = self.active else { return false };
+        let Some(clip) = self.clips.iter().flatten().find(|c| c.id == p.clip_id) else { return false };
+        if clip.autopilot == Autopilot::Off {
+            return false;
+        }
+        let Some(passes) = clip.passes(now - p.started_at, beat - p.started_beat) else { return false };
+        if passes < 1.0 {
+            return false;
+        }
+        let Some(current) = self.column_of(p.clip_id) else { return false };
+        let filled: Vec<usize> = (0..self.clips.len()).filter(|&c| self.clips[c].is_some()).collect();
+        let pick = crate::playback::random_unit(p.clip_id.0, (p.started_at * 1000.0) as u64);
+        let Some(col) = clip.autopilot.target(current, &filled, pick) else { return false };
+        // A beat-synced clip ends on an exact beat; start the next one there so the set stays
+        // on the grid.
+        let started_beat = match clip.sync_beats {
+            Some(b) if b > 0.0 => p.started_beat + b as f64,
+            _ => beat,
+        };
+        let Some(next) = self.clips[col].as_ref().map(|c| c.id) else { return false };
+        self.launch_playing(Playing { started_beat, ..Playing::new(next, now, beat) }, now);
+        true
     }
 
     fn local_time(&self, p: Playing, now: f64, beat: f64) -> Option<(&Clip, f64)> {
@@ -611,7 +670,8 @@ impl Layer {
             self.active.map_or(0.0, |p| p.started_beat),
             self.fade.and_then(|f| f.from).map_or(0.0, |p| p.started_beat),
         );
-        Some(LayerFrame { incoming, outgoing, launch_beats, mix })
+        let gains = (self.active.map_or(1.0, |p| p.gain), self.fade.and_then(|f| f.from).map_or(1.0, |p| p.gain));
+        Some(LayerFrame { incoming, outgoing, launch_beats, gains, mix })
     }
 }
 
@@ -1047,11 +1107,34 @@ impl Composition {
         beat + crate::beats(now - secs, self.bpm)
     }
 
-    /// Launches the clip in a slot. Empty slots do nothing.
+    /// Launches the clip in a slot, following its trigger style. Empty slots do nothing.
     pub fn trigger(&mut self, layer: usize, col: usize, now: f64) {
+        self.trigger_velocity(layer, col, now, 1.0);
+    }
+
+    /// Like [`trigger`](Self::trigger), from a note with this velocity (0..1), which sets a
+    /// Piano clip's opacity.
+    pub fn trigger_velocity(&mut self, layer: usize, col: usize, now: f64, velocity: f32) {
         let beat = self.beat_at(now);
-        if let Some(id) = self.clip(layer, col).map(|c| c.id) {
-            self.layers[layer].launch(id, now, beat);
+        let Some((id, style)) = self.clip(layer, col).map(|c| (c.id, c.trigger)) else { return };
+        let l = &mut self.layers[layer];
+        let playing = l.active.is_some_and(|p| p.clip_id == id);
+        match style {
+            TriggerStyle::Toggle if playing => l.clear(now),
+            TriggerStyle::Piano => {
+                l.launch_playing(Playing { gain: velocity.clamp(0.0, 1.0), ..Playing::new(id, now, beat) }, now)
+            }
+            _ => l.launch(id, now, beat),
+        }
+    }
+
+    /// The note, key or mouse button that launched the clip in a slot was let go: a Piano
+    /// clip that is still playing clears its layer.
+    pub fn release(&mut self, layer: usize, col: usize, now: f64) {
+        let Some((id, style)) = self.clip(layer, col).map(|c| (c.id, c.trigger)) else { return };
+        let l = &mut self.layers[layer];
+        if style == TriggerStyle::Piano && l.active.is_some_and(|p| p.clip_id == id) {
+            l.clear(now);
         }
     }
 
@@ -1647,5 +1730,91 @@ mod tests {
         assert_eq!(isf, ClipSource::Syphon { app: "ISFEditor".into(), server: "ISF Test App".into() });
         assert_eq!(isf.live_name().unwrap(), "ISFEditor - ISF Test App");
         assert_eq!(ClipSource::syphon_from_label("Synesthesia").live_name().unwrap(), "Synesthesia");
+    }
+
+    #[test]
+    fn autopilot_launches_the_next_clip_at_the_end_of_a_pass() {
+        let mut c = Composition::new(64, 64, 1, 4);
+        for col in [0, 1, 3] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().duration = Some(2.0);
+        }
+        c.clip_mut(0, 1).unwrap().autopilot = Autopilot::Next;
+        c.tick(0.0, 0.0);
+        c.trigger(0, 1, 0.0);
+        c.tick(1.9, 3.8);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+        c.tick(2.01, 4.02);
+        assert_eq!(c.layers[0].playing_column(), Some(3));
+        // Column 3 has no autopilot: it keeps looping.
+        c.tick(10.0, 20.0);
+        assert_eq!(c.layers[0].playing_column(), Some(3));
+    }
+
+    #[test]
+    fn autopilot_keeps_beat_synced_clips_on_the_grid() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().sync_beats = Some(4.0);
+        }
+        c.clip_mut(0, 0).unwrap().autopilot = Autopilot::Next;
+        c.tick(0.0, 0.0);
+        c.trigger(0, 0, 0.0);
+        c.tick(2.01, 4.02);
+        let p = c.layers[0].active.unwrap();
+        assert_eq!(c.layers[0].column_of(p.clip_id), Some(1));
+        assert_eq!(p.started_beat, 4.0);
+    }
+
+    #[test]
+    fn autopilot_wins_over_play_once_and_clear() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().duration = Some(1.0);
+        }
+        let first = c.clip_mut(0, 0).unwrap();
+        first.play_mode = PlayMode::OnceClear;
+        first.autopilot = Autopilot::Next;
+        c.trigger(0, 0, 0.0);
+        c.tick(1.5, 3.0);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+    }
+
+    #[test]
+    fn toggle_clips_clear_when_launched_again() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        c.set_clip(0, 0, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+        c.clip_mut(0, 0).unwrap().trigger = TriggerStyle::Toggle;
+        c.trigger(0, 0, 0.0);
+        assert_eq!(c.layers[0].playing_column(), Some(0));
+        c.trigger(0, 0, 1.0);
+        assert_eq!(c.layers[0].playing_column(), None);
+        c.trigger(0, 0, 2.0);
+        assert_eq!(c.layers[0].playing_column(), Some(0));
+    }
+
+    #[test]
+    fn piano_clips_clear_on_release_and_keep_velocity() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+        }
+        c.clip_mut(0, 0).unwrap().trigger = TriggerStyle::Piano;
+        c.trigger_velocity(0, 0, 0.0, 0.5);
+        assert_eq!(c.layers[0].frame(0.0, 0.0).unwrap().gains.0, 0.5);
+        // Releasing a clip that is no longer playing does nothing.
+        c.trigger(0, 1, 0.5);
+        c.release(0, 0, 1.0);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+        c.trigger_velocity(0, 0, 2.0, 1.0);
+        c.release(0, 0, 3.0);
+        assert_eq!(c.layers[0].playing_column(), None);
+        // Saved only when set.
+        let json = serde_json::to_string(c.clip(0, 1).unwrap()).unwrap();
+        assert!(!json.contains("trigger") && !json.contains("autopilot"), "{json}");
+        let json = serde_json::to_string(c.clip(0, 0).unwrap()).unwrap();
+        assert!(json.contains("\"trigger\":\"piano\""), "{json}");
     }
 }

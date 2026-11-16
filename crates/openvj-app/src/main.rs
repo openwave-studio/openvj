@@ -180,6 +180,8 @@ fn main() -> Result<()> {
     }
 
     on!(on_cell_clicked, |a, l: i32, c: i32| a.cell_clicked(l as usize, c as usize));
+    on!(on_cell_pressed, |a, l: i32, c: i32| a.cell_pressed(l as usize, c as usize));
+    on!(on_cell_released, |a, l: i32, c: i32| a.cell_released(l as usize, c as usize));
     on!(on_cell_right_clicked, |a, l: i32, c: i32| a.cell_right_clicked(l as usize, c as usize));
     on!(on_column_clicked, |a, c: i32| a.column_clicked(c as usize));
     on!(on_layer_selected, |a, l: i32| a.select_layer(l));
@@ -316,6 +318,8 @@ fn main() -> Result<()> {
     on!(on_clip_restart, |a| a.clip_restart());
     on!(on_layer_renamed, |a, t: slint::SharedString| a.layer_renamed(&t));
     on!(on_clip_play_mode_picked, |a, i: i32| a.clip_play_mode(i.max(0) as usize));
+    on!(on_clip_autopilot_picked, |a, i: i32| a.clip_autopilot(i.max(0) as usize));
+    on!(on_clip_trigger_picked, |a, i: i32| a.clip_trigger(i.max(0) as usize));
     on!(on_clip_synced_picked, |a, b: bool| a.clip_synced(b));
     on!(on_layer_side_picked, |a, i: i32| a.layer_side(i.max(0) as usize));
     on!(on_layer_group_picked, |a, i: i32| a.layer_group(i.max(0) as usize));

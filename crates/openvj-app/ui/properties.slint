@@ -253,6 +253,10 @@ export component PropertiesPanel inherits Rectangle {
     in property <[EffectData]> clip-transform;
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
+    in property <[string]> autopilot-modes;
+    in property <int> clip-autopilot;
+    in property <[string]> trigger-styles;
+    in property <int> clip-trigger;
     in property <bool> clip-synced;
 
     callback param-set(int, int, int, float);
@@ -278,6 +282,8 @@ export component PropertiesPanel inherits Rectangle {
     callback clip-to-playlist();
     callback clip-restart();
     callback clip-play-mode-picked(int);
+    callback clip-autopilot-picked(int);
+    callback clip-trigger-picked(int);
     callback clip-synced-picked(bool);
     callback layer-side-picked(int);
     callback layer-group-picked(int);
@@ -624,6 +630,26 @@ export component PropertiesPanel inherits Rectangle {
                         modes: root.play-modes;
                         current: root.clip-play-mode;
                         picked(i) => { root.clip-play-mode-picked(i); }
+                    }
+                }
+                // Resolume's clip Autopilot: what to launch when this clip finishes a pass.
+                LabelledRow {
+                    label: "Autopilot";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.autopilot-modes;
+                        current: root.clip-autopilot;
+                        picked(i) => { root.clip-autopilot-picked(i); }
+                    }
+                }
+                // Resolume's Trigger Style: Piano plays only while the note or mouse is held.
+                LabelledRow {
+                    label: "Trigger";
+                    for name[i] in root.trigger-styles: FlatButton {
+                        height: 22px;
+                        text: name;
+                        active: root.clip-trigger == i;
+                        clicked => { root.clip-trigger-picked(i); }
                     }
                 }
                 LabelledRow {

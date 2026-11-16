@@ -13,10 +13,10 @@ use std::time::Instant;
 use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::milkdrop::milk_library;
 use openvj_core::{
-    AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition, CrossfadeCurve,
-    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiClock, MidiEffect, MidiMessage, ModInputs,
-    ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle, apply_midi, library,
-    move_effect,
+    AudioSignal, Autopilot, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition,
+    CrossfadeCurve, CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiClock, MidiEffect,
+    MidiMessage, ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo,
+    TransitionStyle, TriggerStyle, apply_midi, library, move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
 use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
@@ -430,6 +430,8 @@ impl App {
         let names =
             |v: Vec<&str>| ModelRc::new(VecModel::from(v.into_iter().map(SharedString::from).collect::<Vec<_>>()));
         ui.set_play_modes(names(PlayMode::ALL.iter().map(|m| m.name()).collect()));
+        ui.set_autopilot_modes(names(Autopilot::ALL.iter().map(|m| m.name()).collect()));
+        ui.set_trigger_styles(names(TriggerStyle::ALL.iter().map(|m| m.name()).collect()));
         ui.set_crossfade_curves(names(CrossfadeCurve::ALL.iter().map(|c| c.name()).collect()));
         ui.set_link_available(Link::AVAILABLE);
         ui.set_syphon_available(syphon_out::AVAILABLE);
@@ -1331,6 +1333,8 @@ impl App {
             ui.set_clip_path(path.into());
             ui.set_preview_label(clip.name.as_str().into());
             ui.set_clip_play_mode(clip.play_mode.index() as i32);
+            ui.set_clip_autopilot(clip.autopilot.index() as i32);
+            ui.set_clip_trigger(clip.trigger.index() as i32);
             ui.set_clip_synced(clip.sync_beats.is_some());
         } else {
             ui.set_preview_label(SharedString::default());
@@ -1440,7 +1444,8 @@ impl App {
             return;
         }
         let now = self.now();
-        if self.comp.clip(layer, col).is_some() {
+        // Piano clips launched on the press already (cell_pressed).
+        if self.comp.clip(layer, col).is_some_and(|c| c.trigger != TriggerStyle::Piano) {
             self.stop_automix_for_mixer();
             self.comp.trigger(layer, col, now);
             self.last_column = None;
@@ -1449,6 +1454,25 @@ impl App {
         self.selected_layer = layer;
         self.grid_dirty = true;
         self.props_dirty = true;
+    }
+
+    /// The mouse went down on a slot: a Piano clip starts playing now, until it's let go.
+    pub fn cell_pressed(&mut self, layer: usize, col: usize) {
+        if self.armed.is_some() || self.comp.clip(layer, col).is_none_or(|c| c.trigger != TriggerStyle::Piano) {
+            return;
+        }
+        self.stop_automix_for_mixer();
+        let now = self.now();
+        self.comp.trigger(layer, col, now);
+        self.last_column = None;
+        self.grid_dirty = true;
+    }
+
+    /// The mouse was let go after pressing a slot: a Piano clip stops.
+    pub fn cell_released(&mut self, layer: usize, col: usize) {
+        let now = self.now();
+        self.comp.release(layer, col, now);
+        self.grid_dirty = true;
     }
 
     pub fn cell_right_clicked(&mut self, layer: usize, col: usize) {
@@ -1613,6 +1637,20 @@ impl App {
     pub fn clip_play_mode(&mut self, mode: usize) {
         if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
             clip.play_mode = PlayMode::from_index(mode);
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn clip_autopilot(&mut self, mode: usize) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.autopilot = Autopilot::from_index(mode);
+            self.props_dirty = true;
+        }
+    }
+
+    pub fn clip_trigger(&mut self, style: usize) {
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
+            clip.trigger = TriggerStyle::from_index(style);
             self.props_dirty = true;
         }
     }

@@ -1287,17 +1287,18 @@ impl Engine {
             let (src, opacity) = match (frame.incoming, frame.outgoing) {
                 (Some((clip, time)), None) => {
                     self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, &inc_inputs, preview, 0);
-                    (&t.clip_a, layer_opacity * frame.mix)
+                    (&t.clip_a, layer_opacity * frame.mix * frame.gains.0)
                 }
                 (None, Some((clip, time))) => {
                     self.draw_clip(&mut passes, &t, clip, time, &t.clip_a, now, &out_inputs, preview, 0);
-                    (&t.clip_a, layer_opacity * (1.0 - frame.mix))
+                    (&t.clip_a, layer_opacity * (1.0 - frame.mix) * frame.gains.1)
                 }
                 (Some((inc, inc_t)), Some((out, out_t))) => {
                     self.draw_clip(&mut passes, &t, out, out_t, &t.clip_a, now, &out_inputs, preview, 0);
                     self.draw_clip(&mut passes, &t, inc, inc_t, &t.clip_b, now, &inc_inputs, preview, 0);
                     passes.push(Self::blend_pass(&t.layer_mix, &t.clip_a, &t.clip_b, MODE_MIX, frame.mix));
-                    (&t.layer_mix, layer_opacity)
+                    let gain = frame.gains.1 + (frame.gains.0 - frame.gains.1) * frame.mix;
+                    (&t.layer_mix, layer_opacity * gain)
                 }
                 (None, None) => continue,
             };

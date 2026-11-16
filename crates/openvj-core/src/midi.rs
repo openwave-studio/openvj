@@ -280,6 +280,8 @@ pub enum MidiInput {
     Toggle { min: f32, max: f32 },
     /// Launch or trigger the target.
     Trigger,
+    /// A clip launch's note was let go (for Piano clips).
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -320,6 +322,9 @@ impl MidiMap {
                         MidiBehaviour::Hold => MidiInput::Set(if press { m.max } else { m.min }),
                         _ => return None,
                     }
+                } else if let MidiTarget::ClipLaunch { .. } = m.target {
+                    // Clip launches carry the note's velocity, and its release, for Piano clips.
+                    if press { MidiInput::Set(msg.value()) } else { MidiInput::Release }
                 } else if press {
                     MidiInput::Trigger
                 } else {
@@ -373,7 +378,7 @@ pub fn apply_midi(comp: &mut Composition, action: MidiAction, now: f64, selected
                     min
                 }
             }
-            MidiInput::Trigger => *p,
+            MidiInput::Trigger | MidiInput::Release => *p,
         }
         .clamp(0.0, 1.0);
     }
@@ -382,6 +387,7 @@ pub fn apply_midi(comp: &mut Composition, action: MidiAction, now: f64, selected
             MidiInput::Set(v) => v >= 0.5,
             MidiInput::Toggle { .. } => !*b,
             MidiInput::Trigger => true,
+            MidiInput::Release => *b,
         };
     }
 
@@ -421,7 +427,11 @@ pub fn apply_midi(comp: &mut Composition, action: MidiAction, now: f64, selected
             if comp.clip(layer, column).is_none() {
                 return Ignored;
             }
-            comp.trigger(layer, column, now);
+            match input {
+                MidiInput::Release => comp.release(layer, column, now),
+                MidiInput::Set(velocity) => comp.trigger_velocity(layer, column, now, velocity),
+                _ => comp.trigger(layer, column, now),
+            }
         }
         MidiTarget::ColumnLaunch { column } => {
             if column >= comp.columns.len() {
@@ -565,7 +575,35 @@ mod tests {
             assert_eq!(apply_midi(&mut c, a, 1.0, 0), MidiEffect::Changed);
         }
         assert_eq!(c.layers[0].playing_column(), Some(2));
-        assert!(map.handle(MidiMessage::NoteOff { channel: 0, note: 36 }).is_empty());
+        // The release only matters to Piano clips.
+        for a in map.handle(MidiMessage::NoteOff { channel: 0, note: 36 }) {
+            assert_eq!(a.input, MidiInput::Release);
+            apply_midi(&mut c, a, 1.5, 0);
+        }
+        assert_eq!(c.layers[0].playing_column(), Some(2));
+    }
+
+    #[test]
+    fn piano_clips_play_while_the_note_is_held() {
+        let map = MidiMap {
+            mappings: vec![MidiMapping::new(
+                note(36),
+                MidiTarget::ClipLaunch { layer: 0, column: 2 },
+                MidiBehaviour::Press,
+            )],
+            ..Default::default()
+        };
+        let mut c = comp();
+        c.clip_mut(0, 2).unwrap().trigger = crate::TriggerStyle::Piano;
+        for a in map.handle(MidiMessage::NoteOn { channel: 0, note: 36, velocity: 64 }) {
+            apply_midi(&mut c, a, 1.0, 0);
+        }
+        let playing = c.layers[0].active.unwrap();
+        assert!((playing.gain - 64.0 / 127.0).abs() < 1e-6);
+        for a in map.handle(MidiMessage::NoteOff { channel: 0, note: 36 }) {
+            apply_midi(&mut c, a, 2.0, 0);
+        }
+        assert_eq!(c.layers[0].playing_column(), None);
     }
 
     #[test]
