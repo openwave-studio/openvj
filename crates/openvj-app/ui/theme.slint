@@ -101,6 +101,7 @@ export global Theme {
         if (kind == "video") { return self.video; }
         if (kind == "camera") { return self.camera; }
         if (kind == "syphon") { return self.syphon; }
+        if (kind == "router") { return self.accent; }
         return self.text-faint;
     }
 
@@ -110,6 +111,7 @@ export global Theme {
         if (kind == "video") { return "VID"; }
         if (kind == "camera") { return "CAM"; }
         if (kind == "syphon") { return "SYP"; }
+        if (kind == "router") { return "RTR"; }
         if (kind == "dir") { return "DIR"; }
         return "";
     }

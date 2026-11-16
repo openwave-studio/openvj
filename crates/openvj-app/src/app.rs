@@ -15,7 +15,7 @@ use openvj_core::milkdrop::milk_library;
 use openvj_core::{
     AudioSignal, Autopilot, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition,
     CrossfadeCurve, CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiClock, MidiEffect,
-    MidiMessage, ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo,
+    MidiMessage, ModInputs, ModSource, Modulation, Param, PlayMode, Playing, RouterInput, SYNC_BEATS, Span, TapTempo,
     TransitionStyle, TriggerStyle, apply_midi, library, move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
@@ -1334,6 +1334,14 @@ impl App {
             ui.set_preview_label(clip.name.as_str().into());
             ui.set_clip_play_mode(clip.play_mode.index() as i32);
             ui.set_clip_autopilot(clip.autopilot.index() as i32);
+            let inputs = RouterInput::all(&self.comp);
+            let current = match clip.source {
+                ClipSource::Router { input } => inputs.iter().position(|i| *i == input).map_or(0, |i| i as i32),
+                _ => -1,
+            };
+            let labels: Vec<SharedString> = inputs.iter().map(|i| i.label(&self.comp).into()).collect();
+            ui.set_router_inputs(ModelRc::new(VecModel::from(labels)));
+            ui.set_clip_router_input(current);
             ui.set_clip_trigger(clip.trigger.index() as i32);
             ui.set_clip_synced(clip.sync_beats.is_some());
         } else {
@@ -1386,7 +1394,7 @@ impl App {
         let armed = self.armed.as_ref().map(|a| match a {
             Armed::Library(id) => self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone()),
             Armed::File(p) => p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
-            Armed::Input(source) => source.live_name().unwrap_or_default(),
+            Armed::Input(source) => source.live_name().unwrap_or_else(|| source.default_name()),
         });
         ui.set_armed(armed.is_some());
         ui.set_armed_label(armed.unwrap_or_default().into());
@@ -1397,8 +1405,13 @@ impl App {
             .input_sources()
             .into_iter()
             .map(|source| BrowserItem {
-                name: source.live_name().unwrap_or_default().into(),
-                detail: if matches!(source, ClipSource::Camera { .. }) { "camera" } else { "Syphon" }.into(),
+                name: source.live_name().unwrap_or_else(|| source.default_name()).into(),
+                detail: match source {
+                    ClipSource::Camera { .. } => "camera",
+                    ClipSource::Router { .. } => "another layer, group or the composition",
+                    _ => "Syphon",
+                }
+                .into(),
                 kind: source.kind_label().into(),
                 armed: self.armed == Some(Armed::Input(source)),
             })
@@ -1648,6 +1661,18 @@ impl App {
         }
     }
 
+    /// Points the selected Layer Router clip at another input (in [`RouterInput::all`] order).
+    pub fn clip_router_input(&mut self, index: usize) {
+        let Some(input) = RouterInput::all(&self.comp).get(index).copied() else { return };
+        if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c))
+            && let ClipSource::Router { input: current } = &mut clip.source
+        {
+            *current = input;
+            self.props_dirty = true;
+            self.grid_dirty = true;
+        }
+    }
+
     pub fn clip_trigger(&mut self, style: usize) {
         if let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip_mut(l, c)) {
             clip.trigger = TriggerStyle::from_index(style);
@@ -1774,13 +1799,14 @@ impl App {
         }
     }
 
-    /// Cameras, then Syphon servers, as clip sources for the browser.
+    /// The Layer Router, cameras, then Syphon servers, as clip sources for the browser.
     fn input_sources(&self) -> Vec<ClipSource> {
+        let router = std::iter::once(ClipSource::Router { input: RouterInput::Composition });
         let cameras =
             self.cameras.iter().map(|c| ClipSource::Camera { device: c.name.clone(), device_id: c.id.clone() });
         let servers =
             self.syphon_servers.iter().map(|s| ClipSource::Syphon { app: s.app.clone(), server: s.server.clone() });
-        cameras.chain(servers).collect()
+        router.chain(cameras).chain(servers).collect()
     }
 
     pub fn input_clicked(&mut self, i: usize) {

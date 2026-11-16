@@ -954,14 +954,8 @@ component Browser inherits Rectangle {
                     text: "INPUTS";
                     vertical-alignment: center;
                 }
-                if root.inputs.length == 0: Text {
-                    horizontal-stretch: 1;
-                    text: root.inputs-hint;
-                    color: Theme.text-faint;
-                    font-size: Theme.font-small;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
+                // The first input is always the Layer Router; the hint shows when there are
+                // no cameras or Syphon servers besides it.
                 for item[i] in root.inputs: FlatButton {
                     max-width: 140px;
                     text: item.name;
@@ -969,7 +963,15 @@ component Browser inherits Rectangle {
                     tint: Theme.kind-color(item.kind);
                     clicked => { root.input-clicked(i); }
                 }
-                if root.inputs.length > 0: Rectangle {
+                if root.inputs.length <= 1: Text {
+                    horizontal-stretch: 1;
+                    text: root.inputs-hint;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-small;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                if root.inputs.length > 1: Rectangle {
                     horizontal-stretch: 1;
                 }
                 FlatButton {
@@ -1208,6 +1210,8 @@ export component MainWindow inherits Window {
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
     in property <[string]> autopilot-modes;
+    in property <[string]> router-inputs;
+    in property <int> clip-router-input: -1;
     in property <int> clip-autopilot;
     in property <[string]> trigger-styles;
     in property <int> clip-trigger;
@@ -1283,6 +1287,7 @@ export component MainWindow inherits Window {
     callback layer-renamed(string);
     callback clip-play-mode-picked(int);
     callback clip-autopilot-picked(int);
+    callback clip-router-input-picked(int);
     callback clip-trigger-picked(int);
     callback clip-synced-picked(bool);
     callback layer-side-picked(int);
@@ -1590,6 +1595,8 @@ export component MainWindow inherits Window {
                     play-modes: root.play-modes;
                     clip-play-mode: root.clip-play-mode;
                     autopilot-modes: root.autopilot-modes;
+                    router-inputs: root.router-inputs;
+                    clip-router-input: root.clip-router-input;
                     clip-autopilot: root.clip-autopilot;
                     trigger-styles: root.trigger-styles;
                     clip-trigger: root.clip-trigger;
@@ -1625,6 +1632,7 @@ export component MainWindow inherits Window {
                     clip-restart => { root.clip-restart(); }
                     clip-play-mode-picked(i) => { root.clip-play-mode-picked(i); }
                     clip-autopilot-picked(i) => { root.clip-autopilot-picked(i); }
+                    clip-router-input-picked(i) => { root.clip-router-input-picked(i); }
                     clip-trigger-picked(i) => { root.clip-trigger-picked(i); }
                     clip-synced-picked(b) => { root.clip-synced-picked(b); }
                     layer-side-picked(i) => { root.layer-side-picked(i); }

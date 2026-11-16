@@ -109,6 +109,43 @@ pub enum ClipSource {
         #[serde(default)]
         server: String,
     },
+    /// Another layer's, a group's or the whole composition's picture, like Resolume's Layer
+    /// Router and Group Router. An input drawn later in the frame (above this clip's layer,
+    /// or the composition) shows its previous frame, which makes feedback.
+    Router {
+        input: RouterInput,
+    },
+}
+
+/// What a [`ClipSource::Router`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterInput {
+    /// A layer by index in [`Composition::layers`] (0 is the bottom one).
+    Layer(usize),
+    /// A layer group by index in [`Composition::groups`].
+    Group(usize),
+    /// The mix of all layers, after the composition's effects and before the master.
+    Composition,
+}
+
+impl RouterInput {
+    /// Every input a composition offers, in menu order: Composition, then groups, then
+    /// layers from the top down (as the grid shows them).
+    pub fn all(comp: &Composition) -> Vec<RouterInput> {
+        let mut all = vec![RouterInput::Composition];
+        all.extend((0..comp.groups.len()).map(RouterInput::Group));
+        all.extend((0..comp.layers.len()).rev().map(RouterInput::Layer));
+        all
+    }
+
+    pub fn label(self, comp: &Composition) -> String {
+        match self {
+            RouterInput::Composition => "Composition".into(),
+            RouterInput::Group(g) => comp.groups.get(g).map_or_else(|| format!("Group {}", g + 1), |g| g.name.clone()),
+            RouterInput::Layer(l) => comp.layers.get(l).map_or_else(|| format!("Layer {}", l + 1), |l| l.name.clone()),
+        }
+    }
 }
 
 impl ClipSource {
@@ -133,6 +170,7 @@ impl ClipSource {
             ClipSource::Video { .. } => "video",
             ClipSource::Camera { .. } => "camera",
             ClipSource::Syphon { .. } => "syphon",
+            ClipSource::Router { .. } => "router",
         }
     }
 
@@ -180,6 +218,7 @@ impl ClipSource {
                 path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into())
             }
             ClipSource::Camera { .. } | ClipSource::Syphon { .. } => self.live_name().unwrap_or_default(),
+            ClipSource::Router { .. } => "Layer Router".into(),
         }
     }
 }
@@ -300,7 +339,7 @@ impl Clip {
         match self.source {
             ClipSource::Video { .. } => self.media_secs.filter(|s| *s > 0.0),
             // Live inputs have no length; they just run.
-            ClipSource::Camera { .. } | ClipSource::Syphon { .. } => None,
+            ClipSource::Camera { .. } | ClipSource::Syphon { .. } | ClipSource::Router { .. } => None,
             _ => Some(self.duration.unwrap_or(DEFAULT_CLIP_SECS).max(0.01) as f64),
         }
     }
@@ -1816,5 +1855,17 @@ mod tests {
         assert!(!json.contains("trigger") && !json.contains("autopilot"), "{json}");
         let json = serde_json::to_string(c.clip(0, 0).unwrap()).unwrap();
         assert!(json.contains("\"trigger\":\"piano\""), "{json}");
+    }
+
+    #[test]
+    fn layer_router_inputs_save_and_list() {
+        let mut c = Composition::new(64, 64, 2, 1);
+        c.set_clip(1, 0, ClipSource::Router { input: RouterInput::Layer(0) });
+        let back = Composition::from_json(&c.to_json().unwrap()).unwrap();
+        assert_eq!(back.clip(1, 0).unwrap().source, ClipSource::Router { input: RouterInput::Layer(0) });
+        assert_eq!(back.clip(1, 0).unwrap().length(), None);
+        let all = RouterInput::all(&c);
+        assert_eq!(all, [RouterInput::Composition, RouterInput::Layer(1), RouterInput::Layer(0)]);
+        assert_eq!(RouterInput::Layer(0).label(&c), c.layers[0].name);
     }
 }

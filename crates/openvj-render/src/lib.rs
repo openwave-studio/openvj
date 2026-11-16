@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use openvj_core::isf::eval_size;
-use openvj_core::{Clip, ClipId, ClipSource, Composition, Effect, EffectType, ModInputs, OutputSetup};
+use openvj_core::{Clip, ClipId, ClipSource, Composition, Effect, EffectType, ModInputs, OutputSetup, RouterInput};
 
 use crate::isf::CompiledEffect;
 use crate::milkdrop::MilkClip;
@@ -340,6 +340,10 @@ pub struct Engine {
     shadertoy_audio_view: wgpu::TextureView,
     /// HDR targets by size, for drawing ISF generators meant for LDR targets.
     hdr_stand_ins: HashMap<(u32, u32), Target>,
+    /// Pictures Layer Router clips read, by input: each is written when its input has been
+    /// drawn, so a router drawn before its input shows the previous frame. Only inputs a
+    /// playing router uses are kept.
+    routes: HashMap<RouterInput, Target>,
     mapper: mapping::Mapper,
     /// A BGRA copy of the output for other apps, while one is wanted.
     shared: Option<Target>,
@@ -552,6 +556,7 @@ impl Engine {
             shadertoy_audio,
             shadertoy_audio_view,
             hdr_stand_ins: HashMap::new(),
+            routes: HashMap::new(),
             mapper,
             shared: None,
             thumbs_at: None,
@@ -893,6 +898,13 @@ impl Engine {
         target: &Target,
         slot: u64,
     ) {
+        if let ClipSource::Router { input } = &clip.source {
+            match self.routes.get(input) {
+                Some(route) => passes.push(Self::blend_pass(target, route, route, MODE_MIX, 1.0)),
+                None => passes.push(Pass::clear(target, TRANSPARENT)),
+            }
+            return;
+        }
         if let ClipSource::Milkdrop { preset } = &clip.source {
             match self.milk_passes(passes, clip, preset, time, inputs, slot != 2) {
                 Some(out) => passes.push(Self::blend_pass(target, &out, &out, MODE_MIX, 1.0)),
@@ -922,6 +934,32 @@ impl Engine {
             Some(out) if out.id != target.id => passes.push(Self::blend_pass(target, &out, &out, MODE_MIX, 1.0)),
             Some(_) => {}
             None => passes.push(Pass::clear(target, TRANSPARENT)),
+        }
+    }
+
+    /// Keeps a route texture for every input a playing (or previewed) Layer Router clip
+    /// reads, and lets go of the rest.
+    fn keep_routes(&mut self, comp: &Composition, preview: Option<ClipId>) {
+        let ids = comp.live_clip_ids().into_iter().chain(preview);
+        let wanted: HashSet<RouterInput> = ids
+            .filter_map(|id| comp.layers.iter().find_map(|l| l.clip_by_id(id)))
+            .filter_map(|c| match c.source {
+                ClipSource::Router { input } => Some(input),
+                _ => None,
+            })
+            .collect();
+        let size = self.size();
+        self.routes.retain(|input, t| wanted.contains(input) && (t.width, t.height) == size);
+        for input in wanted {
+            let device = &self.device;
+            self.routes.entry(input).or_insert_with(|| Target::new(device, "layer router", size.0, size.1, HDR));
+        }
+    }
+
+    /// Copies an input's picture into its route, if a router reads it.
+    fn write_route(&self, passes: &mut Vec<Pass>, input: RouterInput, src: &Target) {
+        if let Some(route) = self.routes.get(&input) {
+            passes.push(Self::blend_pass(route, src, src, MODE_MIX, 0.0));
         }
     }
 
@@ -1157,6 +1195,7 @@ impl Engine {
     ) -> usize {
         let Some(g) = comp.groups.get(group) else { return cur };
         let src = self.effect_chain(passes, &t.fx, t.group[slot].clone(), &g.effects, now, inputs);
+        self.write_route(passes, RouterInput::Group(group), &src);
         passes.push(Self::blend_pass(
             &t.comp[1 - cur],
             &t.comp[cur],
@@ -1264,13 +1303,17 @@ impl Engine {
         self.now = now;
         let beat = inputs.beat;
         let mut passes = vec![Pass::clear(&t.comp[0], wgpu::Color::BLACK)];
+        self.keep_routes(comp, preview);
         self.previewed = false;
         let mut cur = 0;
         // The group being mixed (index, ping-pong slot), if any. A group's layers are mixed
         // on their own, from transparent, then blended into the composition as one.
         let mut open: Option<(usize, usize)> = None;
-        for (_, layer) in comp.visible_layers() {
+        // Layers that drew this frame; routes from the others are cleared below.
+        let mut drawn = HashSet::new();
+        for (layer_index, layer) in comp.visible_layers() {
             let Some(frame) = layer.frame(now, beat) else { continue };
+            drawn.insert(layer_index);
             if open.map(|(g, _)| g) != layer.group {
                 if let Some((g, slot)) = open.take() {
                     cur = self.close_group(&mut passes, &t, comp, g, slot, cur, now, inputs);
@@ -1307,6 +1350,7 @@ impl Engine {
                 src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.transform), now, inputs);
             }
             let src = &self.effect_chain(&mut passes, &t.fx, src, &layer.effects, now, inputs);
+            self.write_route(&mut passes, RouterInput::Layer(layer_index), src);
             let mode = layer.blend.shader_id();
             match &mut open {
                 Some((_, slot)) => {
@@ -1322,7 +1366,13 @@ impl Engine {
         if let Some((g, slot)) = open {
             cur = self.close_group(&mut passes, &t, comp, g, slot, cur, now, inputs);
         }
+        for (input, route) in &self.routes {
+            if matches!(input, RouterInput::Layer(l) if !drawn.contains(l)) {
+                passes.push(Pass::clear(route, TRANSPARENT));
+            }
+        }
         let mixed = self.effect_chain(&mut passes, &t.fx, t.comp[cur].clone(), &comp.effects, now, inputs);
+        self.write_route(&mut passes, RouterInput::Composition, &mixed);
         passes.push(Self::blend_pass(&t.output, &mixed, &mixed, MODE_MASTER, comp.master_value(inputs)));
         if let Some(shared) = &self.shared {
             passes.push(Self::blend_pass(shared, &t.output, &t.output, MODE_MIX, 0.0));
@@ -1955,6 +2005,46 @@ mod tests {
         e.render(&comp, 0.1, &inputs(0.1), None);
         let m = mean(&e.read_target(e.output()));
         assert!(m[0] > 250.0 && m[1] < 2.0 && m[2] < 2.0, "{m:?}");
+    }
+
+    #[test]
+    fn layer_router_shows_its_input_and_feeds_back() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut comp = Composition::new(32, 32, 3, 1);
+        let id = comp.set_clip(0, 0, ClipSource::Image { path: "c.png".into() }).unwrap();
+        e.set_media_frame(id, 2, 2, &[255, 0, 0, 255].repeat(4));
+        // A router above layer 1 shows it this frame, before layer 1's opacity: a quarter of
+        // red plus a quarter of the routed red.
+        comp.set_clip(1, 0, ClipSource::Router { input: openvj_core::RouterInput::Layer(0) });
+        comp.layers[0].opacity = 0.25;
+        comp.layers[1].blend = BlendMode::Add;
+        comp.layers[1].opacity = 0.25;
+        comp.trigger_column(0, 0.0);
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!((m[0] - 127.5).abs() < 3.0 && m[1] < 2.0, "red at 25% plus its router at 25%: {m:?}");
+
+        // A router on the composition reads the previous frame: the first frame shows nothing
+        // of it, the next one shows the last mix.
+        comp.set_clip(2, 0, ClipSource::Router { input: openvj_core::RouterInput::Composition });
+        comp.layers[2].blend = BlendMode::Add;
+        comp.trigger(2, 0, 0.2);
+        let mut e = engine(32, 32).unwrap();
+        e.set_media_frame(id, 2, 2, &[255, 0, 0, 255].repeat(4));
+        e.render(&comp, 0.3, &inputs(0.3), None);
+        let first = mean(&e.read_target(e.output()));
+        e.render(&comp, 0.4, &inputs(0.4), None);
+        let second = mean(&e.read_target(e.output()));
+        assert!((first[0] - 127.5).abs() < 3.0, "{first:?}");
+        assert!(second[0] > 250.0, "feedback adds the last frame: {second:?}");
+
+        // Routes go away when no router plays.
+        comp.clear_all(0.5);
+        e.render(&comp, 1.0, &inputs(1.0), None);
+        assert!(e.routes.is_empty());
     }
 
     #[test]

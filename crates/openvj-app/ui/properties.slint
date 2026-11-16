@@ -254,6 +254,9 @@ export component PropertiesPanel inherits Rectangle {
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
     in property <[string]> autopilot-modes;
+    // Layer Router clips: the inputs to choose from, and the current one (-1 for other clips).
+    in property <[string]> router-inputs;
+    in property <int> clip-router-input: -1;
     in property <int> clip-autopilot;
     in property <[string]> trigger-styles;
     in property <int> clip-trigger;
@@ -283,6 +286,7 @@ export component PropertiesPanel inherits Rectangle {
     callback clip-restart();
     callback clip-play-mode-picked(int);
     callback clip-autopilot-picked(int);
+    callback clip-router-input-picked(int);
     callback clip-trigger-picked(int);
     callback clip-synced-picked(bool);
     callback layer-side-picked(int);
@@ -621,6 +625,16 @@ export component PropertiesPanel inherits Rectangle {
                     FlatButton {
                         text: "Open on Shadertoy ↗";
                         clicked => { Shadertoy.open-link(root.clip-source-url); }
+                    }
+                }
+                // Resolume's Layer Router: which layer, group or the composition this clip shows.
+                if root.clip-router-input >= 0: LabelledRow {
+                    label: "Input";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.router-inputs;
+                        current: root.clip-router-input;
+                        picked(i) => { root.clip-router-input-picked(i); }
                     }
                 }
                 LabelledRow {

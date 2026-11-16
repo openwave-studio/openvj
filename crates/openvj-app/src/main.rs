@@ -319,6 +319,7 @@ fn main() -> Result<()> {
     on!(on_layer_renamed, |a, t: slint::SharedString| a.layer_renamed(&t));
     on!(on_clip_play_mode_picked, |a, i: i32| a.clip_play_mode(i.max(0) as usize));
     on!(on_clip_autopilot_picked, |a, i: i32| a.clip_autopilot(i.max(0) as usize));
+    on!(on_clip_router_input_picked, |a, i: i32| a.clip_router_input(i.max(0) as usize));
     on!(on_clip_trigger_picked, |a, i: i32| a.clip_trigger(i.max(0) as usize));
     on!(on_clip_synced_picked, |a, b: bool| a.clip_synced(b));
     on!(on_layer_side_picked, |a, i: i32| a.layer_side(i.max(0) as usize));
