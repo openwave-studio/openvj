@@ -5,6 +5,7 @@ import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Scope, ParamData, EffectData, AudioLevels } from "state.slint";
 import { FlatButton, ToggleButton, TabButton, BlendPicker, PanelTitle, ModParam, ParamBar, BandMeters } from "controls.slint";
+import { Shadertoy } from "shadertoy.slint";
 
 /// One effect in a chain: header with bypass, reorder and remove, then its parameters.
 component EffectCard inherits Rectangle {
@@ -47,6 +48,10 @@ component EffectCard inherits Rectangle {
                 font-weight: 600;
                 vertical-alignment: center;
                 overflow: elide;
+            }
+            if root.data.source != "": ToggleButton {
+                text: "↗";
+                clicked => { Shadertoy.open-link(root.data.source); }
             }
             if !root.fixed: ToggleButton {
                 text: "◀";
@@ -240,6 +245,8 @@ export component PropertiesPanel inherits Rectangle {
     in property <string> clip-kind;
     in property <string> clip-detail;
     in property <string> clip-path;
+    /// The Shadertoy page of an imported shader's clip, or empty.
+    in property <string> clip-source-url;
     in-out property <string> clip-name;
     in property <[ParamData]> clip-params;
     in property <[EffectData]> clip-effects;
@@ -602,6 +609,13 @@ export component PropertiesPanel inherits Rectangle {
                     color: Theme.text-faint;
                     font-size: 10px;
                     overflow: elide;
+                }
+                if root.clip-source-url != "": HorizontalLayout {
+                    alignment: start;
+                    FlatButton {
+                        text: "Open on Shadertoy ↗";
+                        clicked => { Shadertoy.open-link(root.clip-source-url); }
+                    }
                 }
                 LabelledRow {
                     label: "Play mode";

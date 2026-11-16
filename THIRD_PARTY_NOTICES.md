@@ -56,6 +56,10 @@ out.
 
 ## Acknowledgements
 
+- **Import from Shadertoy** uses the [Shadertoy.com API](https://www.shadertoy.com/howto) with the
+  user's own key. No Shadertoy shaders are bundled: imported shaders keep their author's credit,
+  link and licence (CC BY-NC-SA 3.0 unless the author states otherwise) in their file header.
+
 - [Varda](https://github.com/im-knots/varda) (MIT) is the reference for openVJ's projection
   mapping, its camera input design and the ISF binding style it accepts.
 - [Resolume](https://resolume.com) is the model for openVJ's workflow and file formats. openVJ is

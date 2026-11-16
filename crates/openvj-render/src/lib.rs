@@ -15,6 +15,7 @@ mod mapping;
 mod milkdrop;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -305,6 +306,12 @@ pub struct Engine {
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The same, repeating at the edges (ISF files that name `isf_sampler_repeat`).
+    repeat_sampler: wgpu::Sampler,
+    /// Images ISF files import (`IMPORTED`), by file, loaded once.
+    imported: HashMap<PathBuf, wgpu::TextureView>,
+    /// Imported images that failed to load, reported once.
+    missing_images: HashSet<PathBuf>,
     shader: wgpu::ShaderModule,
     pipelines: HashMap<(Pipeline, wgpu::TextureFormat), wgpu::RenderPipeline>,
     uniform_buf: wgpu::Buffer,
@@ -326,6 +333,9 @@ pub struct Engine {
     spectrum_view: wgpu::TextureView,
     /// Whether the spectrum texture holds silence.
     spectrum_silent: bool,
+    /// The same audio in Shadertoy's 512×2 sound-channel layout.
+    shadertoy_audio: wgpu::Texture,
+    shadertoy_audio_view: wgpu::TextureView,
     /// HDR targets by size, for drawing ISF generators meant for LDR targets.
     hdr_stand_ins: HashMap<(u32, u32), Target>,
     mapper: mapping::Mapper,
@@ -457,6 +467,14 @@ impl Engine {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let repeat_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("openvj repeat sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
         let dummy = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("dummy"),
@@ -485,11 +503,26 @@ impl Engine {
             view_formats: &[],
         });
         let spectrum_view = spectrum.create_view(&Default::default());
+        let (sw, sh) = isf::SHADERTOY_AUDIO_SIZE;
+        let shadertoy_audio = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadertoy audio"),
+            size: wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let shadertoy_audio_view = shadertoy_audio.create_view(&Default::default());
         Self {
             device,
             queue,
             layout,
             sampler,
+            repeat_sampler,
+            imported: HashMap::new(),
+            missing_images: HashSet::new(),
             shader,
             pipelines,
             uniform_buf,
@@ -506,6 +539,8 @@ impl Engine {
             spectrum,
             spectrum_view,
             spectrum_silent: false,
+            shadertoy_audio,
+            shadertoy_audio_view,
             hdr_stand_ins: HashMap::new(),
             mapper,
             shared: None,
@@ -915,6 +950,18 @@ impl Engine {
         let free = |avoid: &[&Target]| scratch.iter().find(|t| avoid.iter().all(|a| a.id != t.id)).unwrap().clone();
         let ty = fx.ty()?;
         let compiled = self.compiled(&ty)?;
+        let imported: Vec<(String, wgpu::TextureView)> = ty
+            .def
+            .imported
+            .iter()
+            .map(|(name, rel)| {
+                let view = match ty.path.as_deref().and_then(Path::parent) {
+                    Some(dir) => self.imported_view(&dir.join(rel)),
+                    None => self.blank.view.clone(),
+                };
+                (name.clone(), view)
+            })
+            .collect();
         self.fx_seen.insert(key);
         let (w, h) = dst.map_or((src.width, src.height), |d| (d.width, d.height));
         let state = self.fx_state.entry(key).or_default();
@@ -1005,6 +1052,12 @@ impl Engine {
                         src.view.clone()
                     } else if name == isf::SPECTRUM {
                         self.spectrum_view.clone()
+                    } else if name == isf::SHADERTOY_AUDIO {
+                        self.shadertoy_audio_view.clone()
+                    } else if name == isf::BLANK {
+                        self.blank.view.clone()
+                    } else if let Some((_, v)) = imported.iter().find(|(n, _)| n == name) {
+                        v.clone()
                     } else {
                         let buf = state.buffers.get(name)?;
                         buf.pair[buf.latest].view.clone()
@@ -1098,6 +1151,46 @@ impl Engine {
     ///
     /// Every generator and live input clip in `comp` also refreshes its live thumbnail,
     /// at most every [`THUMB_INTERVAL`] (and right away when one is new).
+    /// An image an ISF file imports, loaded on first use. A file that can't be read is
+    /// reported once, reads transparent, and is tried again next frame.
+    fn imported_view(&mut self, path: &Path) -> wgpu::TextureView {
+        if let Some(v) = self.imported.get(path) {
+            return v.clone();
+        }
+        let view = match image::open(path) {
+            Ok(img) => {
+                let img = img.to_rgba8();
+                let (w, h) = img.dimensions();
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("isf imported image"),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                self.queue.write_texture(
+                    texture.as_image_copy(),
+                    img.as_raw(),
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None },
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                );
+                texture.create_view(&Default::default())
+            }
+            Err(e) => {
+                // Not cached: the file may still be downloading. Report it once.
+                if self.missing_images.insert(path.to_owned()) {
+                    eprintln!("openVJ: can't load the image {}: {e}", path.display());
+                }
+                return self.blank.view.clone();
+            }
+        };
+        self.imported.insert(path.to_owned(), view.clone());
+        view
+    }
+
     /// Uploads this frame's audio spectrum for ISF files: [`SPECTRUM_BINS`] texels laid out
     /// like Synesthesia's `syn_Spectrum` (r raw, g with release, b smooth, a waveform around
     /// 0.5), each 0..1. `None` (no audio input) leaves silence.
@@ -1114,6 +1207,14 @@ impl Engine {
             texels.as_flattened(),
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SPECTRUM_BINS * 4), rows_per_image: None },
             wgpu::Extent3d { width: SPECTRUM_BINS, height: 1, depth_or_array_layers: 1 },
+        );
+        let (sw, sh) = isf::SHADERTOY_AUDIO_SIZE;
+        let st = shadertoy_audio_texels(bins.unwrap_or_default());
+        self.queue.write_texture(
+            self.shadertoy_audio.as_image_copy(),
+            st.as_flattened(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(sw * 4), rows_per_image: None },
+            wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
         );
         self.spectrum_silent = bins.is_none();
     }
@@ -1349,10 +1450,11 @@ impl Engine {
                             resource: wgpu::BindingResource::TextureView(view),
                         });
                     }
-                    if let Some(binding) = fx.sampler {
+                    for (binding, name) in &fx.samplers {
+                        let sampler = if name == isf::REPEAT_SAMPLER { &self.repeat_sampler } else { &self.sampler };
                         entries.push(wgpu::BindGroupEntry {
-                            binding,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            binding: *binding,
+                            resource: wgpu::BindingResource::Sampler(sampler),
                         });
                     }
                     let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1422,6 +1524,46 @@ fn cover_scale(sw: u32, sh: u32, tw: u32, th: u32) -> [f32; 2] {
     let src = sw as f32 / sh as f32;
     let dst = tw as f32 / th as f32;
     if src > dst { [dst / src, 1.0] } else { [1.0, src / dst] }
+}
+
+/// Lowest and highest frequency of the spectrum bins (openvj-audio's `SPECTRUM_LO_HZ` and
+/// `SPECTRUM_HI_HZ`).
+const SPECTRUM_LO_HZ: f32 = 20.0;
+const SPECTRUM_HI_HZ: f32 = 16_000.0;
+/// Shadertoy's sound texture covers 0 Hz to about 11 kHz in 512 linear bins (half of a
+/// 2048-point FFT at 44.1 kHz).
+const SHADERTOY_TOP_HZ: f32 = 11_025.0;
+
+/// Builds Shadertoy's sound texture from openVJ's spectrum bins: row 0 the spectrum,
+/// resampled from log-spaced to linear bins, row 1 the waveform (0.5 is silence). Every
+/// channel holds the value, so `.r`, `.x` and `.g` all read it.
+fn shadertoy_audio_texels(bins: &[[f32; 4]]) -> Vec<[u8; 4]> {
+    let (w, _) = isf::SHADERTOY_AUDIO_SIZE;
+    let w = w as usize;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let grey = |v: u8| [v, v, v, 255];
+    let mut out = vec![grey(0); w];
+    out.extend(std::iter::repeat_n(grey(128), w));
+    let n = bins.len();
+    if n == 0 {
+        return out;
+    }
+    let ratio = (SPECTRUM_HI_HZ / SPECTRUM_LO_HZ).ln();
+    for x in 0..w {
+        let hz = (x as f32 + 0.5) / w as f32 * SHADERTOY_TOP_HZ;
+        let pos = (hz.max(SPECTRUM_LO_HZ) / SPECTRUM_LO_HZ).ln() / ratio * n as f32 - 0.5;
+        let i = pos.floor().clamp(0.0, (n - 1) as f32) as usize;
+        let j = (i + 1).min(n - 1);
+        let t = (pos - i as f32).clamp(0.0, 1.0);
+        // Green: the level with a release, like Shadertoy's smoothed analyser.
+        out[x] = grey(byte(bins[i][1] * (1.0 - t) + bins[j][1] * t));
+        let wpos = (x as f32 + 0.5) / w as f32 * n as f32 - 0.5;
+        let a = wpos.floor().clamp(0.0, (n - 1) as f32) as usize;
+        let b = (a + 1).min(n - 1);
+        let t = (wpos - a as f32).clamp(0.0, 1.0);
+        out[w + x] = grey(byte(bins[a][3] * (1.0 - t) + bins[b][3] * t));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2287,6 +2429,144 @@ mod tests {
         let m = mean(&e.read_target(e.output()));
         assert!(m[0] < 1.0 && m[1] < 1.0 && (m[2] - 127.5).abs() < 3.0, "silence: {m:?}");
         set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_buffers_audio_and_orientation() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // Buffer A adds a quarter each frame to its last frame. The Image shows it in red,
+        // Shadertoy's y (0 at the bottom) in green, and the sound texture's top bins in blue.
+        let json = serde_json::json!({"Shader": {"info": {"id": "Test12", "name": "Test"}, "renderpass": [
+            { "type": "image", "name": "Image",
+              "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}, {"id": 1, "ctype": "music", "channel": 1}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { vec2 uv = f / iResolution.xy;\n\
+                       c = vec4(texture(iChannel0, uv).r, uv.y, texture(iChannel1, vec2(0.9, 0.25)).x, 0.0); }" },
+            { "type": "buffer", "name": "Buffer A", "outputs": [{"id": "4dXGR8", "channel": 0}],
+              "inputs": [{"id": "4dXGR8", "ctype": "buffer", "channel": 0}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = texture(iChannel0, f / iResolution.xy) + 0.25; }" },
+        ]}})
+        .to_string();
+        let def = EffectDef::parse(&shadertoy::from_api_json(&json).unwrap().source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(
+            EffectLibrary::with(Vec::new(), Vec::new())
+                .with_generators(vec![std::sync::Arc::new(EffectType::new(def, None))]),
+        );
+        let mut comp = Composition::new(32, 32, 1, 1);
+        comp.set_clip(0, 0, ClipSource::isf(&id)).unwrap();
+        comp.trigger(0, 0, 0.0);
+        let bins: Vec<[f32; 4]> = (0..SPECTRUM_BINS).map(|_| [1.0, 1.0, 1.0, 0.5]).collect();
+        e.set_spectrum(Some(&bins));
+        for k in 0..3 {
+            e.render(&comp, k as f64 / 60.0, &inputs(0.0), None);
+        }
+        let px = e.read_target(e.output());
+        let row = |y: usize| mean(&px[y * 32 * 4..(y + 1) * 32 * 4]);
+        let (top, bottom) = (row(0), row(31));
+        assert!((top[0] - 191.0).abs() < 4.0, "three frames of a quarter: {top:?}");
+        assert!(top[1] > 240.0 && bottom[1] < 15.0, "y grows upwards: top {top:?}, bottom {bottom:?}");
+        assert!(top[2] > 250.0, "sound texture: {top:?}");
+        set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_video_input_reads_upright() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let json = serde_json::json!({"Shader": {"info": {"id": "Video1", "name": "Pass"}, "renderpass": [
+            { "type": "image", "name": "Image", "inputs": [{"id": 1, "ctype": "webcam", "channel": 0}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = texture(iChannel0, f / iResolution.xy); }" },
+        ]}})
+        .to_string();
+        let def = EffectDef::parse(&shadertoy::from_api_json(&json).unwrap().source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(EffectLibrary::with(vec![std::sync::Arc::new(EffectType::new(def, None))], Vec::new()));
+        // White on top, black below.
+        let mut comp = Composition::new(32, 32, 1, 1);
+        let img = comp.set_clip(0, 0, ClipSource::Image { path: "top.png".into() }).unwrap();
+        e.set_media_frame(img, 1, 2, &[255, 255, 255, 255, 0, 0, 0, 255]);
+        comp.trigger(0, 0, 0.0);
+        comp.layers[0].effects = vec![Effect::new(&id)];
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        let px = e.read_target(e.output());
+        let row = |y: usize| mean(&px[y * 32 * 4..(y + 1) * 32 * 4]);
+        assert!(row(2)[0] > 200.0 && row(29)[0] < 50.0, "top {:?}, bottom {:?}", row(2), row(29));
+        set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_textures_load_and_repeat() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // Red reads a 2×1 texture (white left, black right) at x = 1.25 with repeat wrapping
+        // (lands on the white half); green reads it at the same x clamped (the black edge).
+        let json = serde_json::json!({"Shader": {"info": {"id": "Tex123", "name": "Tex"}, "renderpass": [
+            { "type": "image", "name": "Image", "inputs": [
+                {"id": 1, "ctype": "texture", "channel": 0, "src": "/media/a/abc123.png", "sampler": {"wrap": "repeat"}},
+                {"id": 2, "ctype": "texture", "channel": 1, "src": "/media/a/abc123.png", "sampler": {"wrap": "clamp"}}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = vec4(texture(iChannel0, vec2(1.25, 0.5)).r, texture(iChannel1, vec2(1.25, 0.5)).r, 0.0, 1.0); }" },
+        ]}})
+        .to_string();
+        let conv = shadertoy::from_api_json(&json).unwrap();
+        let dir = std::env::temp_dir().join(format!("openvj-st-tex-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let tex = &conv.textures[0];
+        image::RgbaImage::from_raw(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255])
+            .unwrap()
+            .save(dir.join(&tex.path))
+            .unwrap();
+        let fs = dir.join(&conv.file_name);
+        std::fs::write(&fs, &conv.source).unwrap();
+        let def = EffectDef::parse(&conv.source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(
+            EffectLibrary::with(Vec::new(), Vec::new())
+                .with_generators(vec![std::sync::Arc::new(EffectType::new(def, Some(fs)))]),
+        );
+        let mut comp = Composition::new(32, 32, 1, 1);
+        comp.set_clip(0, 0, ClipSource::isf(&id)).unwrap();
+        comp.trigger(0, 0, 0.0);
+        e.render(&comp, 0.0, &inputs(0.0), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!(m[0] > 200.0 && m[1] < 50.0, "repeat, clamp: {m:?}");
+        set_library(EffectLibrary::builtin());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadertoy_sound_texture_layout() {
+        assert_eq!(shadertoy_audio_texels(&[]).len(), 1024);
+        // Only the bins around 1 kHz are loud.
+        let bins: Vec<[f32; 4]> = (0..SPECTRUM_BINS as usize)
+            .map(|b| {
+                let hz =
+                    SPECTRUM_LO_HZ * (SPECTRUM_HI_HZ / SPECTRUM_LO_HZ).powf((b as f32 + 0.5) / SPECTRUM_BINS as f32);
+                let loud = (800.0..1250.0).contains(&hz);
+                [0.0, if loud { 1.0 } else { 0.0 }, 0.0, if b % 2 == 0 { 1.0 } else { 0.0 }]
+            })
+            .collect();
+        let t = shadertoy_audio_texels(&bins);
+        let at_hz = |hz: f32| t[(hz / SHADERTOY_TOP_HZ * 512.0) as usize][0];
+        assert_eq!(at_hz(1000.0), 255);
+        assert_eq!(at_hz(100.0), 0);
+        assert_eq!(at_hz(5000.0), 0);
+        assert!(t[512..].iter().any(|p| p[0] > 200) && t[512..].iter().any(|p| p[0] < 50), "waveform row");
     }
 
     #[test]

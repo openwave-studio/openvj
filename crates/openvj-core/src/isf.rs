@@ -8,7 +8,8 @@
 //!   a stable id saved in compositions, the display name, and the Resolume effect types
 //!   this effect stands in for when importing `.avc` files.
 //!   `"HIDDEN": true` keeps an effect out of the Effects tab (the fixed clip and layer
-//!   Transform is one).
+//!   Transform is one). `"SOURCE": "https://…"` is where the shader came from, such as
+//!   its Shadertoy page (shown as a link in the clip and effect panels).
 //! * per input `"UNIT": "°"` (shown after the value) and `"WRAP": true` (angles and hues:
 //!   modulation wraps around instead of stopping at the ends).
 //! * per input `"RESOLUME": "Strength"`: the Resolume parameter it imports from, in this
@@ -36,6 +37,10 @@ pub struct EffectDef {
     pub resolume: Vec<String>,
     /// Not listed in the Effects tab.
     pub hidden: bool,
+    /// Where the shader came from (`OPENVJ.SOURCE`), such as its Shadertoy page.
+    pub source: String,
+    /// Images the shader reads (ISF `IMPORTED`): GLSL name and path relative to the file.
+    pub imported: Vec<(String, String)>,
     /// The GLSL after the header.
     pub glsl: String,
 }
@@ -248,6 +253,8 @@ impl EffectDef {
                 let end = rest.find("*/").ok_or("the ISF header comment is not closed")?;
                 (&rest[..end], &rest[end + 2..])
             }
+            // Shadertoy code copied as is: a generator with no inputs.
+            None if crate::shadertoy::uses_word(source, "mainImage") => ("{}", source),
             None => return Err("missing the ISF header (a /* { … } */ comment at the top)".into()),
         };
         let json: Value = serde_json::from_str(header).map_err(|e| format!("ISF header: {e}"))?;
@@ -280,6 +287,8 @@ impl EffectDef {
             passes,
             resolume,
             hidden: ovj.and_then(|o| o.get("HIDDEN")).and_then(Value::as_bool).unwrap_or(false),
+            source: ovj.and_then(|o| o.get("SOURCE")).and_then(Value::as_str).unwrap_or_default().to_owned(),
+            imported: parse_imported(obj.get("IMPORTED")),
             glsl: glsl.to_owned(),
         })
     }
@@ -393,6 +402,18 @@ fn parse_input(v: &Value) -> Result<InputDef, String> {
             _ => None,
         },
     })
+}
+
+/// ISF `IMPORTED`: `{"name": {"PATH": "file.png"}}` (ISF 2) or `[{"NAME": …, "PATH": …}]` (ISF 1).
+fn parse_imported(v: Option<&Value>) -> Vec<(String, String)> {
+    let path = |e: &Value| e.get("PATH").and_then(Value::as_str).map(str::to_owned);
+    match v {
+        Some(Value::Object(m)) => m.iter().filter_map(|(k, e)| Some((k.clone(), path(e)?))).collect(),
+        Some(Value::Array(a)) => {
+            a.iter().filter_map(|e| Some((e.get("NAME").and_then(Value::as_str)?.to_owned(), path(e)?))).collect()
+        }
+        _ => vec![],
+    }
 }
 
 fn parse_pass(v: &Value) -> PassDef {

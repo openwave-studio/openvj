@@ -1,0 +1,108 @@
+// Import from Shadertoy: a dialog over the app, opened from the Sources tab. The state
+// lives in the `Shadertoy` global so the Sources tab, Settings and panels share it without
+// passing properties through main.slint.
+import { LineEdit, TextEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { FlatButton } from "controls.slint";
+
+export global Shadertoy {
+    in-out property <bool> open;
+    in-out property <string> link;
+    in-out property <string> code;
+    in property <bool> busy;
+    /// The last import's result (or what's wrong), and whether it worked.
+    in property <string> message;
+    in property <bool> ok;
+    /// The VJ's API key, from Settings → Media.
+    in-out property <string> api-key;
+    callback import();
+    /// Rust calls this when an import running in the background is done.
+    callback finished();
+    callback key-edited(string);
+    /// Opens a shader's Shadertoy page in the browser.
+    callback open-link(string);
+}
+
+export component ShadertoyDialog inherits Rectangle {
+    background: #000000a0;
+
+    // Swallow clicks outside the panel; a click on the dimmed area closes it.
+    TouchArea {
+        clicked => { if (!Shadertoy.busy) { Shadertoy.open = false; } }
+    }
+
+    panel := Rectangle {
+        width: min(560px, root.width - 40px);
+        height: content.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: max(20px, (root.height - self.height) / 3);
+        border-radius: Theme.radius * 2;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.separator;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000080;
+        TouchArea {}
+
+        content := VerticalLayout {
+            padding: 20px;
+            spacing: 10px;
+            Text {
+                text: "Import from Shadertoy";
+                color: Theme.text;
+                font-size: Theme.font-xl;
+                font-weight: 700;
+            }
+            Text {
+                text: "Paste a shader's link. openVJ saves it as an ISF file in Effects/Shadertoy and lists it with the generators (or with the effects, if it filters a video input). Most Shadertoy shaders are CC BY-NC-SA 3.0, which doesn't allow commercial use: check a shader's licence before using it in paid work.";
+                color: Theme.text-dim;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            LineEdit {
+                placeholder-text: "https://www.shadertoy.com/view/…";
+                text <=> Shadertoy.link;
+                enabled: !Shadertoy.busy;
+                accepted => { Shadertoy.import(); }
+            }
+            if Shadertoy.api-key == "": Text {
+                text: "Importing by link needs your own Shadertoy API key: add it in Settings → Media. Without one, paste the Image tab's code below (one pass only, no buffers or audio channels).";
+                color: Theme.text-faint;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Or paste the Image tab's code:";
+                color: Theme.text-dim;
+                font-size: 11px;
+            }
+            TextEdit {
+                height: 120px;
+                text <=> Shadertoy.code;
+                enabled: !Shadertoy.busy;
+                font-size: 11px;
+            }
+            if Shadertoy.message != "": Text {
+                text: Shadertoy.message;
+                color: Shadertoy.ok ? Theme.accent : Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                FlatButton {
+                    text: "Close";
+                    enabled: !Shadertoy.busy;
+                    clicked => { Shadertoy.open = false; }
+                }
+                FlatButton {
+                    text: Shadertoy.busy ? "Importing…" : "Import";
+                    primary: true;
+                    enabled: !Shadertoy.busy && (Shadertoy.link != "" || Shadertoy.code != "");
+                    clicked => { Shadertoy.import(); }
+                }
+            }
+        }
+    }
+}

@@ -32,7 +32,7 @@ use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, MainWindow, MappingWindow,
-    ModNames, OutputWindow, ParamData, PresetRow,
+    ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
 };
 
 // The output mapping window's side of the app.
@@ -1213,6 +1213,11 @@ impl App {
     fn sync_props(&mut self, ui: &MainWindow) {
         let clip = self.selected.and_then(|(l, c)| self.comp.clip(l, c));
         ui.set_clip_valid(clip.is_some());
+        let source_url = match clip.map(|c| &c.source) {
+            Some(ClipSource::Isf { generator }) => generator.ty().map(|t| t.def.source.clone()).unwrap_or_default(),
+            _ => String::new(),
+        };
+        ui.set_clip_source_url(if source_url.starts_with("https://") { source_url.into() } else { "".into() });
         if let Some(clip) = clip {
             let kind = clip.source.kind_label();
             let (l, c) = self.selected.unwrap();
@@ -2191,6 +2196,20 @@ impl App {
         }
     }
 
+    /// Shows a finished Shadertoy import in the dialog and the status bar.
+    pub fn shadertoy_finished(&mut self, ui: &MainWindow) {
+        let Some(outcome) = crate::shadertoy_import::take_finished() else { return };
+        let g = ui.global::<Shadertoy>();
+        g.set_busy(false);
+        g.set_ok(outcome.ok);
+        g.set_message(outcome.message.as_str().into());
+        if outcome.ok {
+            g.set_link("".into());
+            g.set_code("".into());
+            self.set_status(outcome.message.lines().next().unwrap_or_default().to_owned());
+        }
+    }
+
     /// Refreshes the MilkDrop tab when the MilkDrop folders changed.
     fn update_milk_library(&mut self, ui: &MainWindow) {
         let lib = milk_library();
@@ -2459,7 +2478,14 @@ impl EffectModels {
             };
             params.push(param_row(MIX_INDEX, "Mix", &fx.mix, 1.0, inputs, pct));
             update_model(model, params);
-            rows.push(EffectData { name: fx.name().into(), enabled: fx.enabled, params: ModelRc::from(model.clone()) });
+            let source =
+                fx.ty().map(|t| t.def.source.clone()).filter(|u| u.starts_with("https://")).unwrap_or_default();
+            rows.push(EffectData {
+                name: fx.name().into(),
+                enabled: fx.enabled,
+                source: source.into(),
+                params: ModelRc::from(model.clone()),
+            });
         }
         update_model(&self.effects, rows);
     }
