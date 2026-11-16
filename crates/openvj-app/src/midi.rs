@@ -1,13 +1,14 @@
 //! MIDI input: listens on every MIDI input port and queues raw messages for the frame loop.
 
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Instant;
 
 use midir::{Ignore, MidiInput, MidiInputConnection};
 
 const CLIENT: &str = "openVJ";
 
-/// A raw MIDI message and the index of the port it came from.
-type Incoming = (usize, Vec<u8>);
+/// A raw MIDI message, the index of the port it came from, and when it arrived.
+type Incoming = (usize, Instant, Vec<u8>);
 
 pub struct MidiPorts {
     /// Open connections, by port name. Dropping one closes the port.
@@ -47,9 +48,10 @@ impl MidiPorts {
         self.conns.is_empty()
     }
 
-    /// Messages received since the last call, with the name of their port.
-    pub fn drain(&self) -> Vec<(&str, Vec<u8>)> {
-        self.rx.try_iter().filter_map(|(port, msg)| Some((self.conns.get(port)?.0.as_str(), msg))).collect()
+    /// Messages received since the last call, with the name of their port and the moment they
+    /// arrived (MIDI clock is timed from it, not from the frame that reads it).
+    pub fn drain(&self) -> Vec<(&str, Instant, Vec<u8>)> {
+        self.rx.try_iter().filter_map(|(port, at, msg)| Some((self.conns.get(port)?.0.as_str(), at, msg))).collect()
     }
 }
 
@@ -57,11 +59,12 @@ impl MidiPorts {
 fn connect(index: usize, slot: usize, tx: Sender<Incoming>) -> Result<(String, MidiInputConnection<()>), String> {
     // midir needs one MidiInput per connection.
     let mut input = MidiInput::new(CLIENT).map_err(|e| e.to_string())?;
-    input.ignore(Ignore::All);
+    // Keep timing messages: MIDI clock, Start, Continue and Stop drive the tempo.
+    input.ignore(Ignore::SysexAndActiveSense);
     let port = input.ports().into_iter().nth(index).ok_or("port went away")?;
     let name = input.port_name(&port).unwrap_or_else(|_| format!("MIDI port {}", index + 1));
     let conn = input
-        .connect(&port, "openvj-in", move |_, msg, _| drop(tx.send((slot, msg.to_vec()))), ())
+        .connect(&port, "openvj-in", move |_, msg, _| drop(tx.send((slot, Instant::now(), msg.to_vec()))), ())
         .map_err(|e| format!("{name}: {e}"))?;
     Ok((name, conn))
 }

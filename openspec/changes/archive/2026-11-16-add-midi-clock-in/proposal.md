@@ -10,8 +10,8 @@ The maintainer's Novation Circuit Tracks sends MIDI clock but doesn't speak Able
 - Transport messages are followed. **Start** (0xFA) resets the beat to bar 1. **Continue** (0xFB) carries on. **Stop** (0xFC) holds the beat where it is. Song Position Pointer is ignored.
 - While CLOCK is on, ± and TAP are greyed out. LINK and CLOCK can't both drive the tempo: turning one on turns the other off.
 - If clock stops arriving for 1 second, the tempo holds at the last value and the button shows that it's waiting.
-- Settings → MIDI can name the clock input; the default is "Any".
-- The choice is saved in the app's settings, not in the composition, because it depends on the rig.
+- It follows the first input that sends clock, and ignores clock from other inputs until that one goes quiet. The status bar names the input. A picker for the clock input can come later if two clock sources turn out to be common.
+- CLOCK on or off is saved in the app's preferences, not in the composition, because it depends on the rig.
 
 Out of scope: sending MIDI clock out, MTC/timecode, and sending tempo from openVJ to the Circuit.
 
@@ -23,7 +23,7 @@ Out of scope: sending MIDI clock out, MTC/timecode, and sending tempo from openV
 ## Touches
 
 - crates/openvj-core: `midi.rs` (parse 0xF8/0xFA/0xFB/0xFC), new `midi_clock.rs` (pulse timing to BPM and beat; unit-tested)
-- crates/openvj-app: `src/midi.rs` (stop ignoring clock messages), `src/app.rs` (tempo source, beat clock sync), `ui/main.slint` (CLOCK button), `ui/settings.slint` (clock input)
+- crates/openvj-app: `src/midi.rs` (stop ignoring clock messages), `src/app.rs` (tempo source, beat clock sync), `ui/main.slint` (CLOCK button)
 - Specs: tempo-sync
 - Shared hot spots: `src/app.rs`, `ui/main.slint`
 

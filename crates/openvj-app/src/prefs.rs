@@ -49,10 +49,25 @@ pub fn layout() -> i32 {
 
 /// Remembers the layout for next launch, keeping any other preferences in the file.
 pub fn set_layout(index: i32) {
+    let name = LAYOUTS.get(index.max(0) as usize).copied().unwrap_or(LAYOUTS[0]);
+    set("layout", name.into());
+}
+
+/// An on/off preference, off when it was never set.
+pub fn flag(key: &str) -> bool {
+    read().get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Remembers an on/off preference for next launch.
+pub fn set_flag(key: &str, on: bool) {
+    set(key, on.into());
+}
+
+/// Sets one preference, keeping the others in the file.
+fn set(key: &str, value: serde_json::Value) {
     let Some(path) = prefs_file() else { return };
     let mut prefs = read();
-    let name = LAYOUTS.get(index.max(0) as usize).copied().unwrap_or(LAYOUTS[0]);
-    prefs.insert("layout".into(), name.into());
+    prefs.insert(key.into(), value);
     let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(prefs)).unwrap_or_default();
     let result = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, bytes));
     if let Err(e) = result {
