@@ -5,7 +5,7 @@
 //! included. Every `.fs` file with an `inputImage` input is an effect; the others are ISF
 //! generators, which play as clips. [`Scanner`] remembers each file's size and modification time so a rescan only
 //! re-reads what changed, and [`watch`] rescans about once a second and swaps the
-//! [library](crate::library) when something changed.
+//! [effect library](crate::library()) when something changed.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -223,7 +223,7 @@ fn load(path: &Path, stamp: Stamp, check: Check) -> Loaded {
 }
 
 /// Watches `dirs` on a background thread: scans them right away, then about once a second,
-/// and replaces the [library](crate::library) whenever an effect file was added, changed
+/// and replaces the [effect library](crate::library()) whenever an effect file was added, changed
 /// or removed. Creates the openVJ effects folder if it's missing.
 pub fn watch(dirs: Vec<PathBuf>, check: Check) {
     if let Some(user) = user_dir()

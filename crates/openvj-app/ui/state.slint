@@ -105,3 +105,35 @@ export struct BrowserItem {
     kind: string,
     armed: bool,
 }
+
+// One item in the library grid (ui/library.slint).
+export struct LibTile {
+    name: string,
+    detail: string,
+    // GEN, FX, MD or PRE.
+    kind: string,
+    thumb: image,
+    has-thumb: bool,
+    // 0 to 5, or -1 when unset.
+    intensity: int,
+    favorite: bool,
+    reactive: bool,
+    selected: bool,
+    armed: bool,
+    unwanted: bool,
+}
+
+// A view chip above the library grid: My library, Favorites, a crate…
+export struct LibChip {
+    label: string,
+    count: string,
+    active: bool,
+}
+
+// A row of the expanded library's sidebar: a heading or a filter with its count.
+export struct LibSideRow {
+    label: string,
+    count: string,
+    active: bool,
+    heading: bool,
+}

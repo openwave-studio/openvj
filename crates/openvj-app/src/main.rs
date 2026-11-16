@@ -2,6 +2,7 @@
 
 mod app;
 mod browser;
+mod library;
 mod link;
 mod mapping;
 mod midi;
@@ -201,8 +202,6 @@ fn main() -> Result<()> {
     on!(on_new_comp, |a| a.new_composition());
     on!(on_clear_mapping, |a| a.clear_mapping());
     on!(on_toggle_test_card, |a| a.toggle_test_card());
-    on!(on_generator_clicked, |a, i: i32| a.generator_clicked(i as usize));
-    on!(on_generator_double_clicked, |a, i: i32| a.generator_double_clicked(i as usize));
     on!(on_input_clicked, |a, i: i32| a.input_clicked(i as usize));
     on!(on_input_double_clicked, |a, i: i32| a.input_double_clicked(i as usize));
     on!(on_refresh_inputs, |a| a.refresh_inputs());
@@ -213,8 +212,52 @@ fn main() -> Result<()> {
     on!(on_param_mod, |a, s: i32, o: i32, i: i32, m: i32| a.param_mod(s, o, i as usize, m.max(0) as usize));
     on!(on_param_mod_amount, |a, s: i32, o: i32, i: i32, v: f32| a.param_mod_amount(s, o, i as usize, v));
     on!(on_param_mod_rate, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_rate(s, o, i as usize, r.max(0) as usize));
-    on!(on_effect_add, |a, s: i32, k: i32| a.effect_add(s, k.max(0) as usize));
     on!(on_open_effects_folder, |a| a.open_effects_folder());
+
+    // The library grid (ui/library.slint).
+    {
+        let g = ui.global::<Lib>();
+        macro_rules! lib {
+            ($setter:ident, |$app:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+                let (app, w, o) = (app.clone(), w.clone(), o.clone());
+                g.$setter(move |$($arg: $ty),*| with_app(&app, &w, &o, |$app| $body));
+            }};
+        }
+        lib!(on_tile_clicked, |a, i: i32| a.lib_tile_clicked(i));
+        lib!(on_tile_double_clicked, |a, i: i32| a.lib_tile_double_clicked(i));
+        lib!(on_chip_clicked, |a, i: i32| a.lib_chip_clicked(i));
+        lib!(on_rows_shown, |a, first: i32, last: i32| a.lib_rows_shown(first, last));
+        lib!(on_set_intensity, |a, n: i32| a.lib_set_intensity(n));
+        lib!(on_toggle_favorite, |a| a.lib_toggle_favorite());
+        lib!(on_set_kept, |a, kept: bool| a.lib_set_kept(kept));
+        lib!(on_set_unwanted, |a, unwanted: bool| a.lib_set_unwanted(unwanted));
+        lib!(on_place, |a| a.lib_place());
+        lib!(on_effect_add, |a, to: i32| a.lib_effect_add(to));
+        lib!(on_use_preview_thumbnail, |a| a.lib_use_preview_thumbnail());
+        lib!(on_done, |a| a.library_done());
+        lib!(on_toggle_expanded, |a| a.lib_toggle_expanded());
+        lib!(on_side_clicked, |a, i: i32| a.lib_side_clicked(i));
+        lib!(on_add_tag, |a, t: slint::SharedString| a.lib_add_tag(&t));
+        lib!(on_remove_tag, |a, i: i32| a.lib_remove_tag(i));
+        lib!(on_add_to_crate, |a, t: slint::SharedString| a.lib_add_to_crate(&t));
+        lib!(on_remove_from_crate, |a, i: i32| a.lib_remove_from_crate(i));
+        lib!(on_add_to_playlist, |a| a.lib_add_to_playlist());
+        let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
+        g.on_key(move |text| {
+            let mut handled = false;
+            with_app(&app2, &w2, &o2, |a| handled = a.lib_key(&text));
+            handled
+        });
+        let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
+        g.on_filters_changed(move || {
+            let Some(ui) = w2.upgrade() else { return };
+            let g = ui.global::<Lib>();
+            let (search, kind, intensity, reactive) =
+                (g.get_search(), g.get_kind(), g.get_intensity(), g.get_reactive());
+            let tab = ui.get_browser_tab();
+            with_app(&app2, &w2, &o2, |a| a.lib_filters_changed(&search, kind, intensity, reactive, tab));
+        });
+    }
 
     // Import from Shadertoy (ui/shadertoy.slint).
     {
@@ -257,8 +300,6 @@ fn main() -> Result<()> {
         });
     }
 
-    on!(on_milk_clicked, |a, i: i32| a.milk_clicked(i.max(0) as usize));
-    on!(on_milk_double_clicked, |a, i: i32| a.milk_double_clicked(i.max(0) as usize));
     on!(on_open_milk_folder, |a| a.open_milk_folder());
     on!(on_effect_toggle, |a, s: i32, i: i32| a.effect_toggle(s, i.max(0) as usize));
     on!(on_effect_remove, |a, s: i32, i: i32| a.effect_remove(s, i.max(0) as usize));
@@ -607,5 +648,6 @@ fn main() -> Result<()> {
     ui.show()?;
     ui.invoke_focus_keys();
     slint::run_event_loop()?;
+    app.borrow_mut().library.save_now();
     Ok(())
 }

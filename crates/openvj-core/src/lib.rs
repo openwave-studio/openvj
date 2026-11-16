@@ -8,6 +8,7 @@ mod effect;
 pub mod effect_folders;
 mod generator;
 pub mod isf;
+pub mod library;
 mod macros;
 mod midi;
 pub mod milkdrop;
