@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::effect::{EffectLibrary, EffectType};
 use crate::isf::EffectDef;
 use crate::milkdrop::{MilkLibrary, MilkPreset};
-use crate::{ClipSource, Composition, GeneratorKind};
+use crate::{ClipSource, Composition, GeneratorKind, Preset};
 
 /// File name of the library in openVJ's settings folder.
 pub const LIBRARY_FILE: &str = "library.json";
@@ -37,6 +37,15 @@ pub const SHADERTOY_PACK: &str = "Shadertoy";
 
 /// Pack name of MilkDrop presets at the top of a MilkDrop folder.
 pub const MILKDROP_PACK: &str = "MilkDrop";
+
+/// Pack name of saved presets.
+pub const PRESETS_PACK: &str = "Presets";
+
+/// File extension of a saved preset.
+pub const PRESET_EXTENSION: &str = "ovjpreset";
+
+/// Version written to [`PresetFile::version`].
+pub const PRESET_VERSION: u32 = 1;
 
 /// Largest number of bundled generators the first-launch starter set keeps.
 pub const STARTER_GENERATORS: usize = 30;
@@ -117,7 +126,7 @@ pub fn milk_id(preset_id: &str) -> String {
     format!("milk:{preset_id}")
 }
 
-/// Id of a saved preset, by its file name (`preset:Tunnel peak.ovjpreset`).
+/// Id of a saved preset, by its path inside the presets folder (`preset:Tunnel peak.ovjpreset`).
 pub fn preset_id(file_name: &str) -> String {
     format!("preset:{file_name}")
 }
@@ -612,6 +621,142 @@ pub fn milk_item(p: &MilkPreset) -> Item {
     }
 }
 
+/// The presets folder: `~/Documents/openVJ/Presets`, next to the Effects folder.
+pub fn presets_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join("Documents").join("openVJ").join("Presets"))
+}
+
+/// A saved preset on disk: the Player's [`Preset`] (a source with its parameter values,
+/// mappings, transform and effects) with a format version, like composition files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresetFile {
+    pub version: u32,
+    #[serde(flatten)]
+    pub preset: Preset,
+}
+
+/// Reads a `.ovjpreset` file.
+pub fn load_preset(path: &Path) -> Result<Preset, String> {
+    let json = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file: PresetFile = serde_json::from_str(&json).map_err(|e| format!("{}: {e}", path.display()))?;
+    if file.version > PRESET_VERSION {
+        return Err(format!("{}: saved by a newer openVJ (version {})", path.display(), file.version));
+    }
+    Ok(file.preset)
+}
+
+/// Saves a preset as a new file in `dir`, named after the preset (`Tunnel.ovjpreset`,
+/// then `Tunnel 2.ovjpreset`…), and returns its path. Never overwrites a file: saving a
+/// preset always makes a new one, and the item it came from stays as it was.
+pub fn save_new_preset(dir: &Path, preset: &Preset) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let base = file_safe(preset.name());
+    let json = serde_json::to_string_pretty(&PresetFile { version: PRESET_VERSION, preset: preset.clone() })
+        .map_err(std::io::Error::other)?;
+    for n in 1u32.. {
+        let name = if n == 1 { format!("{base}.{PRESET_EXTENSION}") } else { format!("{base} {n}.{PRESET_EXTENSION}") };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                use std::io::Write;
+                f.write_all(json.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("some file name is free")
+}
+
+/// Rewrites an existing preset file (the VJ edited the preset itself, not its source).
+pub fn overwrite_preset(path: &Path, preset: &Preset) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(&PresetFile { version: PRESET_VERSION, preset: preset.clone() })
+        .map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("ovjpreset.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// A name usable as a file name on every system.
+fn file_safe(name: &str) -> String {
+    let s: String =
+        name.chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect();
+    let s = s.trim().trim_start_matches('.').trim();
+    if s.is_empty() { "Preset".into() } else { s.chars().take(100).collect() }
+}
+
+/// Every `.ovjpreset` file in `dir` (subfolders included) as library items. Files that
+/// don't read are reported and skipped.
+pub fn scan_presets(dir: &Path, effects: &EffectLibrary) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut stack = vec![(dir.to_path_buf(), 0)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if depth < 8 {
+                    stack.push((path, depth + 1));
+                }
+            } else if path.extension().is_some_and(|x| x.eq_ignore_ascii_case(PRESET_EXTENSION)) {
+                match load_preset(&path) {
+                    Ok(p) => out.push(preset_item(dir, &path, &p, effects)),
+                    Err(e) => eprintln!("openVJ: preset skipped: {e}"),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A saved preset as a library item. Its id is its path inside the presets folder.
+pub fn preset_item(dir: &Path, path: &Path, preset: &Preset, effects: &EffectLibrary) -> Item {
+    let rel = path.strip_prefix(dir).unwrap_or(path);
+    let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+    let clip = &preset.clip;
+    let source_reactive = match &clip.source {
+        ClipSource::Isf { generator } => effects.generator(&generator.kind).is_some_and(|t| isf_audio_reactive(&t.def)),
+        ClipSource::Generator { .. } | ClipSource::Milkdrop { .. } => true,
+        _ => false,
+    };
+    let mapped = clip.mods.iter().any(|m| m.is_active())
+        || clip
+            .effects
+            .iter()
+            .chain(match &clip.source {
+                ClipSource::Isf { generator } => Some(generator),
+                _ => None,
+            })
+            .flat_map(|fx| fx.params.values())
+            .any(|p| p.modulation.is_active());
+    let source_name = match &clip.source {
+        ClipSource::Isf { generator } => effects.generator(&generator.kind).map(|t| t.name().to_owned()),
+        other => Some(other.default_name()),
+    };
+    Item {
+        id: preset_id(&rel),
+        kind: Kind::Preset,
+        name: path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| preset.name().to_owned()),
+        pack: PRESETS_PACK.to_owned(),
+        description: source_name.map(|n| format!("Preset of {n}")).unwrap_or_default(),
+        credit: String::new(),
+        categories: Vec::new(),
+        audio_reactive: source_reactive || mapped,
+        bundled: false,
+        path: Some(path.to_path_buf()),
+    }
+}
+
 /// openVJ's own audio and tempo uniforms.
 const AUDIO_UNIFORMS: &[&str] =
     &["AUDIO", "AUDIO_HITS", "AUDIO_PRESENCE", "AUDIO_TIME", "AUDIO_ALL", "BEAT_EVENTS", "BEAT", "BPM"];
@@ -992,5 +1137,40 @@ mod tests {
             .filter(|i| i.pack == "Ghost Arcade" && i.kind == Kind::Generator && library.status(&i.id) == Status::Kept)
             .count();
         assert!((5..=STARTER_GENERATORS).contains(&kept_gens), "kept {kept_gens}");
+    }
+    #[test]
+    fn presets_save_as_new_files_and_list_as_kept_items() {
+        let dir = std::env::temp_dir().join(format!("openvj-presets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut comp = Composition::new(16, 9, 1, 1);
+        comp.set_clip(0, 0, ClipSource::Generator { kind: GeneratorKind::Tunnel });
+        let mut clip = comp.clip(0, 0).cloned().unwrap();
+        clip.name = "Tunnel: peak/drop".into();
+        clip.params[0] = 0.9;
+        let preset = Preset::new(clip);
+
+        let a = save_new_preset(&dir, &preset).expect("saves");
+        let b = save_new_preset(&dir, &preset).expect("saves again");
+        assert_eq!(a.file_name().unwrap(), "Tunnel- peak-drop.ovjpreset");
+        assert_eq!(b.file_name().unwrap(), "Tunnel- peak-drop 2.ovjpreset");
+        assert_eq!(load_preset(&a).expect("loads"), preset);
+        assert!(std::fs::read_to_string(&a).unwrap().contains("\"version\": 1"));
+
+        let mut items = scan_presets(&dir, &EffectLibrary::builtin());
+        items.sort_by(|x, y| x.id.cmp(&y.id));
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "preset:Tunnel- peak-drop 2.ovjpreset");
+        assert_eq!((items[0].kind, items[0].audio_reactive), (Kind::Preset, true));
+        assert_eq!(items[1].description, "Preset of Tunnel");
+        let lib = Library::new(items, LibraryFile::default());
+        assert_eq!(lib.query(&Filter::default()).len(), 2, "saved presets are in My library");
+
+        let mut edited = preset.clone();
+        edited.clip.params[0] = 0.1;
+        overwrite_preset(&a, &edited).expect("overwrites");
+        assert_eq!(load_preset(&a).unwrap(), edited);
+        std::fs::write(&b, r#"{"version": 7, "clip": {}}"#).unwrap();
+        assert!(load_preset(&b).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
