@@ -2,6 +2,7 @@
 
 mod app;
 mod browser;
+mod discover;
 mod library;
 mod link;
 mod mapping;
@@ -153,7 +154,6 @@ fn main() -> Result<()> {
     let out = OutputWindow::new()?;
     // Open in the layout used last time (Mixer the first time).
     ui.set_layout(prefs::layout());
-    ui.on_layout_changed(prefs::set_layout);
     {
         let mut a = app.borrow_mut();
         a.attach(&ui);
@@ -168,6 +168,7 @@ fn main() -> Result<()> {
             a.cell_right_clicked(0, 0);
             a.status_message("Demo loaded. Click a clip to launch it, or a column header to launch the whole column.");
         }
+        a.layout_changed(ui.get_layout());
         a.sync(&ui, &out);
     }
 
@@ -180,6 +181,8 @@ fn main() -> Result<()> {
     }
 
     on!(on_cell_clicked, |a, l: i32, c: i32| a.cell_clicked(l as usize, c as usize));
+    on!(on_cell_pressed, |a, l: i32, c: i32| a.cell_pressed(l as usize, c as usize));
+    on!(on_cell_released, |a, l: i32, c: i32| a.cell_released(l as usize, c as usize));
     on!(on_cell_right_clicked, |a, l: i32, c: i32| a.cell_right_clicked(l as usize, c as usize));
     on!(on_column_clicked, |a, c: i32| a.column_clicked(c as usize));
     on!(on_layer_selected, |a, l: i32| a.select_layer(l));
@@ -211,7 +214,7 @@ fn main() -> Result<()> {
     on!(on_param_set, |a, s: i32, o: i32, i: i32, v: f32| a.param_set(s, o, i as usize, v));
     on!(on_param_mod, |a, s: i32, o: i32, i: i32, m: i32| a.param_mod(s, o, i as usize, m.max(0) as usize));
     on!(on_param_mod_amount, |a, s: i32, o: i32, i: i32, v: f32| a.param_mod_amount(s, o, i as usize, v));
-    on!(on_param_mod_rate, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_rate(s, o, i as usize, r.max(0) as usize));
+    on!(on_param_mod_tempo, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_tempo(s, o, i as usize, r));
     on!(on_open_effects_folder, |a| a.open_effects_folder());
 
     // The library grid (ui/library.slint).
@@ -256,6 +259,42 @@ fn main() -> Result<()> {
                 (g.get_search(), g.get_kind(), g.get_intensity(), g.get_reactive());
             let tab = ui.get_browser_tab();
             with_app(&app2, &w2, &o2, |a| a.lib_filters_changed(&search, kind, intensity, reactive, tab));
+        });
+    }
+
+    on!(on_layout_changed, |a, i: i32| {
+        prefs::set_layout(i);
+        a.layout_changed(i);
+    });
+
+    // The Discover layout (ui/discover.slint).
+    {
+        let g = ui.global::<Disc>();
+        macro_rules! disc {
+            ($setter:ident, |$app:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+                let (app, w, o) = (app.clone(), w.clone(), o.clone());
+                g.$setter(move |$($arg: $ty),*| with_app(&app, &w, &o, |$app| $body));
+            }};
+        }
+        disc!(on_pack_clicked, |a, i: i32| a.disc_pack_clicked(i));
+        disc!(on_order_picked, |a, i: i32| a.disc_order_picked(i));
+        disc!(on_param_set, |a, i: i32, v: f32| a.disc_param_set(i, v));
+        disc!(on_lock_toggled, |a, i: i32| a.disc_lock_toggled(i));
+        disc!(on_randomize, |a| a.disc_randomize());
+        disc!(on_undo, |a| a.disc_undo());
+        disc!(on_reset, |a| a.disc_reset());
+        disc!(on_set_intensity, |a, n: i32| a.disc_set_intensity(n));
+        disc!(on_add_tag, |a, t: slint::SharedString| a.disc_add_tag(&t));
+        disc!(on_remove_tag, |a, i: i32| a.disc_remove_tag(i));
+        disc!(on_crate_clicked, |a, i: i32| a.disc_crate_clicked(i));
+        disc!(on_add_crate, |a, t: slint::SharedString| a.disc_add_crate(&t));
+        disc!(on_decide, |a, i: i32| a.disc_decide(i));
+        disc!(on_jump, |a, i: i32| a.disc_jump(i));
+        let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
+        g.on_key(move |text| {
+            let mut handled = false;
+            with_app(&app2, &w2, &o2, |a| handled = a.disc_key(&text));
+            handled
         });
     }
 
@@ -316,6 +355,9 @@ fn main() -> Result<()> {
     on!(on_clip_restart, |a| a.clip_restart());
     on!(on_layer_renamed, |a, t: slint::SharedString| a.layer_renamed(&t));
     on!(on_clip_play_mode_picked, |a, i: i32| a.clip_play_mode(i.max(0) as usize));
+    on!(on_clip_autopilot_picked, |a, i: i32| a.clip_autopilot(i.max(0) as usize));
+    on!(on_clip_router_input_picked, |a, i: i32| a.clip_router_input(i.max(0) as usize));
+    on!(on_clip_trigger_picked, |a, i: i32| a.clip_trigger(i.max(0) as usize));
     on!(on_clip_synced_picked, |a, b: bool| a.clip_synced(b));
     on!(on_layer_side_picked, |a, i: i32| a.layer_side(i.max(0) as usize));
     on!(on_layer_group_picked, |a, i: i32| a.layer_group(i.max(0) as usize));

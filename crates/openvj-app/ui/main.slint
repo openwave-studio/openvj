@@ -7,10 +7,11 @@ import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
 import { Layouts, LayoutPicker, PlayerLayout, PresetRow } from "layouts.slint";
+import { Disc, DiscoverLayout, DiscParam } from "discover.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 import { SynthesisLayout, SynthLayer } from "synthesis.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
-export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib }
+export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam }
 
 export { Theme, Scope, ModNames, AudioLevels, Shadertoy }
 
@@ -18,6 +19,8 @@ component ClipCell inherits Rectangle {
     in property <CellData> data;
     in property <bool> armed;
     callback clicked();
+    callback pressed();
+    callback released();
     callback right-clicked();
 
     width: Theme.cell-w;
@@ -122,6 +125,13 @@ component ClipCell inherits Rectangle {
         pointer-event(e) => {
             if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
                 root.right-clicked();
+            }
+            // Piano clips play while the button is held.
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                root.pressed();
+            }
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                root.released();
             }
         }
     }
@@ -361,6 +371,8 @@ component ClipGrid inherits Rectangle {
     in property <bool> armed;
     in property <float> master;
     callback cell-clicked(int, int);
+    callback cell-pressed(int, int);
+    callback cell-released(int, int);
     callback cell-right-clicked(int, int);
     callback column-clicked(int);
     callback layer-selected(int);
@@ -474,6 +486,8 @@ component ClipGrid inherits Rectangle {
                     data: cell;
                     armed: root.armed;
                     clicked => { root.cell-clicked(layer.index, c); }
+                    pressed => { root.cell-pressed(layer.index, c); }
+                    released => { root.cell-released(layer.index, c); }
                     right-clicked => { root.cell-right-clicked(layer.index, c); }
                 }
             }
@@ -942,14 +956,8 @@ component Browser inherits Rectangle {
                     text: "INPUTS";
                     vertical-alignment: center;
                 }
-                if root.inputs.length == 0: Text {
-                    horizontal-stretch: 1;
-                    text: root.inputs-hint;
-                    color: Theme.text-faint;
-                    font-size: Theme.font-small;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
+                // The first input is always the Layer Router; the hint shows when there are
+                // no cameras or Syphon servers besides it.
                 for item[i] in root.inputs: FlatButton {
                     max-width: 140px;
                     text: item.name;
@@ -957,7 +965,15 @@ component Browser inherits Rectangle {
                     tint: Theme.kind-color(item.kind);
                     clicked => { root.input-clicked(i); }
                 }
-                if root.inputs.length > 0: Rectangle {
+                if root.inputs.length <= 1: Text {
+                    horizontal-stretch: 1;
+                    text: root.inputs-hint;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-small;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                if root.inputs.length > 1: Rectangle {
                     horizontal-stretch: 1;
                 }
                 FlatButton {
@@ -1195,6 +1211,12 @@ export component MainWindow inherits Window {
     in property <float> live-crossfader;
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
+    in property <[string]> autopilot-modes;
+    in property <[string]> router-inputs;
+    in property <int> clip-router-input: -1;
+    in property <int> clip-autopilot;
+    in property <[string]> trigger-styles;
+    in property <int> clip-trigger;
     in property <bool> clip-synced;
     in property <bool> clip-valid;
     in property <string> clip-title;
@@ -1206,6 +1228,8 @@ export component MainWindow inherits Window {
     in property <[ParamData]> clip-params;
 
     callback cell-clicked(int, int);
+    callback cell-pressed(int, int);
+    callback cell-released(int, int);
     callback cell-right-clicked(int, int);
     callback column-clicked(int);
     callback layer-selected(int);
@@ -1252,7 +1276,7 @@ export component MainWindow inherits Window {
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
     callback param-mod-amount(int, int, int, float);
-    callback param-mod-rate(int, int, int, int);
+    callback param-mod-tempo(int, int, int, int);
     callback open-effects-folder();
     callback open-milk-folder();
     callback effect-toggle(int, int);
@@ -1264,6 +1288,9 @@ export component MainWindow inherits Window {
     callback clip-restart();
     callback layer-renamed(string);
     callback clip-play-mode-picked(int);
+    callback clip-autopilot-picked(int);
+    callback clip-router-input-picked(int);
+    callback clip-trigger-picked(int);
     callback clip-synced-picked(bool);
     callback layer-side-picked(int);
     callback layer-group-picked(int);
@@ -1347,8 +1374,11 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
-            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "1" || e.text == "2" || e.text == "3")) {
-                root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : 2);
+            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "1" || e.text == "2" || e.text == "3" || e.text == "4")) {
+                root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : e.text == "3" ? 2 : 3);
+                return accept;
+            }
+            if (root.layout == Layouts.discover && !root.settings-open && !e.modifiers.control && !e.modifiers.meta && Disc.key(e.text)) {
                 return accept;
             }
             if (e.text == Key.Tab && root.layout == Layouts.mixer && !root.settings-open) {
@@ -1449,10 +1479,14 @@ export component MainWindow inherits Window {
                 focus-layer(l) => { root.synth-focus(l); keys.focus(); }
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
-                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
                 macro-toggle(m, s, o, i) => { root.macro-toggle(m, s, o, i); }
                 macro-clear(m) => { root.macro-clear(m); }
                 add-to-playlist => { root.clip-to-playlist(); }
+            }
+
+            if root.layout == Layouts.discover: DiscoverLayout {
+                vertical-stretch: 1;
+                preview-image: root.preview-image;
             }
 
             // Mixer: clip grid, with the monitors on the right.
@@ -1477,6 +1511,8 @@ export component MainWindow inherits Window {
                     blend-modes: root.blend-modes;
                     armed: root.armed;
                     cell-clicked(l, c) => { root.cell-clicked(l, c); keys.focus(); }
+                    cell-pressed(l, c) => { root.cell-pressed(l, c); }
+                    cell-released(l, c) => { root.cell-released(l, c); }
                     cell-right-clicked(l, c) => { root.cell-right-clicked(l, c); keys.focus(); }
                     column-clicked(c) => { root.column-clicked(c); keys.focus(); }
                     layer-selected(l) => { root.layer-selected(l); keys.focus(); }
@@ -1590,6 +1626,12 @@ export component MainWindow inherits Window {
                     crossfade-curve: root.crossfade-curve;
                     play-modes: root.play-modes;
                     clip-play-mode: root.clip-play-mode;
+                    autopilot-modes: root.autopilot-modes;
+                    router-inputs: root.router-inputs;
+                    clip-router-input: root.clip-router-input;
+                    clip-autopilot: root.clip-autopilot;
+                    trigger-styles: root.trigger-styles;
+                    clip-trigger: root.clip-trigger;
                     clip-synced: root.clip-synced;
                     clip-valid: root.clip-valid;
                     clip-title: root.clip-title;
@@ -1602,7 +1644,7 @@ export component MainWindow inherits Window {
                     param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                     param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                     param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                    param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                    param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                     effect-toggle(s, i) => { root.effect-toggle(s, i); }
                     effect-remove(s, i) => { root.effect-remove(s, i); }
                     effect-move(s, i, d) => { root.effect-move(s, i, d); }
@@ -1621,6 +1663,9 @@ export component MainWindow inherits Window {
                     clip-to-playlist => { root.clip-to-playlist(); }
                     clip-restart => { root.clip-restart(); }
                     clip-play-mode-picked(i) => { root.clip-play-mode-picked(i); }
+                    clip-autopilot-picked(i) => { root.clip-autopilot-picked(i); }
+                    clip-router-input-picked(i) => { root.clip-router-input-picked(i); }
+                    clip-trigger-picked(i) => { root.clip-trigger-picked(i); }
                     clip-synced-picked(b) => { root.clip-synced-picked(b); }
                     layer-side-picked(i) => { root.layer-side-picked(i); }
                     layer-group-picked(i) => { root.layer-group-picked(i); }

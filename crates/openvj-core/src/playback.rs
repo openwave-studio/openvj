@@ -57,6 +57,110 @@ impl PlayMode {
     }
 }
 
+/// What a clip launches when it finishes a pass, like Resolume's clip Autopilot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Autopilot {
+    #[default]
+    Off,
+    /// The next clip in the layer, wrapping round to the first.
+    Next,
+    /// The previous clip in the layer, wrapping round to the last.
+    Previous,
+    /// Another clip in the layer, picked at random.
+    Random,
+    /// The layer's first clip.
+    First,
+    /// The layer's last clip.
+    Last,
+}
+
+impl Autopilot {
+    pub const ALL: [Autopilot; 6] =
+        [Autopilot::Off, Autopilot::Next, Autopilot::Previous, Autopilot::Random, Autopilot::First, Autopilot::Last];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Autopilot::Off => "Off",
+            Autopilot::Next => "Next clip",
+            Autopilot::Previous => "Previous clip",
+            Autopilot::Random => "Random clip",
+            Autopilot::First => "First clip",
+            Autopilot::Last => "Last clip",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|m| *m == self).unwrap()
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL.get(i).copied().unwrap_or_default()
+    }
+
+    /// The column to launch after the clip in column `current` ends, among the columns in
+    /// `filled` (ascending). `pick` (0..1) chooses the random clip.
+    pub fn target(self, current: usize, filled: &[usize], pick: f64) -> Option<usize> {
+        let pos = filled.iter().position(|&c| c == current);
+        let n = filled.len();
+        match self {
+            Autopilot::Off => None,
+            _ if n == 0 => None,
+            Autopilot::Next => Some(match pos {
+                Some(i) => filled[(i + 1) % n],
+                None => filled.iter().copied().find(|&c| c > current).unwrap_or(filled[0]),
+            }),
+            Autopilot::Previous => Some(match pos {
+                Some(i) => filled[(i + n - 1) % n],
+                None => filled.iter().rev().copied().find(|&c| c < current).unwrap_or(filled[n - 1]),
+            }),
+            Autopilot::Random => {
+                let others: Vec<usize> = filled.iter().copied().filter(|&c| c != current).collect();
+                if others.is_empty() {
+                    return Some(current);
+                }
+                Some(others[((pick * others.len() as f64) as usize).min(others.len() - 1)])
+            }
+            Autopilot::First => Some(filled[0]),
+            Autopilot::Last => Some(filled[n - 1]),
+        }
+    }
+}
+
+/// How launching a clip behaves, like Resolume's clip Trigger Style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerStyle {
+    /// Each launch starts the clip.
+    #[default]
+    Normal,
+    /// Launching the playing clip again clears its layer.
+    Toggle,
+    /// The clip plays while its note, key or mouse button is held; letting go clears the
+    /// layer. Note velocity sets its opacity.
+    Piano,
+}
+
+impl TriggerStyle {
+    pub const ALL: [TriggerStyle; 3] = [TriggerStyle::Normal, TriggerStyle::Toggle, TriggerStyle::Piano];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TriggerStyle::Normal => "Normal",
+            TriggerStyle::Toggle => "Toggle",
+            TriggerStyle::Piano => "Piano",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|m| *m == self).unwrap()
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL.get(i).copied().unwrap_or_default()
+    }
+}
+
 /// Where a clip is at a moment in time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClipTime {
@@ -95,7 +199,7 @@ pub(crate) fn position(mode: PlayMode, cycles: f64, beats: f64, len: f64, wrap: 
 }
 
 /// A stable pseudo-random number in 0..1 for (seed, n).
-fn random_unit(seed: u64, n: u64) -> f64 {
+pub(crate) fn random_unit(seed: u64, n: u64) -> f64 {
     // SplitMix64.
     let mut z = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ n.wrapping_add(0xD1B5_4A32_D192_ED03);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -154,6 +258,26 @@ mod tests {
     fn play_mode_indices_round_trip() {
         for m in PlayMode::ALL {
             assert_eq!(PlayMode::from_index(m.index()), m);
+        }
+    }
+
+    #[test]
+    fn autopilot_targets() {
+        let filled = [0, 1, 3];
+        assert_eq!(Autopilot::Next.target(1, &filled, 0.0), Some(3));
+        assert_eq!(Autopilot::Next.target(3, &filled, 0.0), Some(0));
+        assert_eq!(Autopilot::Previous.target(0, &filled, 0.0), Some(3));
+        assert_eq!(Autopilot::First.target(3, &filled, 0.0), Some(0));
+        assert_eq!(Autopilot::Last.target(0, &filled, 0.0), Some(3));
+        assert_eq!(Autopilot::Off.target(0, &filled, 0.0), None);
+        // Random never picks the clip that just ended while there's another.
+        for i in 0..10 {
+            let t = Autopilot::Random.target(1, &filled, i as f64 / 10.0).unwrap();
+            assert!(t == 0 || t == 3);
+        }
+        assert_eq!(Autopilot::Random.target(1, &[1], 0.5), Some(1));
+        for a in Autopilot::ALL {
+            assert_eq!(Autopilot::from_index(a.index()), a);
         }
     }
 }

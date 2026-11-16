@@ -20,7 +20,7 @@ component EffectCard inherits Rectangle {
     callback set(int, float);
     callback mod-source(int, int);
     callback mod-amount(int, float);
-    callback mod-rate(int, int);
+    callback mod-tempo(int, int);
 
     width: Theme.card-w;
     border-radius: Theme.radius;
@@ -74,7 +74,7 @@ component EffectCard inherits Rectangle {
             set(i, v) => { root.set(i, v); }
             mod-source(i, s) => { root.mod-source(i, s); }
             mod-amount(i, a) => { root.mod-amount(i, a); }
-            mod-rate(i, r) => { root.mod-rate(i, r); }
+            mod-tempo(i, r) => { root.mod-tempo(i, r); }
         }
     }
 }
@@ -90,7 +90,7 @@ component EffectChain inherits Rectangle {
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
     callback param-mod-amount(int, int, int, float);
-    callback param-mod-rate(int, int, int, int);
+    callback param-mod-tempo(int, int, int, int);
     callback effect-toggle(int, int);
     callback effect-remove(int, int);
     callback effect-move(int, int, int);
@@ -134,7 +134,7 @@ component EffectChain inherits Rectangle {
                     set(p, v) => { root.param-set(root.transform-scope, 0, p, v); }
                     mod-source(p, s) => { root.param-mod(root.transform-scope, 0, p, s); }
                     mod-amount(p, a) => { root.param-mod-amount(root.transform-scope, 0, p, a); }
-                    mod-rate(p, r) => { root.param-mod-rate(root.transform-scope, 0, p, r); }
+                    mod-tempo(p, r) => { root.param-mod-tempo(root.transform-scope, 0, p, r); }
                 }
                 if root.effects.length == 0: Text {
                     width: Theme.card-w;
@@ -153,7 +153,7 @@ component EffectChain inherits Rectangle {
                     set(p, v) => { root.param-set(root.scope, i, p, v); }
                     mod-source(p, s) => { root.param-mod(root.scope, i, p, s); }
                     mod-amount(p, a) => { root.param-mod-amount(root.scope, i, p, a); }
-                    mod-rate(p, r) => { root.param-mod-rate(root.scope, i, p, r); }
+                    mod-tempo(p, r) => { root.param-mod-tempo(root.scope, i, p, r); }
                 }
             }
         }
@@ -253,12 +253,19 @@ export component PropertiesPanel inherits Rectangle {
     in property <[EffectData]> clip-transform;
     in property <[string]> play-modes;
     in property <int> clip-play-mode;
+    in property <[string]> autopilot-modes;
+    // Layer Router clips: the inputs to choose from, and the current one (-1 for other clips).
+    in property <[string]> router-inputs;
+    in property <int> clip-router-input: -1;
+    in property <int> clip-autopilot;
+    in property <[string]> trigger-styles;
+    in property <int> clip-trigger;
     in property <bool> clip-synced;
 
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
     callback param-mod-amount(int, int, int, float);
-    callback param-mod-rate(int, int, int, int);
+    callback param-mod-tempo(int, int, int, int);
     callback effect-toggle(int, int);
     callback effect-remove(int, int);
     callback effect-move(int, int, int);
@@ -278,6 +285,9 @@ export component PropertiesPanel inherits Rectangle {
     callback clip-to-playlist();
     callback clip-restart();
     callback clip-play-mode-picked(int);
+    callback clip-autopilot-picked(int);
+    callback clip-router-input-picked(int);
+    callback clip-trigger-picked(int);
     callback clip-synced-picked(bool);
     callback layer-side-picked(int);
     callback layer-group-picked(int);
@@ -350,7 +360,7 @@ export component PropertiesPanel inherits Rectangle {
                         set(i, v) => { root.param-set(Scope.comp, 0, i, v); }
                         mod-source(i, s) => { root.param-mod(Scope.comp, 0, i, s); }
                         mod-amount(i, a) => { root.param-mod-amount(Scope.comp, 0, i, a); }
-                        mod-rate(i, r) => { root.param-mod-rate(Scope.comp, 0, i, r); }
+                        mod-tempo(i, r) => { root.param-mod-tempo(Scope.comp, 0, i, r); }
                     }
                     LabelledRow {
                         label: "Curve";
@@ -477,7 +487,7 @@ export component PropertiesPanel inherits Rectangle {
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                 param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                 effect-toggle(s, i) => { root.effect-toggle(s, i); }
                 effect-remove(s, i) => { root.effect-remove(s, i); }
                 effect-move(s, i, d) => { root.effect-move(s, i, d); }
@@ -510,7 +520,7 @@ export component PropertiesPanel inherits Rectangle {
                     set(i, v) => { root.param-set(Scope.layer, -1, i, v); }
                     mod-source(i, s) => { root.param-mod(Scope.layer, -1, i, s); }
                     mod-amount(i, a) => { root.param-mod-amount(Scope.layer, -1, i, a); }
-                    mod-rate(i, r) => { root.param-mod-rate(Scope.layer, -1, i, r); }
+                    mod-tempo(i, r) => { root.param-mod-tempo(Scope.layer, -1, i, r); }
                 }
                 HorizontalLayout {
                     spacing: 6px;
@@ -569,7 +579,7 @@ export component PropertiesPanel inherits Rectangle {
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                 param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                 effect-toggle(s, i) => { root.effect-toggle(s, i); }
                 effect-remove(s, i) => { root.effect-remove(s, i); }
                 effect-move(s, i, d) => { root.effect-move(s, i, d); }
@@ -617,6 +627,16 @@ export component PropertiesPanel inherits Rectangle {
                         clicked => { Shadertoy.open-link(root.clip-source-url); }
                     }
                 }
+                // Resolume's Layer Router: which layer, group or the composition this clip shows.
+                if root.clip-router-input >= 0: LabelledRow {
+                    label: "Input";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.router-inputs;
+                        current: root.clip-router-input;
+                        picked(i) => { root.clip-router-input-picked(i); }
+                    }
+                }
                 LabelledRow {
                     label: "Play mode";
                     BlendPicker {
@@ -624,6 +644,26 @@ export component PropertiesPanel inherits Rectangle {
                         modes: root.play-modes;
                         current: root.clip-play-mode;
                         picked(i) => { root.clip-play-mode-picked(i); }
+                    }
+                }
+                // Resolume's clip Autopilot: what to launch when this clip finishes a pass.
+                LabelledRow {
+                    label: "Autopilot";
+                    BlendPicker {
+                        height: 22px;
+                        modes: root.autopilot-modes;
+                        current: root.clip-autopilot;
+                        picked(i) => { root.clip-autopilot-picked(i); }
+                    }
+                }
+                // Resolume's Trigger Style: Piano plays only while the note or mouse is held.
+                LabelledRow {
+                    label: "Trigger";
+                    for name[i] in root.trigger-styles: FlatButton {
+                        height: 22px;
+                        text: name;
+                        active: root.clip-trigger == i;
+                        clicked => { root.clip-trigger-picked(i); }
                     }
                 }
                 LabelledRow {
@@ -672,7 +712,7 @@ export component PropertiesPanel inherits Rectangle {
                         set(i, v) => { root.param-set(Scope.clip, 0, i, v); }
                         mod-source(i, s) => { root.param-mod(Scope.clip, 0, i, s); }
                         mod-amount(i, a) => { root.param-mod-amount(Scope.clip, 0, i, a); }
-                        mod-rate(i, r) => { root.param-mod-rate(Scope.clip, 0, i, r); }
+                        mod-tempo(i, r) => { root.param-mod-tempo(Scope.clip, 0, i, r); }
                     }
                 }
             }
@@ -686,7 +726,7 @@ export component PropertiesPanel inherits Rectangle {
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                 param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                 effect-toggle(s, i) => { root.effect-toggle(s, i); }
                 effect-remove(s, i) => { root.effect-remove(s, i); }
                 effect-move(s, i, d) => { root.effect-move(s, i, d); }
@@ -718,7 +758,7 @@ export component PropertiesPanel inherits Rectangle {
                     set(i, v) => { root.param-set(Scope.group, -1, i, v); }
                     mod-source(i, s) => { root.param-mod(Scope.group, -1, i, s); }
                     mod-amount(i, a) => { root.param-mod-amount(Scope.group, -1, i, a); }
-                    mod-rate(i, r) => { root.param-mod-rate(Scope.group, -1, i, r); }
+                    mod-tempo(i, r) => { root.param-mod-tempo(Scope.group, -1, i, r); }
                 }
                 LabelledRow {
                     label: "Blend";
@@ -755,7 +795,7 @@ export component PropertiesPanel inherits Rectangle {
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                 param-mod-amount(s, o, i, a) => { root.param-mod-amount(s, o, i, a); }
-                param-mod-rate(s, o, i, r) => { root.param-mod-rate(s, o, i, r); }
+                param-mod-tempo(s, o, i, r) => { root.param-mod-tempo(s, o, i, r); }
                 effect-toggle(s, i) => { root.effect-toggle(s, i); }
                 effect-remove(s, i) => { root.effect-remove(s, i); }
                 effect-move(s, i, d) => { root.effect-move(s, i, d); }

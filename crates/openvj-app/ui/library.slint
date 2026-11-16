@@ -652,7 +652,7 @@ component SideRow inherits Rectangle {
 }
 
 /// A removable label (a tag or a crate) with an entry to add more.
-component LabelList inherits VerticalLayout {
+export component LabelList inherits VerticalLayout {
     in property <string> title;
     in property <[string]> items;
     in property <string> add-hint;
@@ -660,7 +660,7 @@ component LabelList inherits VerticalLayout {
     callback remove(int);
     spacing: 4px;
     vertical-stretch: 0;
-    Text {
+    if root.title != "": Text {
         text: root.title;
         color: Theme.text-dim;
         font-size: Theme.font-small;

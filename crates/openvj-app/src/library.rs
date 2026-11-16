@@ -87,7 +87,6 @@ impl AppLibrary {
     }
 
     /// Lists the presets folder again on the next [`AppLibrary::refresh`].
-    #[expect(dead_code, reason = "saving presets (Synthesis, Discover) calls it")]
     pub fn presets_changed(&mut self) {
         self.presets_dirty = true;
     }

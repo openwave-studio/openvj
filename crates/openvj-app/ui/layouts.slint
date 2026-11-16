@@ -6,11 +6,12 @@ import { ScrollView } from "std-widgets.slint";
 import { Chevron, FlatButton, BlendPicker } from "controls.slint";
 
 export global Layouts {
-    // Order matches the menu and Cmd/Ctrl+1, 2, 3.
-    out property <[string]> names: ["Mixer", "Player", "Synthesis"];
+    // Order matches the menu and Cmd/Ctrl+1, 2, 3, 4.
+    out property <[string]> names: ["Mixer", "Player", "Synthesis", "Discover"];
     out property <int> mixer: 0;
     out property <int> player: 1;
     out property <int> synthesis: 2;
+    out property <int> discover: 3;
 }
 
 /// Outline icon for a layout, in openDJ's style: a rounded frame with a hint of
@@ -26,11 +27,12 @@ export component LayoutIcon inherits Path {
     stroke-width: 1.6px;
     fill: transparent;
     // Mixer: a grid of clip cells. Player: a big picture with a playlist beside it.
-    // Synthesis: three faders.
+    // Synthesis: three faders. Discover: a magnifier over a row of thumbnails.
     commands: "M 3 1 L 21 1 Q 23 1 23 3 L 23 13 Q 23 15 21 15 L 3 15 Q 1 15 1 13 L 1 3 Q 1 1 3 1 Z "
         + (root.layout == 0 ? "M 5 5 L 8 5 M 10.5 5 L 13.5 5 M 16 5 L 19 5 M 5 11 L 8 11 M 10.5 11 L 13.5 11 M 16 11 L 19 11"
         : root.layout == 1 ? "M 5 4.5 L 11 4.5 L 11 11.5 L 5 11.5 Z M 14 5 L 19 5 M 14 8 L 19 8 M 14 11 L 17 11"
-        : "M 7 4 L 7 12 M 12 4 L 12 12 M 17 4 L 17 12 M 5.5 9 L 8.5 9 M 10.5 6 L 13.5 6 M 15.5 10 L 18.5 10");
+        : root.layout == 2 ? "M 7 4 L 7 12 M 12 4 L 12 12 M 17 4 L 17 12 M 5.5 9 L 8.5 9 M 10.5 6 L 13.5 6 M 15.5 10 L 18.5 10"
+        : "M 4 11 L 7 11 M 4 5 L 7 5 M 4 8 L 6 8 M 14 4 A 3.5 3.5 0 1 0 14 11 A 3.5 3.5 0 1 0 14 4 Z M 16.5 10 L 20 13.5");
 }
 
 component Check inherits Path {

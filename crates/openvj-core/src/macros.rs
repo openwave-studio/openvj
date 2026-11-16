@@ -157,8 +157,10 @@ mod tests {
     fn a_driver_animates_the_macro() {
         let mut clip = plasma();
         clip.macro_mut(1).unwrap().targets = vec![MacroTarget { param: ParamRef::Source(1), from: 0.0, to: 1.0 }];
-        clip.macros[1].value =
-            Param { value: 0.0, modulation: Modulation { source: ModSource::Sine, amount: 1.0, beats: 4.0 } };
+        clip.macros[1].value = Param {
+            value: 0.0,
+            modulation: Modulation { source: ModSource::Sine, amount: 1.0, beats: 4.0, ..Default::default() },
+        };
         let mut inputs = ModInputs::default();
         let mut seen = Vec::new();
         for beat in [0.0, 1.0, 2.0, 3.0] {

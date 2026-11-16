@@ -186,7 +186,7 @@ impl PlayerState {
         clip.id = ClipId(self.next_id);
         self.next_id += 1;
         let l = &mut self.comp.layers[layer];
-        l.active = Some(Playing { clip_id: clip.id, started_at: now, started_beat: beat });
+        l.active = Some(Playing::new(clip.id, now, beat));
         l.fade = None;
         l.clips[0] = Some(clip);
         self.showing[layer] = Some(preset);

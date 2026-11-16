@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::playback::position;
 use crate::{
-    ClipTime, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MidiMap, ModInputs, Modulation, PARAM_COUNT, PlayMode,
+    Autopilot, ClipTime, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MidiMap, ModInputs, Modulation, PARAM_COUNT,
+    PlayMode, TriggerStyle,
 };
 
 /// File extensions treated as still images.
@@ -108,6 +109,43 @@ pub enum ClipSource {
         #[serde(default)]
         server: String,
     },
+    /// Another layer's, a group's or the whole composition's picture, like Resolume's Layer
+    /// Router and Group Router. An input drawn later in the frame (above this clip's layer,
+    /// or the composition) shows its previous frame, which makes feedback.
+    Router {
+        input: RouterInput,
+    },
+}
+
+/// What a [`ClipSource::Router`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterInput {
+    /// A layer by index in [`Composition::layers`] (0 is the bottom one).
+    Layer(usize),
+    /// A layer group by index in [`Composition::groups`].
+    Group(usize),
+    /// The mix of all layers, after the composition's effects and before the master.
+    Composition,
+}
+
+impl RouterInput {
+    /// Every input a composition offers, in menu order: Composition, then groups, then
+    /// layers from the top down (as the grid shows them).
+    pub fn all(comp: &Composition) -> Vec<RouterInput> {
+        let mut all = vec![RouterInput::Composition];
+        all.extend((0..comp.groups.len()).map(RouterInput::Group));
+        all.extend((0..comp.layers.len()).rev().map(RouterInput::Layer));
+        all
+    }
+
+    pub fn label(self, comp: &Composition) -> String {
+        match self {
+            RouterInput::Composition => "Composition".into(),
+            RouterInput::Group(g) => comp.groups.get(g).map_or_else(|| format!("Group {}", g + 1), |g| g.name.clone()),
+            RouterInput::Layer(l) => comp.layers.get(l).map_or_else(|| format!("Layer {}", l + 1), |l| l.name.clone()),
+        }
+    }
 }
 
 impl ClipSource {
@@ -132,6 +170,7 @@ impl ClipSource {
             ClipSource::Video { .. } => "video",
             ClipSource::Camera { .. } => "camera",
             ClipSource::Syphon { .. } => "syphon",
+            ClipSource::Router { .. } => "router",
         }
     }
 
@@ -179,6 +218,7 @@ impl ClipSource {
                 path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into())
             }
             ClipSource::Camera { .. } | ClipSource::Syphon { .. } => self.live_name().unwrap_or_default(),
+            ClipSource::Router { .. } => "Layer Router".into(),
         }
     }
 }
@@ -238,6 +278,16 @@ pub struct Clip {
     /// Knobs that move several parameters at once (see [`crate::Macro`]). Empty until one is used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub macros: Vec<crate::Macro>,
+    /// What to launch when the clip finishes a pass.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub autopilot: Autopilot,
+    /// How launching the clip behaves.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub trigger: TriggerStyle,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 /// A fresh fixed Transform for a clip or layer.
@@ -282,6 +332,8 @@ impl Clip {
             transform: default_transform(),
             effects: Vec::new(),
             macros: Vec::new(),
+            autopilot: Autopilot::Off,
+            trigger: TriggerStyle::Normal,
         }
     }
 
@@ -291,20 +343,26 @@ impl Clip {
         match self.source {
             ClipSource::Video { .. } => self.media_secs.filter(|s| *s > 0.0),
             // Live inputs have no length; they just run.
-            ClipSource::Camera { .. } | ClipSource::Syphon { .. } => None,
+            ClipSource::Camera { .. } | ClipSource::Syphon { .. } | ClipSource::Router { .. } => None,
             _ => Some(self.duration.unwrap_or(DEFAULT_CLIP_SECS).max(0.01) as f64),
         }
+    }
+
+    /// Passes through the clip after playing for `secs` seconds, or `beats` beats (1.0 = one
+    /// full length), or `None` for a clip without a length (live inputs).
+    pub fn passes(&self, secs: f64, beats: f64) -> Option<f64> {
+        let len = self.length()?;
+        Some(match self.sync_beats {
+            Some(b) if b > 0.0 => beats / b as f64,
+            _ => secs * self.speed as f64 / len,
+        })
     }
 
     /// Where the clip is after playing for `secs` seconds, or `beats` beats.
     pub fn time_at(&self, secs: f64, beats: f64) -> ClipTime {
         let speed = self.speed as f64;
-        let Some(len) = self.length() else {
+        let (Some(len), Some(cycles)) = (self.length(), self.passes(secs, beats)) else {
             return ClipTime { secs: secs.max(0.0) * speed, ended: false };
-        };
-        let cycles = match self.sync_beats {
-            Some(b) if b > 0.0 => beats / b as f64,
-            _ => secs * speed / len,
         };
         let wrap = !self.source.is_generator();
         position(self.play_mode, cycles, beats, len, wrap, self.id.0)
@@ -443,9 +501,15 @@ pub struct Playing {
     pub started_at: f64,
     /// Beat (tempo clock) the clip was launched on, for beat-synced clips.
     pub started_beat: f64,
+    /// Opacity from the launch: a Piano clip's note velocity, otherwise 1.
+    pub gain: f32,
 }
 
 impl Playing {
+    pub fn new(clip_id: ClipId, started_at: f64, started_beat: f64) -> Self {
+        Self { clip_id, started_at, started_beat, gain: 1.0 }
+    }
+
     /// How far into `clip` this playback is at `now` / `beat`.
     pub fn time(&self, clip: &Clip, now: f64, beat: f64) -> ClipTime {
         clip.time_at(now - self.started_at, beat - self.started_beat)
@@ -502,6 +566,11 @@ pub struct LayerFrame<'a> {
     pub incoming: Option<(&'a Clip, f64)>,
     /// The clip being faded away from, with its local time in seconds.
     pub outgoing: Option<(&'a Clip, f64)>,
+    /// Beats the incoming and outgoing clips were launched on, for modulation that restarts
+    /// on launch.
+    pub launch_beats: (f64, f64),
+    /// Opacity of the incoming and outgoing clips from their launch (Piano velocity).
+    pub gains: (f32, f32),
     /// Crossfade position: 0 = all outgoing, 1 = all incoming.
     pub mix: f32,
 }
@@ -550,7 +619,11 @@ impl Layer {
     }
 
     fn launch(&mut self, clip_id: ClipId, now: f64, beat: f64) {
-        let next = Playing { clip_id, started_at: now, started_beat: beat };
+        self.launch_playing(Playing::new(clip_id, now, beat), now);
+    }
+
+    fn launch_playing(&mut self, next: Playing, now: f64) {
+        let clip_id = next.clip_id;
         let retrigger = self.active.is_some_and(|p| p.clip_id == clip_id);
         if self.transition_secs > 0.0 && !retrigger {
             self.fade = Some(Fade { from: self.active, started_at: now, duration: self.transition_secs as f64 });
@@ -578,16 +651,44 @@ impl Layer {
         if self.fade.is_some_and(|f| now - f.started_at >= f.duration) {
             self.fade = None;
         }
-        let ended = self.active.is_some_and(|p| {
+        if self.autopilot(now, beat) {
+            // Launched the next clip.
+        } else if self.active.is_some_and(|p| {
             self.clip_by_id(p.clip_id).is_some_and(|c| c.play_mode == PlayMode::OnceClear && p.time(c, now, beat).ended)
-        });
-        if ended {
+        }) {
             self.clear(now);
         }
         if !self.held.is_empty() {
             let live: Vec<ClipId> = self.live_ids().collect();
             self.held.retain(|c| live.contains(&c.id));
         }
+    }
+
+    /// Launches the playing clip's Autopilot target once it has finished a pass. Returns
+    /// whether it launched one.
+    fn autopilot(&mut self, now: f64, beat: f64) -> bool {
+        let Some(p) = self.active else { return false };
+        let Some(clip) = self.clips.iter().flatten().find(|c| c.id == p.clip_id) else { return false };
+        if clip.autopilot == Autopilot::Off {
+            return false;
+        }
+        let Some(passes) = clip.passes(now - p.started_at, beat - p.started_beat) else { return false };
+        if passes < 1.0 {
+            return false;
+        }
+        let Some(current) = self.column_of(p.clip_id) else { return false };
+        let filled: Vec<usize> = (0..self.clips.len()).filter(|&c| self.clips[c].is_some()).collect();
+        let pick = crate::playback::random_unit(p.clip_id.0, (p.started_at * 1000.0) as u64);
+        let Some(col) = clip.autopilot.target(current, &filled, pick) else { return false };
+        // A beat-synced clip ends on an exact beat; start the next one there so the set stays
+        // on the grid.
+        let started_beat = match clip.sync_beats {
+            Some(b) if b > 0.0 => p.started_beat + b as f64,
+            _ => beat,
+        };
+        let Some(next) = self.clips[col].as_ref().map(|c| c.id) else { return false };
+        self.launch_playing(Playing { started_beat, ..Playing::new(next, now, beat) }, now);
+        true
     }
 
     fn local_time(&self, p: Playing, now: f64, beat: f64) -> Option<(&Clip, f64)> {
@@ -608,7 +709,12 @@ impl Layer {
         if incoming.is_none() && outgoing.is_none() {
             return None;
         }
-        Some(LayerFrame { incoming, outgoing, mix })
+        let launch_beats = (
+            self.active.map_or(0.0, |p| p.started_beat),
+            self.fade.and_then(|f| f.from).map_or(0.0, |p| p.started_beat),
+        );
+        let gains = (self.active.map_or(1.0, |p| p.gain), self.fade.and_then(|f| f.from).map_or(1.0, |p| p.gain));
+        Some(LayerFrame { incoming, outgoing, launch_beats, gains, mix })
     }
 }
 
@@ -757,11 +863,11 @@ impl Composition {
         // Show off modulation and effects: the plasma warps with the bass, the base layer
         // cycles its hue over four bars, and the top generator layer splits on the bass.
         use crate::{Effect, ModSource};
-        let bass = Modulation { source: ModSource::Bass, amount: 0.6, beats: 1.0 };
+        let bass = Modulation { source: ModSource::Bass, amount: 0.6, beats: 1.0, ..Default::default() };
         comp.clip_mut(0, 0).expect("demo clip").mods[3] = bass;
         let mut color = Effect::new("color");
         color.params.get_mut("hue").expect("hue").modulation =
-            Modulation { source: ModSource::Saw, amount: 1.0, beats: 16.0 };
+            Modulation { source: ModSource::Saw, amount: 1.0, beats: 16.0, ..Default::default() };
         comp.layers[0].effects.push(color);
         let mut split = Effect::new("rgb_split");
         let amount = split.params.get_mut("amount").expect("amount");
@@ -1044,11 +1150,34 @@ impl Composition {
         beat + crate::beats(now - secs, self.bpm)
     }
 
-    /// Launches the clip in a slot. Empty slots do nothing.
+    /// Launches the clip in a slot, following its trigger style. Empty slots do nothing.
     pub fn trigger(&mut self, layer: usize, col: usize, now: f64) {
+        self.trigger_velocity(layer, col, now, 1.0);
+    }
+
+    /// Like [`trigger`](Self::trigger), from a note with this velocity (0..1), which sets a
+    /// Piano clip's opacity.
+    pub fn trigger_velocity(&mut self, layer: usize, col: usize, now: f64, velocity: f32) {
         let beat = self.beat_at(now);
-        if let Some(id) = self.clip(layer, col).map(|c| c.id) {
-            self.layers[layer].launch(id, now, beat);
+        let Some((id, style)) = self.clip(layer, col).map(|c| (c.id, c.trigger)) else { return };
+        let l = &mut self.layers[layer];
+        let playing = l.active.is_some_and(|p| p.clip_id == id);
+        match style {
+            TriggerStyle::Toggle if playing => l.clear(now),
+            TriggerStyle::Piano => {
+                l.launch_playing(Playing { gain: velocity.clamp(0.0, 1.0), ..Playing::new(id, now, beat) }, now)
+            }
+            _ => l.launch(id, now, beat),
+        }
+    }
+
+    /// The note, key or mouse button that launched the clip in a slot was let go: a Piano
+    /// clip that is still playing clears its layer.
+    pub fn release(&mut self, layer: usize, col: usize, now: f64) {
+        let Some((id, style)) = self.clip(layer, col).map(|c| (c.id, c.trigger)) else { return };
+        let l = &mut self.layers[layer];
+        if style == TriggerStyle::Piano && l.active.is_some_and(|p| p.clip_id == id) {
+            l.clear(now);
         }
     }
 
@@ -1373,11 +1502,12 @@ mod tests {
         c.set_clip(0, 0, generator(GeneratorKind::Plasma));
         let clip = c.clip_mut(0, 0).unwrap();
         clip.params = [0.0; PARAM_COUNT];
-        clip.mods[2] = Modulation { source: ModSource::Treble, amount: 0.5, beats: 1.0 };
+        clip.mods[2] = Modulation { source: ModSource::Treble, amount: 0.5, beats: 1.0, ..Default::default() };
         let inputs = ModInputs { beat: 0.0, bands: [0.0, 0.0, 0.0, 1.0], ..Default::default() };
         assert_eq!(c.clip(0, 0).unwrap().param_values(&inputs), [0.0, 0.0, 0.5, 0.0]);
         c.layers[0].opacity = 0.2;
-        c.layers[0].opacity_mod = Modulation { source: ModSource::Treble, amount: -1.0, beats: 1.0 };
+        c.layers[0].opacity_mod =
+            Modulation { source: ModSource::Treble, amount: -1.0, beats: 1.0, ..Default::default() };
         assert_eq!(c.layers[0].opacity_value(&inputs), 0.0);
         assert_eq!(c.master_value(&inputs), 1.0);
     }
@@ -1643,5 +1773,103 @@ mod tests {
         assert_eq!(isf, ClipSource::Syphon { app: "ISFEditor".into(), server: "ISF Test App".into() });
         assert_eq!(isf.live_name().unwrap(), "ISFEditor - ISF Test App");
         assert_eq!(ClipSource::syphon_from_label("Synesthesia").live_name().unwrap(), "Synesthesia");
+    }
+
+    #[test]
+    fn autopilot_launches_the_next_clip_at_the_end_of_a_pass() {
+        let mut c = Composition::new(64, 64, 1, 4);
+        for col in [0, 1, 3] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().duration = Some(2.0);
+        }
+        c.clip_mut(0, 1).unwrap().autopilot = Autopilot::Next;
+        c.tick(0.0, 0.0);
+        c.trigger(0, 1, 0.0);
+        c.tick(1.9, 3.8);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+        c.tick(2.01, 4.02);
+        assert_eq!(c.layers[0].playing_column(), Some(3));
+        // Column 3 has no autopilot: it keeps looping.
+        c.tick(10.0, 20.0);
+        assert_eq!(c.layers[0].playing_column(), Some(3));
+    }
+
+    #[test]
+    fn autopilot_keeps_beat_synced_clips_on_the_grid() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().sync_beats = Some(4.0);
+        }
+        c.clip_mut(0, 0).unwrap().autopilot = Autopilot::Next;
+        c.tick(0.0, 0.0);
+        c.trigger(0, 0, 0.0);
+        c.tick(2.01, 4.02);
+        let p = c.layers[0].active.unwrap();
+        assert_eq!(c.layers[0].column_of(p.clip_id), Some(1));
+        assert_eq!(p.started_beat, 4.0);
+    }
+
+    #[test]
+    fn autopilot_wins_over_play_once_and_clear() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+            c.clip_mut(0, col).unwrap().duration = Some(1.0);
+        }
+        let first = c.clip_mut(0, 0).unwrap();
+        first.play_mode = PlayMode::OnceClear;
+        first.autopilot = Autopilot::Next;
+        c.trigger(0, 0, 0.0);
+        c.tick(1.5, 3.0);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+    }
+
+    #[test]
+    fn toggle_clips_clear_when_launched_again() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        c.set_clip(0, 0, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+        c.clip_mut(0, 0).unwrap().trigger = TriggerStyle::Toggle;
+        c.trigger(0, 0, 0.0);
+        assert_eq!(c.layers[0].playing_column(), Some(0));
+        c.trigger(0, 0, 1.0);
+        assert_eq!(c.layers[0].playing_column(), None);
+        c.trigger(0, 0, 2.0);
+        assert_eq!(c.layers[0].playing_column(), Some(0));
+    }
+
+    #[test]
+    fn piano_clips_clear_on_release_and_keep_velocity() {
+        let mut c = Composition::new(64, 64, 1, 2);
+        for col in [0, 1] {
+            c.set_clip(0, col, ClipSource::Generator { kind: GeneratorKind::ALL[0] });
+        }
+        c.clip_mut(0, 0).unwrap().trigger = TriggerStyle::Piano;
+        c.trigger_velocity(0, 0, 0.0, 0.5);
+        assert_eq!(c.layers[0].frame(0.0, 0.0).unwrap().gains.0, 0.5);
+        // Releasing a clip that is no longer playing does nothing.
+        c.trigger(0, 1, 0.5);
+        c.release(0, 0, 1.0);
+        assert_eq!(c.layers[0].playing_column(), Some(1));
+        c.trigger_velocity(0, 0, 2.0, 1.0);
+        c.release(0, 0, 3.0);
+        assert_eq!(c.layers[0].playing_column(), None);
+        // Saved only when set.
+        let json = serde_json::to_string(c.clip(0, 1).unwrap()).unwrap();
+        assert!(!json.contains("trigger") && !json.contains("autopilot"), "{json}");
+        let json = serde_json::to_string(c.clip(0, 0).unwrap()).unwrap();
+        assert!(json.contains("\"trigger\":\"piano\""), "{json}");
+    }
+
+    #[test]
+    fn layer_router_inputs_save_and_list() {
+        let mut c = Composition::new(64, 64, 2, 1);
+        c.set_clip(1, 0, ClipSource::Router { input: RouterInput::Layer(0) });
+        let back = Composition::from_json(&c.to_json().unwrap()).unwrap();
+        assert_eq!(back.clip(1, 0).unwrap().source, ClipSource::Router { input: RouterInput::Layer(0) });
+        assert_eq!(back.clip(1, 0).unwrap().length(), None);
+        let all = RouterInput::all(&c);
+        assert_eq!(all, [RouterInput::Composition, RouterInput::Layer(1), RouterInput::Layer(0)]);
+        assert_eq!(RouterInput::Layer(0).label(&c), c.layers[0].name);
     }
 }

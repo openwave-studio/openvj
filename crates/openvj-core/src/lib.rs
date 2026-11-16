@@ -4,6 +4,7 @@
 //! so it can be unit-tested headless and reused by any front end.
 
 mod composition;
+pub mod discover;
 mod effect;
 pub mod effect_folders;
 mod generator;
