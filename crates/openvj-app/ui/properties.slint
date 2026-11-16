@@ -14,6 +14,8 @@ component EffectCard inherits Rectangle {
     in property <int> count;
     /// The fixed Transform: no number, and it can't be moved or removed.
     in property <bool> fixed;
+    // "p:scope:index:" for map mode.
+    in property <string> midi-prefix;
     callback toggle();
     callback remove();
     callback move(int);
@@ -39,6 +41,7 @@ component EffectCard inherits Rectangle {
                 text: "●";
                 checked: root.data.enabled;
                 on-color: Theme.accent;
+                midi-id: root.midi-prefix == "" ? "" : root.midi-prefix + "bypass";
                 clicked => { root.toggle(); }
             }
             Text {
@@ -71,6 +74,7 @@ component EffectCard inherits Rectangle {
         for p in root.data.params: ModParam {
             opacity: root.data.enabled ? 1 : 0.5;
             data: p;
+            midi-prefix: root.midi-prefix;
             set(i, v) => { root.set(i, v); }
             mod-source(i, s) => { root.mod-source(i, s); }
             mod-amount(i, a) => { root.mod-amount(i, a); }
@@ -147,6 +151,7 @@ component EffectChain inherits Rectangle {
                     data: fx;
                     index: i;
                     count: root.effects.length;
+                    midi-prefix: "p:" + root.scope + ":" + i + ":";
                     toggle => { root.effect-toggle(root.scope, i); }
                     remove => { root.effect-remove(root.scope, i); }
                     move(d) => { root.effect-move(root.scope, i, d); }
@@ -357,6 +362,7 @@ export component PropertiesPanel inherits Rectangle {
                     title: "MASTER & CROSSFADER";
                     for p in root.comp-params: ModParam {
                         data: p;
+                        midi-prefix: "p:" + Scope.comp + ":0:";
                         set(i, v) => { root.param-set(Scope.comp, 0, i, v); }
                         mod-source(i, s) => { root.param-mod(Scope.comp, 0, i, s); }
                         mod-amount(i, a) => { root.param-mod-amount(Scope.comp, 0, i, a); }
@@ -517,6 +523,7 @@ export component PropertiesPanel inherits Rectangle {
                 }
                 for p in root.layer-params: ModParam {
                     data: p;
+                    midi-prefix: "p:" + Scope.layer + ":-1:";
                     set(i, v) => { root.param-set(Scope.layer, -1, i, v); }
                     mod-source(i, s) => { root.param-mod(Scope.layer, -1, i, s); }
                     mod-amount(i, a) => { root.param-mod-amount(Scope.layer, -1, i, a); }

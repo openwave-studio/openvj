@@ -14,9 +14,9 @@ use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::milkdrop::milk_library;
 use openvj_core::{
     AudioSignal, Autopilot, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, ClockMessage, Composition,
-    CrossfadeCurve, CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiClock, MidiEffect,
-    MidiMessage, ModInputs, ModSource, Modulation, Param, PlayMode, Playing, RouterInput, SYNC_BEATS, Span, TapTempo,
-    TransitionStyle, TriggerStyle, apply_midi, library, move_effect,
+    CrossfadeCurve, CrossfadeSide, DEFAULT_CLIP_SECS, Effect, EffectRef, LayerRef, MAX_REACTIVITY, MOD_RATES,
+    MidiBehaviour, MidiClock, MidiEffect, MidiMessage, MidiTarget, ModInputs, ModSource, Modulation, Param, PlayMode,
+    Playing, RouterInput, SYNC_BEATS, Span, TapTempo, TransitionStyle, TriggerStyle, apply_midi, library, move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
 use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
@@ -32,7 +32,7 @@ use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, Lib, LibChip, LibSideRow, LibTile,
-    MainWindow, MappingWindow, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
+    MainWindow, MappingWindow, MidiLearn, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
 };
 
 // The output mapping window's side of the app.
@@ -208,6 +208,11 @@ pub struct App {
     /// The last message received, for checking a controller is talking to openVJ.
     midi_last: String,
     midi_dirty: bool,
+    /// MIDI map mode (Cmd/Ctrl+M) and the id of the control picked in it.
+    learn_on: bool,
+    learn_id: String,
+    /// Bumped when mappings change, so the UI's labels refresh.
+    learn_rev: i32,
     clock_dirty: bool,
     /// Where things in the last imported `.avc` ended up, for resolving MIDI presets.
     /// Cleared when another composition is opened.
@@ -328,6 +333,9 @@ impl App {
             midi_status: "Off".into(),
             midi_last: String::new(),
             midi_dirty: true,
+            learn_on: false,
+            learn_id: String::new(),
+            learn_rev: 0,
             clock_dirty: true,
             resolume_refs: None,
             selected: None,
@@ -2028,6 +2036,10 @@ impl App {
                 continue;
             }
             let Some(msg) = MidiMessage::parse(&bytes) else { continue };
+            if self.learn_on {
+                self.learn_message(msg, &port);
+                continue;
+            }
             let actions = self.comp.midi.handle_from(msg, &port, &connected);
             self.midi_last =
                 format!("{port}: {}{}", message_label(msg), if actions.is_empty() { " · not mapped" } else { "" });
@@ -2127,7 +2139,168 @@ impl App {
         self.set_status("MIDI mappings cleared");
     }
 
+    // ---------------------------------------------------------------- MIDI map mode
+
+    pub fn learn_toggle(&mut self) {
+        self.learn_on = !self.learn_on;
+        self.learn_id.clear();
+        self.midi_dirty = true;
+        if self.learn_on && self.midi.is_none() {
+            self.open_midi();
+        }
+        self.set_status(if self.learn_on {
+            "MIDI map mode: click a control, then move a knob or press a pad. Esc or Cmd/Ctrl+M to finish."
+        } else {
+            "MIDI map mode off"
+        });
+    }
+
+    pub fn learn_pick(&mut self, id: &str) {
+        if self.learn_target(id).is_some() {
+            self.learn_id = id.to_owned();
+            self.midi_dirty = true;
+        }
+    }
+
+    /// While map mode is on, a pressed pad or moved knob maps itself to the picked control.
+    fn learn_message(&mut self, msg: MidiMessage, port: &str) {
+        self.midi_last = format!("{port}: {}", message_label(msg));
+        self.midi_dirty = true;
+        let learnable = matches!(msg, MidiMessage::ControlChange { .. }) || msg.is_press();
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        if !learnable {
+            return;
+        }
+        let control = msg.control();
+        if self.comp.midi.mapping_for(target).is_some_and(|m| m.control == control) {
+            return;
+        }
+        self.comp.midi.learn(control, Some(port), target);
+        self.learn_rev += 1;
+        let what = describe_target(&self.comp, target);
+        self.set_status(format!("Mapped {} to {what}", control.label()));
+    }
+
+    pub fn learn_forget(&mut self) {
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        if self.comp.midi.forget(target) {
+            self.learn_rev += 1;
+            self.midi_dirty = true;
+            self.set_status(format!("Removed the mapping of {}", describe_target(&self.comp, target)));
+        }
+    }
+
+    pub fn learn_behaviour(&mut self, i: i32) {
+        const ALL: [MidiBehaviour; 4] =
+            [MidiBehaviour::Fader, MidiBehaviour::Toggle, MidiBehaviour::Press, MidiBehaviour::Hold];
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        let (Some(m), Some(&b)) = (self.comp.midi.mapping_for_mut(target), ALL.get(i.max(0) as usize)) else { return };
+        m.behaviour = b;
+        self.midi_dirty = true;
+    }
+
+    pub fn learn_range(&mut self, min: f32, max: f32) {
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        let Some(m) = self.comp.midi.mapping_for_mut(target) else { return };
+        (m.min, m.max) = (min.clamp(0.0, 1.0), max.clamp(0.0, 1.0));
+        self.midi_dirty = true;
+    }
+
+    /// The target of a map-mode control id (see `MidiSpot` in ui/controls.slint). Grid and
+    /// toolbar controls use [`MidiTarget::ui_id`]s; parameter rows use `p:scope:owner:index`
+    /// (and `p:scope:effect:bypass`), resolved here against the selected layer.
+    pub fn learn_target(&self, id: &str) -> Option<MidiTarget> {
+        let n_layers = self.comp.layers.len();
+        let Some(rest) = id.strip_prefix("p:") else {
+            let t = MidiTarget::from_ui_id(id)?;
+            let ok = match t {
+                MidiTarget::LayerOpacity { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerBypass { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerSolo { layer: LayerRef::Index(l) }
+                | MidiTarget::LayerClear { layer: LayerRef::Index(l) } => l < n_layers,
+                MidiTarget::ClipLaunch { layer, column } => self.comp.clip(layer, column).is_some(),
+                MidiTarget::ColumnLaunch { column } => column < self.comp.columns.len(),
+                _ => true,
+            };
+            return ok.then_some(t);
+        };
+        let parts: Vec<&str> = rest.split(':').collect();
+        let [scope, owner, index] = parts[..] else { return None };
+        let (scope, owner): (i32, i32) = (scope.parse().ok()?, owner.parse().ok()?);
+        let layer = (self.selected_layer < n_layers).then_some(self.selected_layer);
+        let effect = |chain: Option<usize>| -> Option<EffectRef> {
+            let fx = match chain {
+                None => &self.comp.effects,
+                Some(l) => &self.comp.layers[l].effects,
+            };
+            let i = usize::try_from(owner).ok().filter(|&i| i < fx.len())?;
+            Some(EffectRef { layer: chain.map(LayerRef::Index), index: i })
+        };
+        let effect_target = |e: EffectRef| -> Option<MidiTarget> {
+            Some(match index {
+                "bypass" => MidiTarget::EffectBypass { effect: e },
+                i => match i.parse::<usize>().ok()? {
+                    MIX_INDEX => MidiTarget::EffectMix { effect: e },
+                    p => MidiTarget::EffectParam { effect: e, param: p },
+                },
+            })
+        };
+        match (scope, index) {
+            (scope::COMP, "0") => Some(MidiTarget::Master),
+            (scope::COMP, i) if i == CROSSFADER_INDEX.to_string() => Some(MidiTarget::Crossfader),
+            (scope::LAYER, "0") => Some(MidiTarget::LayerOpacity { layer: LayerRef::Index(layer?) }),
+            (scope::COMP_FX, _) => effect_target(effect(None)?),
+            (scope::LAYER_FX, _) => effect_target(effect(Some(layer?))?),
+            _ => None,
+        }
+    }
+
+    /// The note or CC mapped to a map-mode control, shortened for its tag ("CC 21").
+    pub fn learn_label(&self, id: &str) -> String {
+        let Some(m) = self.learn_target(id).and_then(|t| self.comp.midi.mapping_for(t)) else {
+            return String::new();
+        };
+        let c = m.control;
+        let kind = match c.kind {
+            openvj_core::MidiKind::Note => "N",
+            openvj_core::MidiKind::Cc => "CC",
+        };
+        if c.channel == 0 { format!("{kind} {}", c.number) } else { format!("{kind} {}/{}", c.number, c.channel + 1) }
+    }
+
+    fn sync_learn(&self, ui: &MainWindow) {
+        let g = ui.global::<MidiLearn>();
+        g.set_on(self.learn_on);
+        g.set_selected(self.learn_id.as_str().into());
+        g.set_revision(self.learn_rev);
+        let target = self.learn_target(&self.learn_id);
+        let mapping = target.and_then(|t| self.comp.midi.mapping_for(t));
+        let detail = match (target, mapping) {
+            (None, _) => "Click a control, then move a knob or press a pad on your controller.".to_owned(),
+            (Some(t), None) => format!("{}: move a knob or press a pad to map it.", describe_target(&self.comp, t)),
+            (Some(t), Some(m)) => {
+                let from = m.device.as_deref().map(|d| format!(" from {d}")).unwrap_or_default();
+                format!(
+                    "{} ← {}{from}. Move another control to re-map it.",
+                    describe_target(&self.comp, t),
+                    m.control.label()
+                )
+            }
+        };
+        g.set_detail(detail.into());
+        g.set_has_mapping(mapping.is_some());
+        let shaped = target.is_some_and(|t| t.is_ranged() || t.is_switch());
+        g.set_has_behaviour(mapping.is_some() && shaped);
+        g.set_ranged(target.is_some_and(|t| t.is_ranged()));
+        if let Some(m) = mapping {
+            g.set_behaviour(m.behaviour as i32);
+            g.set_min(m.min);
+            g.set_max(m.max);
+        }
+    }
+
     fn sync_midi(&mut self, ui: &MainWindow) {
+        self.sync_learn(ui);
         ui.set_midi_on(self.midi.is_some());
         ui.set_midi_status(self.midi_status.as_str().into());
         let map = &self.comp.midi;
@@ -3200,6 +3373,52 @@ impl EffectModels {
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
+}
+
+/// A target as people would name it, for the map bar and status line.
+fn describe_target(comp: &Composition, target: MidiTarget) -> String {
+    let layer_name =
+        |l: usize| comp.layers.get(l).map(|x| x.name.clone()).unwrap_or_else(|| format!("Layer {}", l + 1));
+    let layer = |r: LayerRef| match r {
+        LayerRef::Index(l) => layer_name(l),
+        LayerRef::Selected => "the selected layer".to_owned(),
+    };
+    let effect = |e: EffectRef| {
+        let (chain, owner) = match e.layer {
+            None => (Some(&comp.effects), "the composition".to_owned()),
+            Some(r) => {
+                let l = match r {
+                    LayerRef::Index(l) => l,
+                    LayerRef::Selected => usize::MAX,
+                };
+                (comp.layers.get(l).map(|x| &x.effects), layer(r))
+            }
+        };
+        let fx = chain.and_then(|c| c.get(e.index));
+        (fx, format!("{} on {owner}", fx.map_or("Effect".to_owned(), |f| f.name().to_owned())))
+    };
+    match target {
+        MidiTarget::Master => "Master".into(),
+        MidiTarget::Crossfader => "Crossfader".into(),
+        MidiTarget::TempoTap => "Tap tempo".into(),
+        MidiTarget::LayerOpacity { layer: r } => format!("{} opacity", layer(r)),
+        MidiTarget::LayerBypass { layer: r } => format!("{} bypass", layer(r)),
+        MidiTarget::LayerSolo { layer: r } => format!("{} solo", layer(r)),
+        MidiTarget::LayerClear { layer: r } => format!("Clear {}", layer(r)),
+        MidiTarget::ClipLaunch { layer, column } => {
+            let name = comp.clip(layer, column).map(|c| c.name.clone()).unwrap_or_default();
+            format!("Launch {name} ({}, column {})", layer_name(layer), column + 1)
+        }
+        MidiTarget::ColumnLaunch { column } => format!("Launch column {}", column + 1),
+        MidiTarget::EffectParam { effect: e, param } => {
+            let (fx, what) = effect(e);
+            let label = fx.and_then(|f| f.ty()).and_then(|t| t.channels.get(param).map(|c| c.label.clone()));
+            format!("{} of {what}", label.unwrap_or_else(|| format!("Parameter {}", param + 1)))
+        }
+        MidiTarget::EffectMix { effect: e } => format!("Mix of {}", effect(e).1),
+        MidiTarget::EffectBypass { effect: e } => format!("Bypass {}", effect(e).1),
+        other => format!("{other:?}"),
+    }
 }
 
 fn message_label(msg: MidiMessage) -> String {

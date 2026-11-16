@@ -196,6 +196,7 @@ impl Resolver<'_> {
             ["tempocontroller", "tempotap"] => Ok(MidiTarget::TempoTap),
             ["tempocontroller", "resync"] => Ok(MidiTarget::TempoResync),
             ["tempocontroller", "tempo"] => Ok(MidiTarget::Tempo),
+            ["crossfader", "phase"] | ["crossfader"] => Ok(MidiTarget::Crossfader),
             ["columns", n, "connect"] => Ok(MidiTarget::ColumnLaunch { column: self.column(n)? }),
             ["connectnextcolumn"] => Ok(MidiTarget::ColumnStep { forward: true }),
             ["connectprevcolumn" | "connectpreviouscolumn"] => Ok(MidiTarget::ColumnStep { forward: false }),

@@ -1,7 +1,7 @@
 import { LineEdit, ScrollView, ListView } from "std-widgets.slint";
 import { Theme, CloseIcon } from "theme.slint";
-import { Scope, ModNames, AudioLevels, ParamData, EffectData, CellData, LayerData, ColumnData, DeckData, BrowserItem } from "state.slint";
-import { Fader, ToggleButton, FlatButton, BlendPicker, PanelTitle, Monitor, BandMeters } from "controls.slint";
+import { Scope, ModNames, AudioLevels, MidiLearn, ParamData, EffectData, CellData, LayerData, ColumnData, DeckData, BrowserItem } from "state.slint";
+import { Fader, ToggleButton, FlatButton, BlendPicker, PanelTitle, Monitor, BandMeters, MidiSpot } from "controls.slint";
 import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
@@ -11,11 +11,12 @@ import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib }
 
-export { Theme, Scope, ModNames, AudioLevels, Shadertoy }
+export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn }
 
 component ClipCell inherits Rectangle {
     in property <CellData> data;
     in property <bool> armed;
+    in property <string> midi-id;
     callback clicked();
     callback pressed();
     callback released();
@@ -133,6 +134,13 @@ component ClipCell inherits Rectangle {
             }
         }
     }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: root.midi-id;
+    }
 }
 
 component LayerStrip inherits Rectangle {
@@ -226,16 +234,19 @@ component LayerStrip inherits Rectangle {
                 text: "B";
                 checked: root.data.bypass;
                 on-color: Theme.warn;
+                midi-id: "bypass:" + root.data.index;
                 clicked => { root.bypass(); }
             }
             ToggleButton {
                 text: "S";
                 checked: root.data.solo;
                 on-color: Theme.accent;
+                midi-id: "solo:" + root.data.index;
                 clicked => { root.solo(); }
             }
             ToggleButton {
                 text: "X";
+                midi-id: "clear:" + root.data.index;
                 clicked => { root.clear(); }
             }
         }
@@ -243,6 +254,7 @@ component LayerStrip inherits Rectangle {
             label: "Opacity";
             value: root.data.opacity;
             live: root.data.live-opacity;
+            midi-id: "opacity:" + root.data.index;
             changed(v) => { root.opacity-changed(v); }
         }
         BlendPicker {
@@ -360,6 +372,13 @@ component Crossfader inherits Rectangle {
             accept
         }
     }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: "crossfader";
+    }
 }
 
 component ClipGrid inherits Rectangle {
@@ -456,6 +475,13 @@ component ClipGrid inherits Rectangle {
                     col-ta := TouchArea {
                         clicked => { root.column-clicked(c); }
                     }
+                    MidiSpot {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        midi-id: "column:" + c;
+                    }
                 }
                 FlatButton {
                     text: "+";
@@ -483,6 +509,7 @@ component ClipGrid inherits Rectangle {
                 for cell[c] in layer.cells: ClipCell {
                     data: cell;
                     armed: root.armed;
+                    midi-id: cell.filled ? "clip:" + layer.index + ":" + c : "";
                     clicked => { root.cell-clicked(layer.index, c); }
                     pressed => { root.cell-pressed(layer.index, c); }
                     released => { root.cell-released(layer.index, c); }
@@ -716,6 +743,12 @@ component Toolbar inherits Rectangle {
                 active: root.midi-on;
                 clicked => { root.midi-toggle(); }
             }
+            // MIDI map mode (Cmd/Ctrl+M): click a control, then move a knob.
+            FlatButton {
+                text: "MAP";
+                active: MidiLearn.on;
+                clicked => { MidiLearn.toggle(); }
+            }
         }
 
         Rectangle {
@@ -783,6 +816,7 @@ component Toolbar inherits Rectangle {
                 text: "TAP";
                 width: 44px;
                 enabled: !root.clock-on;
+                midi-id: "tap";
                 clicked => { root.tap(); }
             }
             for i in 4: Rectangle {
@@ -1105,6 +1139,72 @@ component Browser inherits Rectangle {
     }
 }
 
+/// Shown under the toolbar in MIDI map mode: what is selected, and its range and behaviour.
+component MidiMapBar inherits Rectangle {
+    height: 36px;
+    background: Theme.accent.with-alpha(0.10);
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 8px;
+        Text {
+            text: "MIDI MAP";
+            color: Theme.accent;
+            font-size: Theme.font-small;
+            font-weight: 800;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: MidiLearn.detail;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if MidiLearn.has-behaviour: HorizontalLayout {
+            spacing: 4px;
+            for b[i] in MidiLearn.behaviours: FlatButton {
+                text: b;
+                active: MidiLearn.behaviour == i;
+                clicked => { MidiLearn.behaviour-picked(i); }
+            }
+        }
+        if MidiLearn.has-mapping && MidiLearn.ranged: Fader {
+            width: 150px;
+            y: (parent.height - self.height) / 2;
+            label: "Min";
+            label-width: 28px;
+            reset-value: 0;
+            value: MidiLearn.min;
+            changed(v) => { MidiLearn.range(v, MidiLearn.max); }
+        }
+        if MidiLearn.has-mapping && MidiLearn.ranged: Fader {
+            width: 150px;
+            y: (parent.height - self.height) / 2;
+            label: "Max";
+            label-width: 28px;
+            reset-value: 1;
+            value: MidiLearn.max;
+            changed(v) => { MidiLearn.range(MidiLearn.min, v); }
+        }
+        if MidiLearn.has-mapping: FlatButton {
+            text: "Remove";
+            clicked => { MidiLearn.forget(); }
+        }
+        FlatButton {
+            text: "Done";
+            primary: true;
+            clicked => { MidiLearn.toggle(); }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "openVJ";
     preferred-width: 1600px;
@@ -1376,6 +1476,18 @@ export component MainWindow inherits Window {
                 root.settings-open = false;
                 return accept;
             }
+            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "m" || e.text == "M")) {
+                MidiLearn.toggle();
+                return accept;
+            }
+            if (MidiLearn.on && (e.text == Key.Delete || e.text == Key.Backspace)) {
+                MidiLearn.forget();
+                return accept;
+            }
+            if (MidiLearn.on && e.text == Key.Escape) {
+                MidiLearn.toggle();
+                return accept;
+            }
             if (root.key(e.text)) {
                 return accept;
             }
@@ -1449,6 +1561,8 @@ export component MainWindow inherits Window {
                 open => { root.playlist-open(); }
                 save => { root.playlist-save(); }
             }
+
+            if MidiLearn.on: MidiMapBar {}
 
             // Synthesis isn't built yet.
             if root.layout == Layouts.synthesis: LayoutPlaceholder {
@@ -1530,6 +1644,7 @@ export component MainWindow inherits Window {
                             value: root.master;
                             live: root.live-master;
                             fill: Theme.accent;
+                            midi-id: "master";
                             changed(v) => { root.master-changed(v); }
                         }
                         // A/B crossfader for layers assigned to a side.

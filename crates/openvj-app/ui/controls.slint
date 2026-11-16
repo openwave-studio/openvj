@@ -1,5 +1,39 @@
 import { Theme } from "theme.slint";
-import { ParamData, ModNames, AudioLevels } from "state.slint";
+import { ParamData, ModNames, AudioLevels, MidiLearn } from "state.slint";
+
+/// Map-mode overlay for a mappable control: put it last inside the control so it covers it
+/// and takes the click. Outlined in cyan, filled when mapped, with the note or CC shown.
+export component MidiSpot inherits Rectangle {
+    in property <string> midi-id;
+    property <bool> active: MidiLearn.on && root.midi-id != "" && MidiLearn.mappable(root.midi-id, MidiLearn.revision);
+    property <string> mapped: root.active ? MidiLearn.label(root.midi-id, MidiLearn.revision) : "";
+    property <bool> chosen: root.active && MidiLearn.selected == root.midi-id;
+
+    visible: root.active;
+    border-radius: 3px;
+    border-width: root.chosen ? 2px : 1px;
+    border-color: Theme.accent;
+    background: root.chosen ? Theme.accent.with-alpha(0.35) : root.mapped != "" ? Theme.accent.with-alpha(0.18) : Theme.accent.with-alpha(0.05);
+
+    if root.mapped != "": Rectangle {
+        x: max(0px, root.width - self.width - 2px);
+        y: max(0px, (root.height - self.height) / 2);
+        width: tag.preferred-width + 6px;
+        height: min(root.height, 13px);
+        border-radius: 2px;
+        background: Theme.accent;
+        tag := Text {
+            text: root.mapped;
+            color: Theme.on-accent;
+            font-size: 8px;
+            font-weight: 800;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { MidiLearn.pick(root.midi-id); }
+    }
+}
 
 /// Horizontal fader in openDJ's mixer style: tick marks either side of a dark slot,
 /// a grey metal cap, the name on the left and the value on the right.
@@ -13,6 +47,7 @@ export component Fader inherits Rectangle {
     // Where a modulator has moved it this frame (-1 when it isn't modulated).
     in property <float> live: -1;
     in property <length> label-width: 46px;
+    in property <string> midi-id;
     callback changed(float);
 
     property <length> handle: 12px;
@@ -128,6 +163,13 @@ export component Fader inherits Rectangle {
             accept
         }
     }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: root.midi-id;
+    }
 }
 
 /// Small square toggle button (bypass, solo, clear) in openDJ's style: flat and dark
@@ -137,6 +179,7 @@ export component ToggleButton inherits Rectangle {
     in property <bool> checked;
     in property <color> on-color: Theme.accent;
     in property <string> tooltip;
+    in property <string> midi-id;
     callback clicked();
 
     width: 22px;
@@ -158,6 +201,13 @@ export component ToggleButton inherits Rectangle {
     ta := TouchArea {
         clicked => { root.clicked(); }
     }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: root.midi-id;
+    }
 }
 
 /// Flat text button used in toolbars and panels. `primary` fills it with the accent;
@@ -168,6 +218,7 @@ export component FlatButton inherits Rectangle {
     in property <bool> active;
     in property <bool> enabled: true;
     in property <color> tint: Theme.accent;
+    in property <string> midi-id;
     callback clicked();
 
     min-width: label.preferred-width + 20px;
@@ -195,6 +246,13 @@ export component FlatButton inherits Rectangle {
         enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+    }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: root.midi-id;
     }
 }
 
@@ -378,6 +436,7 @@ export component ParamBar inherits Rectangle {
     in property <bool> modulated;
     in property <color> mod-color: Theme.tempo;
     in property <float> reset-value: 0.5;
+    in property <string> midi-id;
     callback changed(float);
 
     height: 20px;
@@ -434,6 +493,13 @@ export component ParamBar inherits Rectangle {
         double-clicked => {
             root.changed(root.reset-value);
         }
+    }
+    MidiSpot {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        midi-id: root.midi-id;
     }
 }
 
@@ -617,6 +683,8 @@ export component RatePicker inherits HorizontalLayout {
 /// A parameter with its value bar, mapping button and, when mapped, depth and rate.
 export component ModParam inherits VerticalLayout {
     in property <ParamData> data;
+    // "p:scope:owner:" for map mode; the row's index completes the id.
+    in property <string> midi-prefix;
     callback set(int, float);
     callback mod-source(int, int);
     callback mod-amount(int, float);
@@ -642,6 +710,7 @@ export component ModParam inherits VerticalLayout {
             modulated: root.data.mod-source != 0;
             mod-color: Theme.mod-color(root.data.mod-source);
             reset-value: root.data.reset;
+            midi-id: root.midi-prefix == "" ? "" : root.midi-prefix + root.data.index;
             changed(v) => { root.set(root.data.index, v); }
         }
         if root.data.modulatable: ModButton {

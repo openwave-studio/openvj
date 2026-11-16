@@ -192,6 +192,8 @@ pub enum MidiTarget {
     TempoResync,
     /// Sets the tempo across [`BPM_RANGE`].
     Tempo,
+    /// The A/B crossfader's position.
+    Crossfader,
 }
 
 /// The tempo a full-range fader on [`MidiTarget::Tempo`] covers (Resolume's range).
@@ -208,12 +210,86 @@ impl MidiTarget {
                 | MidiTarget::EffectParam { .. }
                 | MidiTarget::EffectMix { .. }
                 | MidiTarget::Tempo
+                | MidiTarget::Crossfader
         )
     }
 
     /// True for on/off targets.
     pub fn is_switch(&self) -> bool {
         matches!(self, MidiTarget::LayerBypass { .. } | MidiTarget::LayerSolo { .. } | MidiTarget::EffectBypass { .. })
+    }
+
+    /// The behaviour a newly learned mapping starts with: faders follow a knob (or flip
+    /// between min and max when a pad is pressed), switches toggle, the rest launch on press.
+    pub fn default_behaviour(&self, control: MidiControl) -> MidiBehaviour {
+        if self.is_ranged() {
+            if control.kind == MidiKind::Note { MidiBehaviour::Toggle } else { MidiBehaviour::Fader }
+        } else if self.is_switch() {
+            MidiBehaviour::Toggle
+        } else {
+            MidiBehaviour::Press
+        }
+    }
+
+    /// The id the app gives the on-screen control for this target, for map mode. Only
+    /// targets with a control of their own on screen have one.
+    ///
+    /// `master`, `crossfader`, `tap`, `opacity:L`, `bypass:L`, `solo:L`, `clear:L`,
+    /// `clip:L:C`, `column:C`, and for effects `fx:S:I:P`, `fxmix:S:I` and `fxbypass:S:I`,
+    /// where S is a layer index or `comp` and I the effect's place in that chain.
+    pub fn ui_id(&self) -> Option<String> {
+        fn chain(e: &EffectRef) -> Option<String> {
+            match e.layer {
+                None => Some(format!("comp:{}", e.index)),
+                Some(LayerRef::Index(l)) => Some(format!("{l}:{}", e.index)),
+                Some(LayerRef::Selected) => None,
+            }
+        }
+        Some(match self {
+            MidiTarget::Master => "master".into(),
+            MidiTarget::Crossfader => "crossfader".into(),
+            MidiTarget::TempoTap => "tap".into(),
+            MidiTarget::LayerOpacity { layer: LayerRef::Index(l) } => format!("opacity:{l}"),
+            MidiTarget::LayerBypass { layer: LayerRef::Index(l) } => format!("bypass:{l}"),
+            MidiTarget::LayerSolo { layer: LayerRef::Index(l) } => format!("solo:{l}"),
+            MidiTarget::LayerClear { layer: LayerRef::Index(l) } => format!("clear:{l}"),
+            MidiTarget::ClipLaunch { layer, column } => format!("clip:{layer}:{column}"),
+            MidiTarget::ColumnLaunch { column } => format!("column:{column}"),
+            MidiTarget::EffectParam { effect, param } => format!("fx:{}:{param}", chain(effect)?),
+            MidiTarget::EffectMix { effect } => format!("fxmix:{}", chain(effect)?),
+            MidiTarget::EffectBypass { effect } => format!("fxbypass:{}", chain(effect)?),
+            _ => return None,
+        })
+    }
+
+    /// The target an on-screen control's id stands for; the inverse of [`ui_id`](Self::ui_id).
+    pub fn from_ui_id(id: &str) -> Option<Self> {
+        let parts: Vec<&str> = id.split(':').collect();
+        let num = |i: usize| parts.get(i)?.parse::<usize>().ok();
+        let layer = || Some(LayerRef::Index(num(1)?));
+        let effect = || {
+            let layer = match *parts.get(1)? {
+                "comp" => None,
+                l => Some(LayerRef::Index(l.parse().ok()?)),
+            };
+            Some(EffectRef { layer, index: num(2)? })
+        };
+        let n = parts.len();
+        Some(match (parts[0], n) {
+            ("master", 1) => MidiTarget::Master,
+            ("crossfader", 1) => MidiTarget::Crossfader,
+            ("tap", 1) => MidiTarget::TempoTap,
+            ("opacity", 2) => MidiTarget::LayerOpacity { layer: layer()? },
+            ("bypass", 2) => MidiTarget::LayerBypass { layer: layer()? },
+            ("solo", 2) => MidiTarget::LayerSolo { layer: layer()? },
+            ("clear", 2) => MidiTarget::LayerClear { layer: layer()? },
+            ("clip", 3) => MidiTarget::ClipLaunch { layer: num(1)?, column: num(2)? },
+            ("column", 2) => MidiTarget::ColumnLaunch { column: num(1)? },
+            ("fx", 4) => MidiTarget::EffectParam { effect: effect()?, param: num(3)? },
+            ("fxmix", 3) => MidiTarget::EffectMix { effect: effect()? },
+            ("fxbypass", 3) => MidiTarget::EffectBypass { effect: effect()? },
+            _ => return None,
+        })
     }
 }
 
@@ -293,6 +369,43 @@ pub struct MidiAction {
 impl MidiMap {
     pub fn is_empty(&self) -> bool {
         self.mappings.is_empty()
+    }
+
+    /// Maps `control` (from `device`, when known) to `target`, as in map mode. It replaces
+    /// any mapping of that target, and any mapping of that control from the same device,
+    /// so one knob drives one thing and one thing answers one knob.
+    pub fn learn(&mut self, control: MidiControl, device: Option<&str>, target: MidiTarget) -> &MidiMapping {
+        let same_source = |m: &MidiMapping| {
+            m.control == control
+                && match (&m.device, device) {
+                    (Some(a), Some(b)) => same_device(a, b),
+                    (None, _) | (_, None) => true,
+                }
+        };
+        self.mappings.retain(|m| m.target != target && !same_source(m));
+        let mut mapping = MidiMapping::new(control, target, target.default_behaviour(control));
+        mapping.device = device.map(str::to_owned);
+        if self.device.is_none() {
+            self.device = mapping.device.clone();
+        }
+        self.mappings.push(mapping);
+        self.mappings.last().unwrap()
+    }
+
+    /// Removes every mapping of `target`. Returns true if there was one.
+    pub fn forget(&mut self, target: MidiTarget) -> bool {
+        let before = self.mappings.len();
+        self.mappings.retain(|m| m.target != target);
+        self.mappings.len() != before
+    }
+
+    /// The first mapping of `target`, if any.
+    pub fn mapping_for(&self, target: MidiTarget) -> Option<&MidiMapping> {
+        self.mappings.iter().find(|m| m.target == target)
+    }
+
+    pub fn mapping_for_mut(&mut self, target: MidiTarget) -> Option<&mut MidiMapping> {
+        self.mappings.iter_mut().find(|m| m.target == target)
     }
 
     /// The actions one message triggers, in mapping order.
@@ -476,6 +589,7 @@ pub fn apply_midi(comp: &mut Composition, action: MidiAction, now: f64, selected
         }
         MidiTarget::TempoTap => return TapTempo,
         MidiTarget::TempoResync => return ResyncTempo,
+        MidiTarget::Crossfader => ranged(&mut comp.crossfader.position, input),
         MidiTarget::Tempo => {
             let (lo, hi) = BPM_RANGE;
             let mut v = (comp.bpm - lo) / (hi - lo);
@@ -735,5 +849,76 @@ mod tests {
         };
         let json = serde_json::to_string(&map).unwrap();
         assert_eq!(serde_json::from_str::<MidiMap>(&json).unwrap(), map);
+    }
+
+    #[test]
+    fn learning_replaces_the_target_and_the_control() {
+        let mut map = MidiMap::default();
+        let opacity = MidiTarget::LayerOpacity { layer: LayerRef::Index(1) };
+        let solo = MidiTarget::LayerSolo { layer: LayerRef::Index(1) };
+        assert_eq!(map.learn(cc(21), Some("Circuit Tracks MIDI"), opacity).behaviour, MidiBehaviour::Fader);
+        assert_eq!(map.device.as_deref(), Some("Circuit Tracks MIDI"));
+        // Re-learning the target replaces its control.
+        map.learn(cc(22), Some("Circuit Tracks MIDI"), opacity);
+        assert_eq!(map.mappings.len(), 1);
+        assert_eq!(map.mapping_for(opacity).unwrap().control, cc(22));
+        // Moving the same control for another target takes it away from the first.
+        assert_eq!(map.learn(cc(22), Some("Circuit Tracks MIDI"), solo).behaviour, MidiBehaviour::Toggle);
+        assert!(map.mapping_for(opacity).is_none());
+        // The same CC on another controller is a different control.
+        map.learn(cc(22), Some("XONE:K2"), opacity);
+        assert_eq!(map.mappings.len(), 2);
+        assert!(map.forget(solo));
+        assert!(!map.forget(solo));
+        assert_eq!(map.mappings.len(), 1);
+    }
+
+    #[test]
+    fn learned_pads_launch_and_learned_faders_move() {
+        let mut c = comp();
+        c.midi.learn(note(36), None, MidiTarget::ClipLaunch { layer: 0, column: 0 });
+        c.midi.learn(cc(1), None, MidiTarget::Crossfader);
+        let mut inverted = c.midi.learn(cc(2), None, MidiTarget::Master).clone();
+        inverted.min = 1.0;
+        inverted.max = 0.0;
+        *c.midi.mapping_for_mut(MidiTarget::Master).unwrap() = inverted;
+        for msg in [
+            MidiMessage::ControlChange { channel: 0, controller: 1, value: 127 },
+            MidiMessage::ControlChange { channel: 0, controller: 2, value: 127 },
+            MidiMessage::NoteOn { channel: 0, note: 36, velocity: 100 },
+        ] {
+            for a in c.midi.handle(msg) {
+                apply_midi(&mut c, a, 0.0, 0);
+            }
+        }
+        assert_eq!(c.crossfader.position, 1.0);
+        assert_eq!(c.master, 0.0);
+        assert_eq!(c.layers[0].playing_column(), Some(0));
+    }
+
+    #[test]
+    fn ui_ids_round_trip() {
+        let fx = |layer| EffectRef { layer, index: 2 };
+        for t in [
+            MidiTarget::Master,
+            MidiTarget::Crossfader,
+            MidiTarget::TempoTap,
+            MidiTarget::LayerOpacity { layer: LayerRef::Index(3) },
+            MidiTarget::LayerBypass { layer: LayerRef::Index(0) },
+            MidiTarget::LayerSolo { layer: LayerRef::Index(1) },
+            MidiTarget::LayerClear { layer: LayerRef::Index(2) },
+            MidiTarget::ClipLaunch { layer: 1, column: 4 },
+            MidiTarget::ColumnLaunch { column: 5 },
+            MidiTarget::EffectParam { effect: fx(None), param: 1 },
+            MidiTarget::EffectParam { effect: fx(Some(LayerRef::Index(1))), param: 0 },
+            MidiTarget::EffectMix { effect: fx(Some(LayerRef::Index(0))) },
+            MidiTarget::EffectBypass { effect: fx(None) },
+        ] {
+            let id = t.ui_id().unwrap();
+            assert_eq!(MidiTarget::from_ui_id(&id), Some(t), "{id}");
+        }
+        assert_eq!(MidiTarget::LayerOpacity { layer: LayerRef::Selected }.ui_id(), None);
+        assert_eq!(MidiTarget::from_ui_id("clip:1"), None);
+        assert_eq!(MidiTarget::from_ui_id("nope"), None);
     }
 }

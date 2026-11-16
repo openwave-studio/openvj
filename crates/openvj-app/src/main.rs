@@ -261,6 +261,27 @@ fn main() -> Result<()> {
         });
     }
 
+    // MIDI map mode (MidiLearn in ui/state.slint).
+    {
+        let g = ui.global::<MidiLearn>();
+        macro_rules! learn {
+            ($setter:ident, |$app:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+                let (app, w, o) = (app.clone(), w.clone(), o.clone());
+                g.$setter(move |$($arg: $ty),*| with_app(&app, &w, &o, |$app| $body));
+            }};
+        }
+        learn!(on_toggle, |a| a.learn_toggle());
+        learn!(on_pick, |a, id: slint::SharedString| a.learn_pick(&id));
+        learn!(on_forget, |a| a.learn_forget());
+        learn!(on_behaviour_picked, |a, i: i32| a.learn_behaviour(i));
+        learn!(on_range, |a, min: f32, max: f32| a.learn_range(min, max));
+        // Evaluated while drawing, so never while the app is borrowed for an update.
+        let app2 = app.clone();
+        g.on_mappable(move |id, _| app2.try_borrow().is_ok_and(|a| a.learn_target(&id).is_some()));
+        let app2 = app.clone();
+        g.on_label(move |id, _| app2.try_borrow().map(|a| a.learn_label(&id).into()).unwrap_or_default());
+    }
+
     // Import from Shadertoy (ui/shadertoy.slint).
     {
         let g = ui.global::<Shadertoy>();

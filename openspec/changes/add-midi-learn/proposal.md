@@ -35,6 +35,10 @@ Out of scope: LED feedback, 14-bit CC pairs, NRPN, OSC, and keyboard shortcut le
 - add-midi-clock-in also touches the MIDI input path. Merge it first; it's smaller.
 - add-parameter-animation proposes dashboard dials with MIDI mapping. Learning covers MIDI on any parameter now. Dials stay in that change.
 
+## Status (2026-11-16)
+
+Map mode, learning, min/max and behaviour are built (sections 1 and 2). Clip parameters, clip effects and group controls are not mappable yet, because `MidiTarget` has no targets for them. Export (section 3) is blocked: a Resolume shortcut key holds a 32-bit hash of the controller's name (Circuit Tracks MIDI → 0xbb513edb), and none of CRC32, FNV, murmur3, MD5, SHA1 or Java-style string hashes reproduce it. The change stays open until export is solved or dropped.
+
 ## Open questions
 
 - Should a learned mapping hold its target by position (layer 2) or follow the selected layer, the way Resolume offers both? The default here is by position, with "selected layer" left to imported presets.

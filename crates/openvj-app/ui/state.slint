@@ -142,3 +142,34 @@ export struct LibSideRow {
     active: bool,
     heading: bool,
 }
+
+/// MIDI map mode (Cmd/Ctrl+M). Every mappable control has a `midi-id` (see `learn_target`
+/// in app.rs); in map mode it is outlined and shows its note or CC.
+export global MidiLearn {
+    in property <bool> on;
+    // The id of the control picked for learning, or "".
+    in property <string> selected;
+    // Bumped by Rust whenever the mappings change, so labels refresh.
+    in property <int> revision;
+    // True if the control with this id can be mapped.
+    pure callback mappable(string, int) -> bool;
+    // The note or CC mapped to it ("CC 21"), or "".
+    pure callback label(string, int) -> string;
+    callback pick(string);
+    callback toggle();
+    // The map bar: what is selected and how its mapping behaves.
+    in property <string> detail;
+    in property <bool> has-mapping;
+    // Faders and switches have a behaviour; launches don't.
+    in property <bool> has-behaviour;
+    // Ranged targets get min/max; others only a behaviour.
+    in property <bool> ranged;
+    // Index into `behaviours`.
+    in property <int> behaviour;
+    in property <[string]> behaviours: ["Fader", "Toggle", "Press", "Hold"];
+    in property <float> min;
+    in property <float> max: 1;
+    callback behaviour-picked(int);
+    callback range(float, float);
+    callback forget();
+}
