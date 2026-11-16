@@ -349,4 +349,27 @@ mod tests {
         assert!(on.bands[0] > off.bands[0] && on.bands[0] < 0.5);
         assert!(synthetic_pcm(0.0, 48_000).iter().all(|s| s.abs() <= 0.4));
     }
+    #[test]
+    fn auditions_on_the_preview_without_touching_the_output() {
+        let Some(mut e) = engine() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let comp = Composition::new(320, 180, 1, 1);
+        let ThumbnailSource::Clip(mut clip) =
+            thumbnail_clip(ClipSource::Generator { kind: GeneratorKind::Plasma }, vec![])
+        else {
+            unreachable!()
+        };
+        clip.id = crate::AUDITION_CLIP;
+        e.audition(Some(*clip));
+        assert!(e.auditioning());
+        e.render(&comp, 0.5, &ModInputs::default(), None);
+        let lit_px = |px: Vec<u8>| px.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
+        assert!(lit_px(e.read_target(e.preview())) > 1000, "preview shows the auditioned clip");
+        assert_eq!(lit_px(e.read_target(e.output())), 0, "output stays black");
+        e.audition(None);
+        e.render(&comp, 0.6, &ModInputs::default(), None);
+        assert_eq!(lit_px(e.read_target(e.preview())), 0);
+    }
 }

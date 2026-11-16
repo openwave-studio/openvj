@@ -11,7 +11,7 @@ use openvj_core::library::{
 };
 use openvj_core::milkdrop::milk_library;
 use openvj_core::{ClipSource, Effect, GeneratorKind, library as effect_library};
-use openvj_render::{Engine, Thumbnail, ThumbnailSource, effect_test_source, thumbnail_clip};
+use openvj_render::{Engine, Thumbnail, ThumbnailSource, effect_test_source};
 
 /// How long after a change the library file is written.
 const SAVE_DELAY: Duration = Duration::from_secs(2);
@@ -55,6 +55,7 @@ pub struct AppLibrary {
     /// The presets folder needs listing again (a preset was saved).
     presets_dirty: bool,
     pub thumbs: ThumbCache,
+    pub view: LibraryView,
 }
 
 impl AppLibrary {
@@ -76,6 +77,7 @@ impl AppLibrary {
             milk_generation: None,
             presets_dirty: true,
             thumbs: ThumbCache::new(cache_dir().map(|d| d.join("Thumbnails"))),
+            view: LibraryView::default(),
         }
     }
 
@@ -135,20 +137,41 @@ impl AppLibrary {
     }
 }
 
-/// What the engine renders for an item's thumbnail.
-pub fn thumbnail_source(item: &Item) -> Option<ThumbnailSource> {
+/// A clip that plays a source with default settings.
+fn source_clip(source: ClipSource) -> openvj_core::Clip {
+    let mut comp = openvj_core::Composition::new(16, 9, 1, 1);
+    comp.set_clip(0, 0, source);
+    comp.clip(0, 0).cloned().expect("slot 0,0 exists")
+}
+
+/// The test pattern effects are shown on.
+pub fn test_pattern_clip() -> Option<openvj_core::Clip> {
+    Some(source_clip(effect_test_source()))
+}
+
+/// A library item as a clip: a source with default settings, a saved preset with its own,
+/// or (for an effect) the test pattern with the effect on it.
+pub fn item_clip(item: &Item) -> Option<openvj_core::Clip> {
     let (prefix, rest) = item.id.split_once(':')?;
-    let clip = |source| Some(thumbnail_clip(source, Vec::new()));
     match (prefix, item.kind) {
-        ("gen", _) => clip(ClipSource::Generator {
+        ("gen", _) => Some(source_clip(ClipSource::Generator {
             kind: GeneratorKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(rest))?,
-        }),
-        ("isf", Kind::Generator) => clip(ClipSource::isf(rest)),
-        ("isf", Kind::Effect) => Some(thumbnail_clip(effect_test_source(), vec![Effect::new(rest)])),
-        ("milk", _) => clip(ClipSource::Milkdrop { preset: rest.to_owned() }),
-        ("preset", _) => Some(ThumbnailSource::Clip(Box::new(load_preset(item.path.as_deref()?).ok()?.clip))),
+        })),
+        ("isf", Kind::Generator) => Some(source_clip(ClipSource::isf(rest))),
+        ("isf", Kind::Effect) => {
+            let mut clip = source_clip(effect_test_source());
+            clip.effects.push(Effect::new(rest));
+            Some(clip)
+        }
+        ("milk", _) => Some(source_clip(ClipSource::Milkdrop { preset: rest.to_owned() })),
+        ("preset", _) => load_preset(item.path.as_deref()?).ok().map(|p| p.clip),
         _ => None,
     }
+}
+
+/// What the engine renders for an item's thumbnail.
+pub fn thumbnail_source(item: &Item) -> Option<ThumbnailSource> {
+    item_clip(item).map(|c| ThumbnailSource::Clip(Box::new(c)))
 }
 
 /// 64-bit FNV-1a: stable across Rust versions and machines, unlike `DefaultHasher`.
@@ -172,7 +195,6 @@ pub fn thumb_key(id: &str, kind: Kind, path: Option<&Path>) -> String {
 }
 
 /// The VJ's own pick ("Use Preview frame as thumbnail") is stored by item id.
-#[expect(dead_code, reason = "the Sources grid (add-library-browser task group 3) uses it")]
 fn custom_key(id: &str) -> String {
     format!("custom-{:016x}", fnv1a(FNV_OFFSET, id.as_bytes()))
 }
@@ -220,7 +242,6 @@ impl ThumbCache {
     }
 
     /// The thumbnail file for an item, if there is one: the VJ's own pick first.
-    #[expect(dead_code, reason = "the Sources grid (add-library-browser task group 3) uses it")]
     pub fn path(&self, id: &str) -> Option<PathBuf> {
         let dir = self.dir.as_ref()?;
         let custom = custom_key(id);
@@ -232,13 +253,11 @@ impl ThumbCache {
     }
 
     /// Item ids whose thumbnail appeared since the last call.
-    #[expect(dead_code, reason = "the Sources grid (add-library-browser task group 3) uses it")]
     pub fn take_updated(&mut self) -> Vec<String> {
         std::mem::take(&mut self.updated)
     }
 
     /// Thumbnails waiting to render.
-    #[expect(dead_code, reason = "the Sources grid (add-library-browser task group 3) uses it")]
     pub fn pending(&self) -> usize {
         self.todo.len() + self.in_flight.len()
     }
@@ -278,7 +297,9 @@ impl ThumbCache {
             self.keys_rx = None;
             self.todo.clear();
             for (id, key) in keys {
-                if !self.on_disk.contains(&key) {
+                if self.on_disk.contains(&key) {
+                    self.updated.push(id.clone());
+                } else {
                     self.todo.push_back(id.clone());
                 }
                 self.keys.insert(id, key);
@@ -305,7 +326,6 @@ impl ThumbCache {
     }
 
     /// Stores the Preview's next frame as an item's thumbnail.
-    #[expect(dead_code, reason = "the Sources grid (add-library-browser task group 3) uses it")]
     pub fn use_preview(&mut self, engine: &mut Engine, id: &str) {
         if self.dir.is_none() {
             return;
@@ -349,6 +369,194 @@ impl ThumbCache {
     }
 }
 
+// ---------------------------------------------------------------- the browser's view
+
+/// Kind filter choices in the Sources tab, in chip order (`kind` index 0 = all).
+pub const SOURCE_KINDS: [(&str, Option<Kind>); 4] = [
+    ("All kinds", None),
+    ("Generators", Some(Kind::Generator)),
+    ("MilkDrop", Some(Kind::MilkDrop)),
+    ("Presets", Some(Kind::Preset)),
+];
+
+/// Intensity filter choices (`intensity` index 0 = any).
+const INTENSITY_RANGES: [Option<(u8, u8)>; 4] = [None, Some((0, 1)), Some((2, 3)), Some((4, 5))];
+
+/// Decoded thumbnails kept in memory, at most.
+const IMAGE_CACHE: usize = 600;
+
+/// What the Sources or Effects grid shows, and the thumbnails it has decoded.
+pub struct LibraryView {
+    /// The view chip (My library, Favorites, …) and the filters.
+    pub filter: openvj_core::library::Filter,
+    /// Index into [`SOURCE_KINDS`].
+    pub kind: usize,
+    /// Index into the intensity choices.
+    pub intensity: usize,
+    /// Showing effects (the Effects tab) rather than sources.
+    pub effects: bool,
+    /// Item ids in grid order.
+    pub shown: Vec<String>,
+    /// Ids of tiles whose row has been on screen since the list last changed.
+    pub seen: HashSet<String>,
+    /// The views behind the chips shown, in order.
+    pub chips: Vec<openvj_core::library::View>,
+    pub selected: Option<String>,
+    /// Decoded thumbnails by file, most recently used last.
+    images: HashMap<PathBuf, slint::Image>,
+    order: VecDeque<PathBuf>,
+    decoding: HashSet<PathBuf>,
+    decode_tx: mpsc::Sender<PathBuf>,
+    decoded_rx: mpsc::Receiver<(PathBuf, Option<slint::SharedPixelBuffer<slint::Rgb8Pixel>>)>,
+}
+
+impl Default for LibraryView {
+    fn default() -> Self {
+        let (decode_tx, jobs) = mpsc::channel::<PathBuf>();
+        let (done, decoded_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("thumbnail decoder".into())
+            .spawn(move || {
+                for path in jobs {
+                    let img = image::open(&path).ok().map(|i| {
+                        let rgb = i.to_rgb8();
+                        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(
+                            rgb.as_raw(),
+                            rgb.width(),
+                            rgb.height(),
+                        )
+                    });
+                    if done.send((path, img)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn thumbnail decoder");
+        Self {
+            filter: Default::default(),
+            kind: 0,
+            intensity: 0,
+            effects: false,
+            shown: Vec::new(),
+            seen: HashSet::new(),
+            chips: Vec::new(),
+            selected: None,
+            images: HashMap::new(),
+            order: VecDeque::new(),
+            decoding: HashSet::new(),
+            decode_tx,
+            decoded_rx,
+        }
+    }
+}
+
+impl LibraryView {
+    /// The filter for the current tab and choices.
+    pub fn query_filter(&self) -> openvj_core::library::Filter {
+        let mut f = self.filter.clone();
+        f.kinds = if self.effects {
+            vec![Kind::Effect]
+        } else {
+            match SOURCE_KINDS.get(self.kind).and_then(|k| k.1) {
+                Some(k) => vec![k],
+                None => vec![Kind::Generator, Kind::MilkDrop, Kind::Preset],
+            }
+        };
+        f.intensity = INTENSITY_RANGES.get(self.intensity).copied().flatten();
+        if self.effects {
+            f.audio_reactive = false;
+        }
+        f
+    }
+
+    /// The decoded thumbnail of a file, if it is in memory.
+    pub fn image(&mut self, path: &Path) -> Option<slint::Image> {
+        let img = self.images.get(path)?.clone();
+        if let Some(i) = self.order.iter().position(|p| p == path) {
+            let p = self.order.remove(i).expect("found");
+            self.order.push_back(p);
+        }
+        Some(img)
+    }
+
+    /// Asks the decoder thread for a file's thumbnail.
+    pub fn want_image(&mut self, path: PathBuf) {
+        if !self.images.contains_key(&path) && self.decoding.insert(path.clone()) {
+            let _ = self.decode_tx.send(path);
+        }
+    }
+
+    /// Forgets a file's decoded thumbnail (it was replaced on disk).
+    pub fn forget_image(&mut self, path: &Path) {
+        self.images.remove(path);
+        self.order.retain(|p| p != path);
+    }
+
+    /// Files decoded since the last call.
+    pub fn take_decoded(&mut self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        while let Ok((path, buf)) = self.decoded_rx.try_recv() {
+            self.decoding.remove(&path);
+            let Some(buf) = buf else { continue };
+            self.images.insert(path.clone(), slint::Image::from_rgb8(buf));
+            self.order.push_back(path.clone());
+            while self.order.len() > IMAGE_CACHE {
+                if let Some(old) = self.order.pop_front() {
+                    self.images.remove(&old);
+                }
+            }
+            out.push(path);
+        }
+        out
+    }
+}
+
+/// The view chips: My library, Favorites, Recent, each crate, Discover, Unwanted.
+pub fn chip_views(lib: &Library) -> Vec<openvj_core::library::View> {
+    use openvj_core::library::View;
+    let mut v = vec![View::MyLibrary, View::Favorites, View::Recent];
+    v.extend(lib.crates().iter().cloned().map(View::Crate));
+    v.extend([View::Discover, View::Unwanted]);
+    v
+}
+
+/// A chip's label.
+pub fn chip_label(view: &openvj_core::library::View) -> String {
+    use openvj_core::library::View;
+    match view {
+        View::MyLibrary => "My library".into(),
+        View::Favorites => "★ Favorites".into(),
+        View::Recent => "Recent".into(),
+        View::Crate(name) => name.clone(),
+        View::Discover => "Discover".into(),
+        View::Unwanted => "Unwanted".into(),
+        View::All => "Everything".into(),
+    }
+}
+
+/// The badge on a tile.
+pub fn kind_badge(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Generator => "GEN",
+        Kind::Effect => "FX",
+        Kind::MilkDrop => "MD",
+        Kind::Preset => "PRE",
+    }
+}
+
+/// Numbers as the chips show them: 1,018.
+pub fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +574,40 @@ mod tests {
         assert_ne!(a, thumb_key("isf:a", Kind::Generator, Some(&f)));
         assert_eq!(a.len(), 16);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn view_filters_by_tab_kind_and_intensity() {
+        let mut view = LibraryView::default();
+        let f = view.query_filter();
+        assert_eq!(f.kinds, [Kind::Generator, Kind::MilkDrop, Kind::Preset]);
+        assert_eq!(f.intensity, None);
+        view.kind = 2;
+        view.intensity = 3;
+        let f = view.query_filter();
+        assert_eq!((f.kinds.as_slice(), f.intensity), ([Kind::MilkDrop].as_slice(), Some((4, 5))));
+        view.effects = true;
+        view.filter.audio_reactive = true;
+        let f = view.query_filter();
+        assert_eq!(f.kinds, [Kind::Effect]);
+        assert!(!f.audio_reactive, "effects have no audio-reactive filter");
+    }
+
+    #[test]
+    fn chips_list_crates_between_recent_and_discover() {
+        use openvj_core::library::View;
+        let mut lib = Library::default();
+        lib.add_crate("Peak hour");
+        let labels: Vec<String> = chip_views(&lib).iter().map(chip_label).collect();
+        assert_eq!(labels, ["My library", "★ Favorites", "Recent", "Peak hour", "Discover", "Unwanted"]);
+        assert_eq!(chip_views(&lib)[3], View::Crate("Peak hour".into()));
+    }
+
+    #[test]
+    fn thousands_separators() {
+        assert_eq!(thousands(7), "7");
+        assert_eq!(thousands(1018), "1,018");
+        assert_eq!(thousands(1234567), "1,234,567");
     }
 
     #[test]

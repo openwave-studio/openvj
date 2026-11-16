@@ -360,7 +360,13 @@ pub struct Engine {
     now: f64,
     /// Library thumbnails rendered a step per frame (see [`thumbnails`]).
     thumbnails: thumbnails::Thumbnails,
+    /// A clip outside the composition shown on the Preview (a library item being
+    /// auditioned), and when it started on the composition clock.
+    audition: Option<(Clip, Option<f64>)>,
 }
+
+/// The clip id to give an auditioned clip: far from any composition's and the Player's.
+pub const AUDITION_CLIP: ClipId = ClipId(u64::MAX - (1 << 40));
 
 /// Width of the spectrum texture (openvj-audio's `SPECTRUM_BINS`).
 pub const SPECTRUM_BINS: u32 = 256;
@@ -555,6 +561,7 @@ impl Engine {
             pcm: Vec::new(),
             pcm_rate: 48_000,
             thumbnails: Default::default(),
+            audition: None,
             pcm_gain: 1.0,
             frame_no: 0,
             now: 0.0,
@@ -634,6 +641,18 @@ impl Engine {
 
     pub fn preview(&self) -> &Target {
         &self.targets.preview
+    }
+
+    /// Shows a clip that isn't in the composition on the Preview, from its start, instead of
+    /// the selected clip; `None` gives the Preview back. The clip's id must not be one the
+    /// composition uses (see [`AUDITION_CLIP`]).
+    pub fn audition(&mut self, clip: Option<Clip>) {
+        self.audition = clip.map(|c| (c, None));
+    }
+
+    /// Whether a clip is being auditioned on the Preview.
+    pub fn auditioning(&self) -> bool {
+        self.audition.is_some()
     }
 
     /// Live thumbnail for a generator or live input clip, created on first use.
@@ -1225,6 +1244,8 @@ impl Engine {
     }
 
     pub fn render(&mut self, comp: &Composition, now: f64, inputs: &ModInputs, preview: Option<ClipId>) {
+        // An auditioned library item takes the Preview from the selected clip.
+        let preview = if self.audition.is_some() { None } else { preview };
         let thumbs_before = self.thumbs.len();
         for clip in comp.all_clips() {
             if clip.source.is_generator() || clip.source.is_live() {
@@ -1304,7 +1325,13 @@ impl Engine {
         }
         // A clip that is on screen was copied into the preview, with its effects, as it was
         // drawn. Any other previewed clip is drawn here, through its own effects.
-        if !self.previewed {
+        if let Some((clip, started)) = self.audition.take() {
+            let started = started.unwrap_or(now);
+            let time = (now - started).max(0.0) * clip.speed as f64;
+            self.draw_clip(&mut passes, &t, &clip, time, &t.clip_a, now, inputs, None, 1);
+            passes.push(Self::blend_pass(&t.preview, &t.clip_a, &t.clip_a, MODE_MIX, 0.0));
+            self.audition = Some((clip, Some(started)));
+        } else if !self.previewed {
             match preview.and_then(|id| comp.find_clip(id)).and_then(|(l, c)| comp.clip(l, c)) {
                 Some(clip) => {
                     let time = clip_time(comp, clip, now, inputs.beat);
@@ -1330,8 +1357,10 @@ impl Engine {
         self.fx_state.retain(|uid, _| seen.contains(uid));
         // MilkDrop engines live as long as their clip plays a preset.
         let job = self.thumbnails.job_clip();
+        let audition = self.audition.as_ref().map(|(c, _)| c.id);
         self.milk.retain(|id, _| {
             Some(*id) == job
+                || Some(*id) == audition
                 || comp
                     .find_clip(*id)
                     .and_then(|(l, c)| comp.clip(l, c))

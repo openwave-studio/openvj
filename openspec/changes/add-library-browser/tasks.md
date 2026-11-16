@@ -12,15 +12,15 @@
 
 - [x] 2.1 Background renderer at 256×144, one per frame at most, paused when over frame budget
 - [x] 2.2 Disk cache keyed by content hash; effects on a built-in test image
-- [ ] 2.3 "Use Preview frame as thumbnail" (engine and cache done; the menu item comes with the grid in 3.4)
+- [x] 2.3 "Use Preview frame as thumbnail" (button in the grid's selection bar)
 
 ## 3. Sources and Effects grids (own PR)
 
-- [ ] 3.1 Tile and chip controls in openDJ style (theme tokens only)
-- [ ] 3.2 Grid with size control and list view; My library default; chips, kind, intensity and audio-reactive filters; MilkDrop tab folded into Kind
-- [ ] 3.3 Type-anywhere search
-- [ ] 3.4 Click → Preview; double-click, drag, Enter → slot; keys 0–5, F, X
-- [ ] 3.5 Effects tab on the same grid
+- [x] 3.1 Tile and chip controls in openDJ style (theme tokens only)
+- [x] 3.2 Grid with size control and list view; My library default; chips, kind, intensity and audio-reactive filters; MilkDrop tab folded into Kind
+- [x] 3.3 Type-anywhere search
+- [x] 3.4 Click → Preview; double-click, Enter (or click a slot after) → slot; keys 0–5, F, X, K. Dragging onto a slot waits for drag and drop in Slint
+- [x] 3.5 Effects tab on the same grid
 
 ## 4. Expanded library (own PR)
 

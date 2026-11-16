@@ -14,9 +14,9 @@ use openvj_audio::{Analyzer, AudioInput};
 use openvj_core::milkdrop::milk_library;
 use openvj_core::{
     AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve,
-    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage,
-    ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle,
-    apply_midi, library, move_effect,
+    CrossfadeSide, DEFAULT_CLIP_SECS, Effect, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage, ModInputs, ModSource,
+    Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle, apply_midi, library,
+    move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
 use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
@@ -31,8 +31,8 @@ use crate::midi::{self, MidiPorts};
 use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
-    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, MainWindow, MappingWindow,
-    ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
+    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, Lib, LibChip, LibTile, MainWindow,
+    MappingWindow, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
 };
 
 // The output mapping window's side of the app.
@@ -97,11 +97,8 @@ enum Media {
 /// What the user picked in the browser and will place with the next slot click.
 #[derive(Clone, PartialEq)]
 enum Armed {
-    Generator(usize),
-    /// An ISF generator, by id.
-    Isf(String),
-    /// A MilkDrop preset, by id.
-    Milk(String),
+    /// A library item (generator, MilkDrop preset or saved preset), by library id.
+    Library(String),
     File(PathBuf),
     Input(ClipSource),
 }
@@ -241,8 +238,16 @@ pub struct App {
     cell_models: Vec<Rc<VecModel<CellData>>>,
     columns_model: Rc<VecModel<ColumnData>>,
     decks_model: Rc<VecModel<DeckData>>,
-    generators_model: Rc<VecModel<BrowserItem>>,
-    milk_model: Rc<VecModel<BrowserItem>>,
+    lib_tiles: Rc<VecModel<LibTile>>,
+    lib_chips: Rc<VecModel<LibChip>>,
+    /// The library grid needs building again (items, filters or statuses changed).
+    library_dirty: bool,
+    /// The search box should take the keyboard.
+    lib_focus_search: bool,
+    /// The keyboard should go back to the window's shortcuts.
+    lib_release_keys: bool,
+    /// The browser tab showing (0 Sources, 1 Files, 2 Effects).
+    browser_tab: i32,
     inputs_model: Rc<VecModel<BrowserItem>>,
     files_model: Rc<VecModel<BrowserItem>>,
     bands_model: Rc<VecModel<f32>>,
@@ -263,7 +268,6 @@ pub struct App {
     /// [`EffectLibrary::generation`] the Effects tab shows.
     effects_generation: Option<u64>,
     /// Ids of the ISF generators in the Sources tab, after the built-ins, in row order.
-    isf_generators: Vec<String>,
     /// [`MilkLibrary::generation`](openvj_core::milkdrop::MilkLibrary) the MilkDrop tab shows.
     milk_generation: Option<u64>,
     browser_dirty: bool,
@@ -341,8 +345,12 @@ impl App {
             cell_models: Vec::new(),
             columns_model: Rc::new(VecModel::default()),
             decks_model: Rc::new(VecModel::default()),
-            generators_model: Rc::new(VecModel::default()),
-            milk_model: Rc::new(VecModel::default()),
+            lib_tiles: Rc::new(VecModel::default()),
+            lib_chips: Rc::new(VecModel::default()),
+            library_dirty: true,
+            lib_focus_search: false,
+            lib_release_keys: false,
+            browser_tab: 0,
             inputs_model: Rc::new(VecModel::default()),
             files_model: Rc::new(VecModel::default()),
             bands_model: Rc::new(VecModel::from(vec![0.0; BAND_COUNT])),
@@ -360,7 +368,6 @@ impl App {
             grid_dirty: true,
             props_dirty: true,
             effects_generation: None,
-            isf_generators: Vec::new(),
             milk_generation: None,
             browser_dirty: true,
             images_dirty: true,
@@ -381,8 +388,11 @@ impl App {
         ui.set_layers(ModelRc::from(self.layers_model.clone()));
         ui.set_columns(ModelRc::from(self.columns_model.clone()));
         ui.set_decks(ModelRc::from(self.decks_model.clone()));
-        ui.set_generators(ModelRc::from(self.generators_model.clone()));
-        ui.set_milk_presets(ModelRc::from(self.milk_model.clone()));
+        let lib = ui.global::<Lib>();
+        lib.set_tiles(ModelRc::from(self.lib_tiles.clone()));
+        lib.set_chips(ModelRc::from(self.lib_chips.clone()));
+        let kinds: Vec<SharedString> = crate::library::SOURCE_KINDS.iter().map(|k| k.0.into()).collect();
+        lib.set_kind_names(ModelRc::new(VecModel::from(kinds)));
         ui.set_inputs(ModelRc::from(self.inputs_model.clone()));
         ui.set_files(ModelRc::from(self.files_model.clone()));
         let modes: Vec<SharedString> = BlendMode::ALL.iter().map(|m| m.name().into()).collect();
@@ -910,6 +920,17 @@ impl App {
             self.browser_dirty = false;
             self.sync_browser(ui);
         }
+        if self.library_dirty {
+            self.library_dirty = false;
+            self.sync_library(ui);
+        }
+        if std::mem::take(&mut self.lib_focus_search) {
+            let lib = ui.global::<Lib>();
+            lib.set_focus_search(lib.get_focus_search() + 1);
+        }
+        if std::mem::take(&mut self.lib_release_keys) {
+            ui.invoke_focus_keys();
+        }
         self.sync_params(ui);
         if let Some(tab) = self.tab_request.take() {
             ui.set_props_tab(tab);
@@ -1313,9 +1334,7 @@ impl App {
         };
         ui.set_status(status.into());
         let armed = self.armed.as_ref().map(|a| match a {
-            Armed::Generator(i) => GeneratorKind::ALL[*i].name().to_owned(),
-            Armed::Isf(id) => library().generator(id).map_or_else(|| id.clone(), |t| t.name().to_owned()),
-            Armed::Milk(id) => ClipSource::Milkdrop { preset: id.clone() }.default_name(),
+            Armed::Library(id) => self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone()),
             Armed::File(p) => p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
             Armed::Input(source) => source.live_name().unwrap_or_default(),
         });
@@ -1324,44 +1343,6 @@ impl App {
     }
 
     fn sync_browser(&mut self, ui: &MainWindow) {
-        let mut gens: Vec<BrowserItem> = GeneratorKind::ALL
-            .iter()
-            .enumerate()
-            .map(|(i, k)| BrowserItem {
-                name: k.name().into(),
-                detail: k.description().into(),
-                kind: "gen".into(),
-                armed: self.armed == Some(Armed::Generator(i)),
-            })
-            .collect();
-        // ISF generators after the built-ins, by category, then name.
-        let lib = library();
-        let mut isf: Vec<_> = lib.generators().iter().collect();
-        let category = |t: &openvj_core::EffectType| t.def.categories.first().cloned().unwrap_or_default();
-        isf.sort_by_cached_key(|t| (category(t).to_lowercase(), t.name().to_lowercase()));
-        self.isf_generators = isf.iter().map(|t| t.id().to_owned()).collect();
-        gens.extend(isf.iter().map(|t| BrowserItem {
-            name: t.name().into(),
-            detail: match category(t) {
-                c if c.is_empty() => "ISF generator".into(),
-                c => format!("ISF · {c}").into(),
-            },
-            kind: "gen".into(),
-            armed: self.armed.as_ref() == Some(&Armed::Isf(t.id().to_owned())),
-        }));
-        update_model(&self.generators_model, gens);
-        let milk = milk_library();
-        let presets: Vec<BrowserItem> = milk
-            .presets()
-            .iter()
-            .map(|p| BrowserItem {
-                name: p.name.as_str().into(),
-                detail: p.category.as_str().into(),
-                kind: "gen".into(),
-                armed: matches!(&self.armed, Some(Armed::Milk(id)) if *id == p.id),
-            })
-            .collect();
-        update_model(&self.milk_model, presets);
         let inputs: Vec<BrowserItem> = self
             .input_sources()
             .into_iter()
@@ -1399,10 +1380,15 @@ impl App {
     // ---------------------------------------------------------------- grid actions
 
     pub fn cell_clicked(&mut self, layer: usize, col: usize) {
+        self.stop_audition();
         if let Some(armed) = self.armed.take() {
-            let source = self.armed_source(&armed);
             self.browser_dirty = true;
-            if let Some(source) = source {
+            self.library_dirty = true;
+            if let Armed::Library(id) = &armed {
+                self.place_library(layer, col, &id.clone());
+                return;
+            }
+            if let Some(source) = self.armed_source(&armed) {
                 self.place(layer, col, source);
             }
             return;
@@ -1420,6 +1406,7 @@ impl App {
     }
 
     pub fn cell_right_clicked(&mut self, layer: usize, col: usize) {
+        self.stop_audition();
         self.tab_request = Some(2);
         self.selected = Some((layer, col));
         self.selected_layer = layer;
@@ -1697,9 +1684,7 @@ impl App {
 
     fn armed_source(&self, armed: &Armed) -> Option<ClipSource> {
         match armed {
-            Armed::Generator(i) => GeneratorKind::ALL.get(*i).map(|k| ClipSource::Generator { kind: *k }),
-            Armed::Isf(id) => Some(ClipSource::isf(id)),
-            Armed::Milk(id) => Some(ClipSource::Milkdrop { preset: id.clone() }),
+            Armed::Library(id) => self.library_clip(id).map(|c| c.source),
             Armed::File(p) => ClipSource::from_path(p),
             Armed::Input(source) => Some(source.clone()),
         }
@@ -1753,38 +1738,6 @@ impl App {
         match target {
             Some((l, c)) => self.place(l, c, source),
             None => self.set_status("Select a slot first (right-click a cell)"),
-        }
-    }
-
-    /// The browser's generator row `i`: the built-ins, then ISF generators.
-    fn generator_row(&self, i: usize) -> Option<Armed> {
-        match i.checked_sub(GeneratorKind::ALL.len()) {
-            None => Some(Armed::Generator(i)),
-            Some(j) => self.isf_generators.get(j).cloned().map(Armed::Isf),
-        }
-    }
-
-    pub fn generator_clicked(&mut self, i: usize) {
-        if let Some(armed) = self.generator_row(i) {
-            self.arm(armed);
-        }
-    }
-
-    pub fn milk_clicked(&mut self, i: usize) {
-        if let Some(p) = milk_library().presets().get(i) {
-            self.arm(Armed::Milk(p.id.clone()));
-        }
-    }
-
-    pub fn milk_double_clicked(&mut self, i: usize) {
-        if let Some(p) = milk_library().presets().get(i) {
-            self.place_in_selection(ClipSource::Milkdrop { preset: p.id.clone() });
-        }
-    }
-
-    pub fn generator_double_clicked(&mut self, i: usize) {
-        if let Some(source) = self.generator_row(i).and_then(|a| self.armed_source(&a)) {
-            self.place_in_selection(source);
         }
     }
 
@@ -2167,30 +2120,11 @@ impl App {
         }
         let first = self.effects_generation.is_none();
         self.effects_generation = Some(lib.generation);
-        let mut items: Vec<BrowserItem> = lib
-            .all()
-            .iter()
-            .map(|k| BrowserItem {
-                name: k.name().into(),
-                detail: k.def.description.as_str().into(),
-                kind: "fx".into(),
-                armed: false,
-            })
-            .collect();
-        // Broken files come last, so a row index is still an index into `lib.all()`.
-        items.extend(lib.errors.iter().map(|e| BrowserItem {
-            name: e.name.as_str().into(),
-            detail: e.message.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim().into(),
-            kind: "fx-error".into(),
-            armed: false,
-        }));
-        ui.set_effects(ModelRc::new(VecModel::from(items)));
         let folder = openvj_core::effect_folders::user_dir()
             .map(|d| browser::short_path(&d, 60))
             .unwrap_or_else(|| "the openVJ effects folder".into());
         ui.set_effects_hint(format!("Drop ISF effects (.fs) into {folder}").into());
-        // Cards show effect names and parameters, and the Sources tab lists ISF generators,
-        // which a reload can change.
+        // Cards show effect names and parameters, which a reload can change.
         self.props_dirty = true;
         self.browser_dirty = true;
         if !first && lib.generation > 1 {
@@ -2209,10 +2143,26 @@ impl App {
         self.frame_time += (dt - self.frame_time) * 0.1;
         if self.library.refresh() {
             self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+            self.library_dirty = true;
         }
         let over_budget = self.frame_time > crate::library::THUMB_FRAME_BUDGET.as_secs_f32();
         self.library.thumbs.pump(&mut self.engine, over_budget);
         self.library.save_if_due();
+        for id in self.library.thumbs.take_updated() {
+            if let Some(path) = self.library.thumbs.path(&id) {
+                self.library.view.forget_image(&path);
+                if self.library.view.seen.contains(&id) {
+                    self.library.view.want_image(path);
+                }
+            }
+        }
+        let decoded = self.library.view.take_decoded();
+        if !decoded.is_empty() {
+            self.set_tile_images(&decoded);
+        }
+        if self.library.thumbs.pending() > 0 && self.frames == 0 {
+            self.library_dirty = true; // the count shows thumbnails left
+        }
     }
 
     /// Shows a finished Shadertoy import in the dialog and the status bar.
@@ -2280,9 +2230,9 @@ impl App {
         }
     }
 
-    pub fn effect_add(&mut self, scope: i32, kind: usize) {
+    pub fn effect_add(&mut self, scope: i32, kind: &str) {
         let lib = library();
-        let Some(kind) = lib.all().get(kind) else { return };
+        let Some(kind) = lib.get(kind) else { return };
         let layer = self.comp.layers.get(self.selected_layer);
         let target = match scope {
             scope::COMP_FX => "the composition".to_owned(),
@@ -2302,6 +2252,408 @@ impl App {
         });
         self.grid_dirty = true;
         self.set_status(format!("Added {} to {target}", kind.name()));
+        let id = openvj_core::library::isf_id(kind.id());
+        self.library.lib.record_use(&id, unix_now());
+        self.library.changed();
+    }
+
+    // ---------------------------------------------------------------- library
+
+    /// A library item as a clip, with its saved settings for presets.
+    fn library_clip(&self, id: &str) -> Option<Clip> {
+        crate::library::item_clip(self.library.lib.get(id)?)
+    }
+
+    /// Puts a library item in a slot, with a preset's parameters, mappings and effects.
+    fn place_library(&mut self, layer: usize, col: usize, id: &str) {
+        let Some(clip) = self.library_clip(id) else { return };
+        self.place(layer, col, clip.source.clone());
+        if let Some(placed) = self.comp.clip_mut(layer, col) {
+            let id = placed.id;
+            *placed = Clip { id, ..clip };
+        }
+        self.library.lib.record_use(id, unix_now());
+        self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+        self.library.changed();
+        self.library_dirty = true;
+    }
+
+    /// Places a library item in the selected slot, or the first empty one of the layer.
+    fn place_library_in_selection(&mut self, id: &str) {
+        let target = self.selected.or_else(|| {
+            let layer = self.comp.layers.get(self.selected_layer)?;
+            layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
+        });
+        self.armed = None;
+        self.browser_dirty = true;
+        match target {
+            Some((l, c)) => {
+                self.place_library(l, c, id);
+                self.stop_audition();
+            }
+            None => self.set_status("Select a slot first (right-click a cell)"),
+        }
+    }
+
+    fn stop_audition(&mut self) {
+        if self.engine.auditioning() {
+            self.engine.audition(None);
+            self.props_dirty = true; // the Preview label goes back to the selected clip
+        }
+    }
+
+    /// Shows a library item on the Preview only: a source on its own, an effect on the
+    /// selected clip (or on the test pattern when no clip is selected).
+    fn audition_library(&mut self, id: &str) {
+        let Some(item) = self.library.lib.get(id) else { return };
+        let clip = if item.kind == openvj_core::library::Kind::Effect {
+            let base = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).cloned();
+            let mut clip = base.or_else(crate::library::test_pattern_clip).expect("test pattern");
+            clip.effects.push(Effect::new(id.trim_start_matches("isf:")));
+            Some(clip)
+        } else {
+            self.library_clip(id)
+        };
+        if let Some(mut clip) = clip {
+            clip.id = openvj_render::AUDITION_CLIP;
+            self.engine.audition(Some(clip));
+        }
+    }
+
+    /// The id of grid tile `i`.
+    fn lib_id(&self, i: i32) -> Option<String> {
+        self.library.view.shown.get(usize::try_from(i).ok()?).cloned()
+    }
+
+    pub fn lib_tile_clicked(&mut self, i: i32) {
+        let Some(id) = self.lib_id(i) else { return };
+        self.audition_library(&id);
+        if !self.library.view.effects {
+            self.armed = Some(Armed::Library(id.clone()));
+            self.props_dirty = true;
+        }
+        self.library.view.selected = Some(id);
+        self.library_dirty = true;
+    }
+
+    pub fn lib_tile_double_clicked(&mut self, i: i32) {
+        let Some(id) = self.lib_id(i) else { return };
+        self.library.view.selected = Some(id.clone());
+        self.lib_place();
+    }
+
+    /// Enter or the Put in button: the selected item into the selected slot, or an effect
+    /// onto the selected layer.
+    pub fn lib_place(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        if self.library.view.effects {
+            self.lib_effect_add(scope::LAYER_FX);
+        } else {
+            self.place_library_in_selection(&id);
+        }
+        self.library_dirty = true;
+    }
+
+    /// Adds the selected effect: `to` is 0 clip, 1 layer, 2 group, 3 composition.
+    pub fn lib_effect_add(&mut self, to: i32) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        let scope = match to {
+            0 => scope::CLIP_FX,
+            2 => scope::GROUP_FX,
+            3 => scope::COMP_FX,
+            _ => scope::LAYER_FX,
+        };
+        self.stop_audition();
+        self.effect_add(scope, id.trim_start_matches("isf:"));
+    }
+
+    pub fn lib_chip_clicked(&mut self, i: i32) {
+        if let Some(v) = usize::try_from(i).ok().and_then(|i| self.library.view.chips.get(i)) {
+            self.library.view.filter.view = v.clone();
+            self.library_dirty = true;
+        }
+    }
+
+    /// The search box or a filter chip changed, or the browser switched tabs.
+    pub fn lib_filters_changed(&mut self, search: &str, kind: i32, intensity: i32, reactive: bool, tab: i32) {
+        let view = &mut self.library.view;
+        view.filter.search = search.to_owned();
+        view.kind = kind.max(0) as usize;
+        view.intensity = intensity.max(0) as usize;
+        view.filter.audio_reactive = reactive;
+        let effects = tab == 2;
+        if effects != view.effects {
+            view.effects = effects;
+            view.selected = None;
+            self.stop_audition();
+        }
+        self.browser_tab = tab;
+        self.library_dirty = true;
+    }
+
+    /// Thumbnails of tiles `first..last` are wanted (their row came into view).
+    pub fn lib_rows_shown(&mut self, first: i32, last: i32) {
+        let (first, last) = (first.max(0) as usize, last.max(0) as usize);
+        let ids: Vec<String> =
+            self.library.view.shown.iter().skip(first).take(last.saturating_sub(first)).cloned().collect();
+        for id in ids {
+            if let Some(path) = self.library.thumbs.path(&id) {
+                self.library.view.want_image(path);
+            }
+            self.library.view.seen.insert(id);
+        }
+    }
+
+    fn lib_edit(&mut self, f: impl FnOnce(&mut openvj_core::library::Library, &str)) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        f(&mut self.library.lib, &id);
+        self.library.changed();
+        self.library_dirty = true;
+    }
+
+    pub fn lib_set_intensity(&mut self, n: i32) {
+        self.lib_edit(|lib, id| {
+            let now = lib.entry(id).intensity;
+            let n = u8::try_from(n).ok();
+            // Pressing the same number again clears it.
+            lib.set_intensity(id, if now == n { None } else { n });
+        });
+    }
+
+    pub fn lib_toggle_favorite(&mut self) {
+        self.lib_edit(|lib, id| lib.toggle_favorite(id));
+    }
+
+    pub fn lib_set_kept(&mut self, kept: bool) {
+        use openvj_core::library::Status;
+        self.lib_edit(|lib, id| lib.set_status(id, if kept { Status::Kept } else { Status::NotReviewed }));
+    }
+
+    pub fn lib_set_unwanted(&mut self, unwanted: bool) {
+        use openvj_core::library::Status;
+        self.lib_edit(|lib, id| lib.set_status(id, if unwanted { Status::Unwanted } else { Status::Kept }));
+        if unwanted {
+            let name =
+                self.library.view.selected.as_deref().and_then(|id| self.library.lib.get(id)).map(|i| i.name.clone());
+            self.set_status(format!("{} moved to Unwanted (restore it from there)", name.unwrap_or_default()));
+        }
+    }
+
+    pub fn lib_use_preview_thumbnail(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        self.library.thumbs.use_preview(&mut self.engine, &id);
+        self.set_status("Thumbnail set from the Preview");
+    }
+
+    /// Keys while the library grid has the keyboard. Returns whether it used the key.
+    pub fn lib_key(&mut self, text: &str) -> bool {
+        const LEFT: &str = "\u{f702}";
+        const RIGHT: &str = "\u{f703}";
+        match text {
+            "0" | "1" | "2" | "3" | "4" | "5" if self.library.view.selected.is_some() => {
+                self.lib_set_intensity(text.parse().unwrap_or(0));
+                true
+            }
+            "f" | "F" if self.library.view.selected.is_some() => {
+                self.lib_toggle_favorite();
+                true
+            }
+            "x" | "X" if self.library.view.selected.is_some() => {
+                let unwanted = self
+                    .library
+                    .view
+                    .selected
+                    .as_deref()
+                    .is_some_and(|id| self.library.lib.status(id) == openvj_core::library::Status::Unwanted);
+                self.lib_set_unwanted(!unwanted);
+                true
+            }
+            "k" | "K" if self.library.view.selected.is_some() => {
+                self.lib_set_kept(true);
+                true
+            }
+            "\n" | "\r" => {
+                self.lib_place();
+                true
+            }
+            LEFT | RIGHT => {
+                let shown = &self.library.view.shown;
+                let at = self.library.view.selected.as_ref().and_then(|id| shown.iter().position(|s| s == id));
+                let next = match (at, text == RIGHT) {
+                    (None, _) => 0,
+                    (Some(i), true) => (i + 1).min(shown.len().saturating_sub(1)),
+                    (Some(i), false) => i.saturating_sub(1),
+                };
+                if !shown.is_empty() {
+                    self.lib_tile_clicked(next as i32);
+                }
+                true
+            }
+            "\u{1b}" => {
+                self.library_done();
+                true
+            }
+            _ => self.lib_type(text),
+        }
+    }
+
+    /// Esc in the grid: clears the selection and gives the keyboard back.
+    pub fn library_done(&mut self) {
+        self.library.view.selected = None;
+        if matches!(self.armed, Some(Armed::Library(_))) {
+            self.armed = None;
+            self.props_dirty = true;
+        }
+        self.stop_audition();
+        self.library_dirty = true;
+        self.lib_release_keys = true;
+    }
+
+    /// Typing a letter anywhere starts a search in the Sources or Effects tab.
+    fn lib_type(&mut self, text: &str) -> bool {
+        let mut chars = text.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else { return false };
+        let printable = !c.is_control() && !('\u{e000}'..='\u{f8ff}').contains(&c);
+        if !printable || !matches!(self.browser_tab, 0 | 2) || c == ' ' {
+            return false;
+        }
+        self.library.view.filter.search.push(c);
+        self.lib_focus_search = true;
+        self.library_dirty = true;
+        true
+    }
+
+    /// Puts newly decoded thumbnails into the tiles that show them.
+    fn set_tile_images(&mut self, paths: &[PathBuf]) {
+        let view = &self.library.view;
+        let rows: Vec<(usize, PathBuf)> = view
+            .shown
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| Some((i, self.library.thumbs.path(id)?)))
+            .filter(|(_, p)| paths.contains(p))
+            .collect();
+        for (i, path) in rows {
+            let Some(img) = self.library.view.image(&path) else { continue };
+            if let Some(mut tile) = self.lib_tiles.row_data(i) {
+                tile.thumb = img;
+                tile.has_thumb = true;
+                self.lib_tiles.set_row_data(i, tile);
+            }
+        }
+    }
+
+    fn sync_library(&mut self, ui: &MainWindow) {
+        use crate::library::{chip_label, chip_views, kind_badge, thousands};
+        use openvj_core::library::{Filter, Status, View};
+        let g = ui.global::<Lib>();
+        let filter = self.library.view.query_filter();
+        let rows: Vec<(String, openvj_core::library::Item)> =
+            self.library.lib.query(&filter).into_iter().map(|i| (i.id.clone(), i.clone())).collect();
+        let armed = match &self.armed {
+            Some(Armed::Library(id)) => Some(id.clone()),
+            _ => None,
+        };
+        let selected = self.library.view.selected.clone();
+        let mut tiles = Vec::with_capacity(rows.len());
+        for (id, item) in &rows {
+            let entry = self.library.lib.entry(id);
+            let path = self.library.thumbs.path(id);
+            let thumb = path.as_deref().and_then(|p| self.library.view.image(p));
+            tiles.push(LibTile {
+                name: item.name.as_str().into(),
+                detail: if item.pack.is_empty() { item.kind.name().into() } else { item.pack.as_str().into() },
+                kind: kind_badge(item.kind).into(),
+                has_thumb: thumb.is_some(),
+                thumb: thumb.unwrap_or_default(),
+                intensity: entry.intensity.map_or(-1, i32::from),
+                favorite: entry.favorite,
+                reactive: item.audio_reactive,
+                selected: selected.as_deref() == Some(id.as_str()),
+                armed: armed.as_deref() == Some(id.as_str()),
+                unwanted: self.library.lib.status(id) == Status::Unwanted,
+            });
+        }
+        update_model(&self.lib_tiles, tiles);
+        let shown: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+        if shown != self.library.view.shown {
+            self.library.view.seen.clear();
+            self.library.view.shown = shown;
+        }
+
+        // Chips with their counts (of this tab's kinds, before search and filters).
+        let kinds = Filter { kinds: filter.kinds.clone(), ..Default::default() };
+        // Empty Favorites, Recent and Unwanted chips stay out of the way.
+        let current = self.library.view.filter.view.clone();
+        let mut views = Vec::new();
+        let chips: Vec<LibChip> = chip_views(&self.library.lib)
+            .into_iter()
+            .filter_map(|v| {
+                let n = self.library.lib.query(&Filter { view: v.clone(), ..kinds.clone() }).len();
+                let optional = matches!(v, View::Favorites | View::Recent | View::Unwanted);
+                if optional && n == 0 && v != current {
+                    return None;
+                }
+                let chip = LibChip {
+                    label: chip_label(&v).into(),
+                    count: if v == View::Discover { format!("{} new", thousands(n)) } else { thousands(n) }.into(),
+                    active: v == current,
+                };
+                views.push(v);
+                Some(chip)
+            })
+            .collect();
+        update_model(&self.lib_chips, chips);
+        self.library.view.chips = views;
+
+        let n = self.library.view.shown.len();
+        let pending = self.library.thumbs.pending();
+        let count = match pending {
+            0 => thousands(n),
+            p => format!("{} · {} rendering", thousands(n), thousands(p)),
+        };
+        g.set_count(count.into());
+        let what = if self.library.view.effects { "effects" } else { "sources" };
+        let hint = if !filter.search.is_empty() {
+            format!("Nothing matches \u{201c}{}\u{201d} here. Try Discover or another chip.", filter.search)
+        } else {
+            match &filter.view {
+                View::MyLibrary => {
+                    format!("No {what} kept yet. Open Discover to go through new ones, then press K to keep one.")
+                }
+                View::Discover => format!("No new {what} waiting. Drop files into the folders below to add more."),
+                View::Unwanted => "Nothing marked unwanted.".into(),
+                View::Favorites => "No favorites yet: select an item and press F.".into(),
+                View::Recent => "Nothing used yet.".into(),
+                _ => format!("No {what} here."),
+            }
+        };
+        g.set_empty_hint(hint.into());
+        g.set_search(filter.search.as_str().into());
+
+        let sel = selected.as_deref().and_then(|id| Some((id, self.library.lib.get(id)?.clone())));
+        g.set_selected(
+            sel.as_ref()
+                .and_then(|(id, _)| self.library.view.shown.iter().position(|s| s == id))
+                .map_or(-1, |i| i as i32),
+        );
+        if let Some((id, item)) = sel {
+            let entry = self.library.lib.entry(id);
+            let status = self.library.lib.status(id);
+            g.set_selected_name(item.name.as_str().into());
+            g.set_selected_intensity(entry.intensity.map_or(-1, i32::from));
+            g.set_selected_favorite(entry.favorite);
+            g.set_selected_unwanted(status == Status::Unwanted);
+            g.set_selected_kept(status == Status::Kept);
+            if self.engine.auditioning() {
+                ui.set_preview_label(format!("{} (not on output)", item.name).into());
+            }
+            let place = match self.selected {
+                Some((l, c)) => format!("Put in Layer {} · column {}", l + 1, c + 1),
+                None => "Put in slot".into(),
+            };
+            g.set_place_label(place.into());
+        }
     }
 
     pub fn effect_toggle(&mut self, scope: i32, i: usize) {
@@ -2334,8 +2686,11 @@ impl App {
     pub fn key(&mut self, text: &str) -> bool {
         match text {
             "\u{1b}" => {
-                if self.armed.take().is_some() {
+                if self.engine.auditioning() || self.armed.is_some() {
+                    self.stop_audition();
+                    self.armed = None;
                     self.browser_dirty = true;
+                    self.library_dirty = true;
                 } else if self.escape_at.take().is_some() {
                     self.clear_all();
                 } else {
@@ -2353,7 +2708,8 @@ impl App {
                     self.column_clicked(n - 1);
                     true
                 }
-                _ => false,
+                // Typing anywhere searches the library.
+                _ => self.lib_type(text),
             },
         }
     }
@@ -2727,4 +3083,9 @@ fn kind_tag(source: &ClipSource) -> &'static str {
         ClipSource::Syphon { .. } => "syphon",
         _ => "gen",
     }
+}
+
+/// Seconds since the Unix epoch, for the library's "last used".
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
