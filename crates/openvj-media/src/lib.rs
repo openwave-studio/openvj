@@ -527,10 +527,14 @@ mod tests {
         assert_eq!(media.video.unwrap().fps, 25.0);
 
         let mut dec = VideoDecoder::open(&path, 160, 160).unwrap();
+        // Wait until frame 2 (t = 0.1) itself is shown: on a slow machine the first call can
+        // hand out frame 0 while frames 1 and 2 are still being decoded.
         let mut got = None;
         for _ in 0..200 {
-            got = got.or(dec.frame_at(0.1).map(<[u8]>::to_vec));
-            if got.is_some() {
+            if let Some(f) = dec.frame_at(0.1) {
+                got = Some(f.to_vec());
+            }
+            if dec.shown == 2 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
