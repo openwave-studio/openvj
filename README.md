@@ -14,6 +14,8 @@ Linux and Windows have no download yet: [build from source](#building-from-sourc
 
 ## What works
 
+- **Layouts**: the menu at the top left switches the whole window between **Mixer** (the full mixing screen), **Player** and **Synthesis** (coming), as in openDJ. **Cmd+1/2/3** (Ctrl on Linux and Windows) switch too, and openVJ reopens in the last one. Switching never interrupts the output.
+- **Player**: an automix player in the style of openDJ's Automix. A playlist holds presets: a generator with its parameter values, audio mappings, Transform and effects, so the same generator can appear several times with different looks. Use **Add to playlist** in a clip's Clip tab (or **+ Add** in the Player) to capture the selected clip. **AUTOMIX** plays each preset for its own time (4 to 64 bars, following BPM and Link, or 15 to 60 seconds), then brings in the next with **LENGTH** (0 to 8 seconds, or 1 to 4 bars) and **STYLE** (Crossfade, Cut, Fade through black), with Shuffle and Repeat. The Player plays on its own, apart from the composition; launching a clip or column in Mixer takes the output back. Playlists save as `.ovjplaylist` files, to prepare them before a show. Videos and images can't go in a playlist yet.
 - **Decks**: tabs under the grid, like Resolume's. Each deck has its own columns and clips and shares the layers and effects. Switching decks doesn't stop what's playing. **+ Deck** adds one, double-click a tab to rename it, and × removes the open deck.
 - **Clip grid**: rows are layers, columns are clip slots. Click a clip to launch it. Click a column header (or press **1–9**) to launch the whole column; layers with an empty slot in that column are cleared.
 - **Layers**: opacity fader, 9 blend modes (Normal, Add, Screen, Multiply, Overlay, Difference, Lighten, Darken, Subtract), **B**ypass, **S**olo, clear (**X**), and a crossfade transition time per layer.
@@ -51,6 +53,7 @@ Linux and Windows have no download yet: [build from source](#building-from-sourc
 | `Del` / `Backspace` | Remove the selected clip |
 | `Esc` | Cancel a picked browser item; press twice quickly to clear all layers |
 | Double-click a fader | Reset it to 100% |
+| `Cmd`/`Ctrl` + `1`, `2`, `3` | Mixer, Player, Synthesis layout |
 
 ### Known limits
 

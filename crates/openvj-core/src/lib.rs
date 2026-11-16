@@ -14,6 +14,7 @@ pub mod milkdrop;
 mod modulation;
 mod output;
 mod playback;
+mod playlist;
 pub mod shadertoy;
 mod tempo;
 
@@ -24,4 +25,5 @@ pub use midi::*;
 pub use modulation::*;
 pub use output::*;
 pub use playback::*;
+pub use playlist::*;
 pub use tempo::*;
