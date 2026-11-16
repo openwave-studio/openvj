@@ -79,8 +79,16 @@ openVJ SHALL import a Shadertoy shader from its link or ID, using the VJ's own S
 - **THEN** its file is replaced with the new version
 
 #### Scenario: Unsupported channels
-- **WHEN** an imported shader reads a keyboard or cubemap channel
-- **THEN** the shader is still imported, those channels read black, and the dialog names them
+- **WHEN** an imported shader reads a cubemap channel
+- **THEN** the shader is still imported, that channel reads black, and the dialog names it
+
+#### Scenario: Texture channel
+- **WHEN** an imported shader reads one of Shadertoy's images, such as its noise textures
+- **THEN** openVJ downloads the image into a `textures` folder next to the shader, and the shader reads it the right way up, repeating at the edges when Shadertoy's channel repeats
+
+#### Scenario: Keyboard channel
+- **WHEN** an imported shader reads the keyboard
+- **THEN** it reads as no keys pressed
 
 #### Scenario: Audio-reactive Shadertoy shader
 - **GIVEN** an imported shader that reads a music channel

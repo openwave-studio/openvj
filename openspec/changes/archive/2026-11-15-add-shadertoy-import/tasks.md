@@ -20,3 +20,8 @@
 ## 4. Finish
 - [x] 4.1 README "What works" and THIRD_PARTY_NOTICES
 - [x] 4.2 `openspec archive add-shadertoy-import -y`, `openspec validate --all --strict`
+
+## 5. Texture channels (follow-up in the same PR)
+- [x] 5.1 ISF `IMPORTED` images in core and render, a repeat sampler, a blank texture for the keyboard and unsupported channels
+- [x] 5.2 Converter lists Shadertoy textures (wrap and flip); the import downloads them into `Shadertoy/textures/` before writing the shader
+- [x] 5.3 GPU test: an imported texture repeats and clamps as Shadertoy's channel says

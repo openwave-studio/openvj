@@ -3940,6 +3940,7 @@ name = "openvj-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
  "midir",
  "objc2 0.6.5",
  "objc2-metal 0.3.2",

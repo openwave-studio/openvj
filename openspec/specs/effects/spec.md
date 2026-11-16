@@ -148,3 +148,11 @@ A Shadertoy shader whose first channel is a video or webcam input SHALL import a
 #### Scenario: Shadertoy filter
 - **WHEN** the VJ imports a shader that distorts its webcam channel
 - **THEN** it is listed in the Effects tab and distorts the layer it is added to
+
+### Requirement: Imported images
+ISF files SHALL be able to read images listed under `IMPORTED`, PNG or JPEG, with paths relative to the file. An image that can't be read SHALL read transparent and be reported once.
+
+#### Scenario: Noise texture
+- **GIVEN** an ISF file whose header imports `textures/noise.png`
+- **WHEN** it plays
+- **THEN** it samples that image, and starts using it as soon as the file appears if it was missing

@@ -54,6 +54,11 @@ fn run(request: &Request, key: &str) -> Outcome {
     } else {
         shadertoy::from_image_code(&request.code, "", &request.link)
     };
+    let converted = converted.and_then(|mut c| {
+        let missing = download_textures(&c)?;
+        c.notes.extend(missing);
+        Ok(c)
+    });
     match converted.and_then(|c| save(&c).map(|p| (c, p))) {
         Ok((c, path)) => {
             let kind = if c.is_effect { "Effects" } else { "Sources" };
@@ -81,14 +86,8 @@ fn short(path: &std::path::Path) -> String {
 
 /// Asks the Shadertoy API for one shader's JSON.
 fn fetch(id: &str, key: &str) -> Result<String, String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(20)))
-        .user_agent("openVJ")
-        .http_status_as_error(false)
-        .build()
-        .new_agent();
     let mut response =
-        agent.get(&shadertoy::api_url(id, key)).call().map_err(|e| format!("Couldn't reach Shadertoy: {e}"))?;
+        agent().get(&shadertoy::api_url(id, key)).call().map_err(|e| format!("Couldn't reach Shadertoy: {e}"))?;
     let status = response.status();
     let body = response
         .body_mut()
@@ -100,6 +99,50 @@ fn fetch(id: &str, key: &str) -> Result<String, String> {
         return Err(format!("Shadertoy answered {status}. Try again later, or paste the code."));
     }
     Ok(body)
+}
+
+/// Downloads the images a shader reads into the import folder (before the shader itself, so
+/// it finds them when it loads). Images already there are kept. Returns notes for the ones
+/// that failed; the shader still imports and reads them as black.
+fn download_textures(c: &Converted) -> Result<Vec<String>, String> {
+    let dir = folder().ok_or("there's no home folder to save into")?;
+    let mut notes = Vec::new();
+    for t in &c.textures {
+        let path = dir.join(&t.path);
+        if path.is_file() {
+            continue;
+        }
+        if let Err(e) = download_texture(&t.url, &path, t.flip) {
+            notes.push(format!("couldn't download the texture {}: {e}", t.url));
+        }
+    }
+    Ok(notes)
+}
+
+fn download_texture(url: &str, path: &std::path::Path, flip: bool) -> Result<(), String> {
+    if !url.starts_with("https://www.shadertoy.com/media/") {
+        return Err("not a Shadertoy media link".into());
+    }
+    let mut response = agent().get(url).call().map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Shadertoy answered {}", response.status()));
+    }
+    let bytes = response.body_mut().with_config().limit(32 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let img = if flip { img.flipv() } else { img };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    img.save_with_format(path, image::ImageFormat::Png).map_err(|e| e.to_string())
+}
+
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("openVJ")
+        .http_status_as_error(false)
+        .build()
+        .new_agent()
 }
 
 /// The folder imports go to.

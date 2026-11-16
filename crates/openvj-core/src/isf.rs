@@ -39,6 +39,8 @@ pub struct EffectDef {
     pub hidden: bool,
     /// Where the shader came from (`OPENVJ.SOURCE`), such as its Shadertoy page.
     pub source: String,
+    /// Images the shader reads (ISF `IMPORTED`): GLSL name and path relative to the file.
+    pub imported: Vec<(String, String)>,
     /// The GLSL after the header.
     pub glsl: String,
 }
@@ -286,6 +288,7 @@ impl EffectDef {
             resolume,
             hidden: ovj.and_then(|o| o.get("HIDDEN")).and_then(Value::as_bool).unwrap_or(false),
             source: ovj.and_then(|o| o.get("SOURCE")).and_then(Value::as_str).unwrap_or_default().to_owned(),
+            imported: parse_imported(obj.get("IMPORTED")),
             glsl: glsl.to_owned(),
         })
     }
@@ -399,6 +402,18 @@ fn parse_input(v: &Value) -> Result<InputDef, String> {
             _ => None,
         },
     })
+}
+
+/// ISF `IMPORTED`: `{"name": {"PATH": "file.png"}}` (ISF 2) or `[{"NAME": …, "PATH": …}]` (ISF 1).
+fn parse_imported(v: Option<&Value>) -> Vec<(String, String)> {
+    let path = |e: &Value| e.get("PATH").and_then(Value::as_str).map(str::to_owned);
+    match v {
+        Some(Value::Object(m)) => m.iter().filter_map(|(k, e)| Some((k.clone(), path(e)?))).collect(),
+        Some(Value::Array(a)) => {
+            a.iter().filter_map(|e| Some((e.get("NAME").and_then(Value::as_str)?.to_owned(), path(e)?))).collect()
+        }
+        _ => vec![],
+    }
 }
 
 fn parse_pass(v: &Value) -> PassDef {

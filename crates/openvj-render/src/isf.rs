@@ -42,7 +42,8 @@ pub(crate) struct CompiledEffect {
     pub blocks: Vec<UniformBlock>,
     /// (binding, texture name).
     pub textures: Vec<(u32, String)>,
-    pub sampler: Option<u32>,
+    /// (binding, sampler name).
+    pub samplers: Vec<(u32, String)>,
 }
 
 /// Prefix of the int members standing in for bool inputs (bools can't live in uniform blocks).
@@ -89,6 +90,18 @@ pub(crate) fn glsl_source(def: &EffectDef) -> String {
     }
     if uses_word(&def.glsl, SHADERTOY_AUDIO) {
         s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {SHADERTOY_AUDIO};\n");
+        binding += 1;
+    }
+    if uses_word(&def.glsl, BLANK) || shadertoy_fallback_channels(def) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {BLANK};\n");
+        binding += 1;
+    }
+    for (name, _) in &def.imported {
+        s += &format!("layout(set = 0, binding = {binding}) uniform texture2D {name};\n");
+        binding += 1;
+    }
+    if uses_word(&def.glsl, REPEAT_SAMPLER) {
+        s += &format!("layout(set = 0, binding = {binding}) uniform sampler {REPEAT_SAMPLER};\n");
         binding += 1;
     }
     let mut members = String::new();
@@ -141,6 +154,10 @@ pub(crate) fn glsl_source(def: &EffectDef) -> String {
 
 /// openVJ's audio in Shadertoy's sound-channel layout (see [`openvj_core::shadertoy`]).
 pub(crate) const SHADERTOY_AUDIO: &str = openvj_core::shadertoy::AUDIO_TEXTURE;
+/// A transparent 1×1 texture (see [`openvj_core::shadertoy::BLANK_TEXTURE`]).
+pub(crate) const BLANK: &str = openvj_core::shadertoy::BLANK_TEXTURE;
+/// The sampler that repeats (see [`openvj_core::shadertoy::REPEAT_SAMPLER`]).
+pub(crate) const REPEAT_SAMPLER: &str = openvj_core::shadertoy::REPEAT_SAMPLER;
 /// Size of [`SHADERTOY_AUDIO`]: the spectrum on row 0, the waveform on row 1.
 pub(crate) const SHADERTOY_AUDIO_SIZE: (u32, u32) = (512, 2);
 
@@ -163,8 +180,16 @@ const SHADERTOY_NAMES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether hand-copied Shadertoy code reads channels it doesn't define (they read blank).
+fn shadertoy_fallback_channels(def: &EffectDef) -> bool {
+    (0..4).any(|i| {
+        let ch = format!("iChannel{i}");
+        uses_word(&def.glsl, &ch) && !def.glsl.contains(&format!("#define {ch} "))
+    })
+}
+
 /// Defines for the Shadertoy names a file uses. Channels the file doesn't define itself
-/// (hand-copied code) read `inputImage`: transparent for a generator.
+/// (hand-copied code) read a transparent texture.
 fn shadertoy_shim(def: &EffectDef) -> String {
     let glsl = &def.glsl;
     let mut s = String::new();
@@ -176,7 +201,7 @@ fn shadertoy_shim(def: &EffectDef) -> String {
     for i in 0..4 {
         let ch = format!("iChannel{i}");
         if uses_word(glsl, &ch) && !glsl.contains(&format!("#define {ch} ")) {
-            s += &format!("#define {ch} sampler2D(inputImage, isf_sampler)\n");
+            s += &format!("#define {ch} sampler2D({BLANK}, isf_sampler)\n");
         }
     }
     s
@@ -364,13 +389,13 @@ pub(crate) fn parse(def: &EffectDef) -> Result<naga::Module, String> {
 struct Reflection {
     blocks: Vec<UniformBlock>,
     textures: Vec<(u32, String)>,
-    sampler: Option<u32>,
+    samplers: Vec<(u32, String)>,
 }
 
 fn reflect(module: &naga::Module) -> Result<Reflection, String> {
     let mut blocks = Vec::new();
     let mut textures = Vec::new();
-    let mut sampler = None;
+    let mut samplers = Vec::new();
     for (_, var) in module.global_variables.iter() {
         let Some(rb) = &var.binding else { continue };
         if rb.group != 0 {
@@ -401,11 +426,13 @@ fn reflect(module: &naga::Module) -> Result<Reflection, String> {
             (_, naga::TypeInner::Image { .. }) => {
                 textures.push((rb.binding, var.name.clone().unwrap_or_default()));
             }
-            (_, naga::TypeInner::Sampler { .. }) => sampler = Some(rb.binding),
+            (_, naga::TypeInner::Sampler { .. }) => {
+                samplers.push((rb.binding, var.name.clone().unwrap_or_default()));
+            }
             _ => {}
         }
     }
-    Ok(Reflection { blocks, textures, sampler })
+    Ok(Reflection { blocks, textures, samplers })
 }
 
 pub(crate) fn compile(
@@ -415,7 +442,7 @@ pub(crate) fn compile(
     def: &EffectDef,
 ) -> Result<CompiledEffect, String> {
     let module = parse(def)?;
-    let Reflection { blocks, textures, sampler } = reflect(&module)?;
+    let Reflection { blocks, textures, samplers } = reflect(&module)?;
     let mut entries = Vec::new();
     for b in &blocks {
         entries.push(wgpu::BindGroupLayoutEntry {
@@ -441,9 +468,9 @@ pub(crate) fn compile(
             count: None,
         });
     }
-    if let Some(binding) = sampler {
+    for (binding, _) in &samplers {
         entries.push(wgpu::BindGroupLayoutEntry {
-            binding,
+            binding: *binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
@@ -481,7 +508,7 @@ pub(crate) fn compile(
         multiview_mask: None,
         cache: None,
     });
-    Ok(CompiledEffect { pipeline, layout, blocks, textures, sampler })
+    Ok(CompiledEffect { pipeline, layout, blocks, textures, samplers })
 }
 
 /// Named values for one pass; anything a block asks for that isn't here is zero.
@@ -527,8 +554,8 @@ mod tests {
     fn every_builtin_effect_compiles() {
         for t in library().all() {
             let module = parse(&t.def).unwrap_or_else(|e| panic!("{}:\n{e}", t.id()));
-            let Reflection { blocks, textures, sampler } = reflect(&module).unwrap();
-            assert!(sampler.is_some(), "{}", t.id());
+            let Reflection { blocks, textures, samplers } = reflect(&module).unwrap();
+            assert!(!samplers.is_empty(), "{}", t.id());
             assert!(textures.iter().any(|(_, n)| n == "inputImage"), "{}", t.id());
             let inputs = blocks.iter().find(|b| b.members.iter().any(|m| m.name != "TIME")).map(|b| b.members.len());
             let expected = t.def.inputs.iter().filter(|i| i.ty != InputType::Image).count();
@@ -551,8 +578,8 @@ mod tests {
             layout(set = 0, binding = 3) uniform P { float amount; int on; };
             void main() { fragColor = texture(sampler2D(inputImage, samp), uv) * amount * float(on) + TIME; }"#;
         let def = EffectDef::parse(src, "varda").unwrap();
-        let Reflection { blocks, textures, sampler } = reflect(&parse(&def).unwrap()).unwrap();
-        assert_eq!(sampler, Some(1));
+        let Reflection { blocks, textures, samplers } = reflect(&parse(&def).unwrap()).unwrap();
+        assert_eq!(samplers, [(1, "samp".to_owned())]);
         assert_eq!(textures, [(2, "inputImage".to_owned())]);
         let p = blocks.iter().find(|b| b.binding == 3).unwrap();
         let mut v = Values::default();
@@ -607,7 +634,7 @@ mod tests {
                    }";
         let def = EffectDef::parse(src, "colours").unwrap();
         let r = reflect(&parse(&def).unwrap()).unwrap();
-        assert!(r.textures.iter().any(|(_, n)| n == "inputImage"));
+        assert!(r.textures.iter().any(|(_, n)| n == BLANK), "{:?}", r.textures);
         assert!(
             glsl_source(&def)
                 .contains("mainImage(st_color, vec2(isf_FragNormCoord.x, 1.0 - isf_FragNormCoord.y) * RENDERSIZE)")

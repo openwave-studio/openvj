@@ -15,6 +15,7 @@ mod mapping;
 mod milkdrop;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -305,6 +306,12 @@ pub struct Engine {
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The same, repeating at the edges (ISF files that name `isf_sampler_repeat`).
+    repeat_sampler: wgpu::Sampler,
+    /// Images ISF files import (`IMPORTED`), by file, loaded once.
+    imported: HashMap<PathBuf, wgpu::TextureView>,
+    /// Imported images that failed to load, reported once.
+    missing_images: HashSet<PathBuf>,
     shader: wgpu::ShaderModule,
     pipelines: HashMap<(Pipeline, wgpu::TextureFormat), wgpu::RenderPipeline>,
     uniform_buf: wgpu::Buffer,
@@ -460,6 +467,14 @@ impl Engine {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let repeat_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("openvj repeat sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
         let dummy = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("dummy"),
@@ -505,6 +520,9 @@ impl Engine {
             queue,
             layout,
             sampler,
+            repeat_sampler,
+            imported: HashMap::new(),
+            missing_images: HashSet::new(),
             shader,
             pipelines,
             uniform_buf,
@@ -932,6 +950,18 @@ impl Engine {
         let free = |avoid: &[&Target]| scratch.iter().find(|t| avoid.iter().all(|a| a.id != t.id)).unwrap().clone();
         let ty = fx.ty()?;
         let compiled = self.compiled(&ty)?;
+        let imported: Vec<(String, wgpu::TextureView)> = ty
+            .def
+            .imported
+            .iter()
+            .map(|(name, rel)| {
+                let view = match ty.path.as_deref().and_then(Path::parent) {
+                    Some(dir) => self.imported_view(&dir.join(rel)),
+                    None => self.blank.view.clone(),
+                };
+                (name.clone(), view)
+            })
+            .collect();
         self.fx_seen.insert(key);
         let (w, h) = dst.map_or((src.width, src.height), |d| (d.width, d.height));
         let state = self.fx_state.entry(key).or_default();
@@ -1024,6 +1054,10 @@ impl Engine {
                         self.spectrum_view.clone()
                     } else if name == isf::SHADERTOY_AUDIO {
                         self.shadertoy_audio_view.clone()
+                    } else if name == isf::BLANK {
+                        self.blank.view.clone()
+                    } else if let Some((_, v)) = imported.iter().find(|(n, _)| n == name) {
+                        v.clone()
                     } else {
                         let buf = state.buffers.get(name)?;
                         buf.pair[buf.latest].view.clone()
@@ -1117,6 +1151,46 @@ impl Engine {
     ///
     /// Every generator and live input clip in `comp` also refreshes its live thumbnail,
     /// at most every [`THUMB_INTERVAL`] (and right away when one is new).
+    /// An image an ISF file imports, loaded on first use. A file that can't be read is
+    /// reported once, reads transparent, and is tried again next frame.
+    fn imported_view(&mut self, path: &Path) -> wgpu::TextureView {
+        if let Some(v) = self.imported.get(path) {
+            return v.clone();
+        }
+        let view = match image::open(path) {
+            Ok(img) => {
+                let img = img.to_rgba8();
+                let (w, h) = img.dimensions();
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("isf imported image"),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                self.queue.write_texture(
+                    texture.as_image_copy(),
+                    img.as_raw(),
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None },
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                );
+                texture.create_view(&Default::default())
+            }
+            Err(e) => {
+                // Not cached: the file may still be downloading. Report it once.
+                if self.missing_images.insert(path.to_owned()) {
+                    eprintln!("openVJ: can't load the image {}: {e}", path.display());
+                }
+                return self.blank.view.clone();
+            }
+        };
+        self.imported.insert(path.to_owned(), view.clone());
+        view
+    }
+
     /// Uploads this frame's audio spectrum for ISF files: [`SPECTRUM_BINS`] texels laid out
     /// like Synesthesia's `syn_Spectrum` (r raw, g with release, b smooth, a waveform around
     /// 0.5), each 0..1. `None` (no audio input) leaves silence.
@@ -1376,10 +1450,11 @@ impl Engine {
                             resource: wgpu::BindingResource::TextureView(view),
                         });
                     }
-                    if let Some(binding) = fx.sampler {
+                    for (binding, name) in &fx.samplers {
+                        let sampler = if name == isf::REPEAT_SAMPLER { &self.repeat_sampler } else { &self.sampler };
                         entries.push(wgpu::BindGroupEntry {
-                            binding,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            binding: *binding,
+                            resource: wgpu::BindingResource::Sampler(sampler),
                         });
                     }
                     let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2428,6 +2503,50 @@ mod tests {
         let row = |y: usize| mean(&px[y * 32 * 4..(y + 1) * 32 * 4]);
         assert!(row(2)[0] > 200.0 && row(29)[0] < 50.0, "top {:?}, bottom {:?}", row(2), row(29));
         set_library(EffectLibrary::builtin());
+    }
+
+    #[test]
+    fn shadertoy_textures_load_and_repeat() {
+        use openvj_core::{EffectLibrary, EffectType, isf::EffectDef, set_library, shadertoy};
+        let _lock = LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // Red reads a 2×1 texture (white left, black right) at x = 1.25 with repeat wrapping
+        // (lands on the white half); green reads it at the same x clamped (the black edge).
+        let json = serde_json::json!({"Shader": {"info": {"id": "Tex123", "name": "Tex"}, "renderpass": [
+            { "type": "image", "name": "Image", "inputs": [
+                {"id": 1, "ctype": "texture", "channel": 0, "src": "/media/a/abc123.png", "sampler": {"wrap": "repeat"}},
+                {"id": 2, "ctype": "texture", "channel": 1, "src": "/media/a/abc123.png", "sampler": {"wrap": "clamp"}}],
+              "code": "void mainImage(out vec4 c, in vec2 f) { c = vec4(texture(iChannel0, vec2(1.25, 0.5)).r, texture(iChannel1, vec2(1.25, 0.5)).r, 0.0, 1.0); }" },
+        ]}})
+        .to_string();
+        let conv = shadertoy::from_api_json(&json).unwrap();
+        let dir = std::env::temp_dir().join(format!("openvj-st-tex-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
+        let tex = &conv.textures[0];
+        image::RgbaImage::from_raw(2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255])
+            .unwrap()
+            .save(dir.join(&tex.path))
+            .unwrap();
+        let fs = dir.join(&conv.file_name);
+        std::fs::write(&fs, &conv.source).unwrap();
+        let def = EffectDef::parse(&conv.source, "x").unwrap();
+        check_effect(&def).unwrap();
+        let id = def.id.clone();
+        set_library(
+            EffectLibrary::with(Vec::new(), Vec::new())
+                .with_generators(vec![std::sync::Arc::new(EffectType::new(def, Some(fs)))]),
+        );
+        let mut comp = Composition::new(32, 32, 1, 1);
+        comp.set_clip(0, 0, ClipSource::isf(&id)).unwrap();
+        comp.trigger(0, 0, 0.0);
+        e.render(&comp, 0.0, &inputs(0.0), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!(m[0] > 200.0 && m[1] < 50.0, "repeat, clamp: {m:?}");
+        set_library(EffectLibrary::builtin());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

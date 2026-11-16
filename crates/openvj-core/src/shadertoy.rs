@@ -28,6 +28,14 @@ const BUFFER_TARGETS: [&str; 4] = ["BufferA", "BufferB", "BufferC", "BufferD"];
 /// The pass that copies the video input upright, for shaders that filter it.
 const INPUT_TARGET: &str = "ShadertoyInput";
 
+/// A transparent 1×1 texture the renderer binds to files that name it: channels openVJ
+/// can't feed (a cubemap) and the keyboard, which reads as no keys pressed.
+pub const BLANK_TEXTURE: &str = "isf_blank";
+/// A sampler that repeats instead of clamping, for channels Shadertoy sets to wrap.
+pub const REPEAT_SAMPLER: &str = "isf_sampler_repeat";
+/// Where an imported shader's textures go, next to it.
+pub const TEXTURE_FOLDER: &str = "textures";
+
 /// Shadertoy's licence for shaders that don't state their own.
 pub const DEFAULT_LICENSE: &str =
     "CC BY-NC-SA 3.0 (Shadertoy's default) unless the author states otherwise in the code";
@@ -45,8 +53,22 @@ pub struct Converted {
     pub source: String,
     /// Takes the clip's video as input (an effect) instead of making its own (a generator).
     pub is_effect: bool,
-    /// What couldn't be carried over, for the VJ: "iChannel1 (keyboard) reads black".
+    /// What couldn't be carried over, for the VJ: "iChannel1 (a cubemap) reads black".
     pub notes: Vec<String>,
+    /// Images the shader reads, to download next to the `.fs` file.
+    pub textures: Vec<TextureFile>,
+}
+
+/// A Shadertoy texture an imported shader needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextureFile {
+    /// Where to download it: `https://www.shadertoy.com/media/a/….png`.
+    pub url: String,
+    /// Where it goes, relative to the `.fs` file (`textures/….png`, always a PNG).
+    pub path: String,
+    /// Shadertoy shows it upside down from the file (its default), so store it flipped:
+    /// openVJ's textures start at the top, Shadertoy's at the bottom.
+    pub flip: bool,
 }
 
 /// Pulls a Shadertoy id out of a link (`https://www.shadertoy.com/view/XsXXDn`, an embed
@@ -81,6 +103,12 @@ enum Channel {
     Buffer(usize),
     Audio,
     Video,
+    /// A Shadertoy image: its URL path (`/media/a/….png`) and whether it's flipped.
+    Texture {
+        src: String,
+        flip: bool,
+    },
+    Keyboard,
     Unsupported(String),
 }
 
@@ -90,6 +118,8 @@ struct Pass {
     buffer: Option<usize>,
     code: String,
     channels: [Option<Channel>; 4],
+    /// Channels Shadertoy samples with repeat wrapping.
+    repeat: [bool; 4],
 }
 
 /// Converts the JSON the Shadertoy API returns for one shader.
@@ -132,11 +162,13 @@ pub fn from_api_json(json: &str) -> Result<Converted, String> {
             }
         };
         let mut channels: [Option<Channel>; 4] = Default::default();
+        let mut repeat = [false; 4];
         for input in p.get("inputs").and_then(Value::as_array).into_iter().flatten() {
             let Some(ch) = input.get("channel").and_then(Value::as_u64).filter(|c| *c < 4) else { continue };
             channels[ch as usize] = Some(channel(input));
+            repeat[ch as usize] = sampler_text(input, "wrap") == "repeat";
         }
-        passes.push(Pass { buffer, code, channels });
+        passes.push(Pass { buffer, code, channels, repeat });
     }
     if !passes.iter().any(|p| p.buffer.is_none()) {
         return Err("the shader has no Image pass".into());
@@ -172,7 +204,8 @@ pub fn from_image_code(code: &str, name: &str, link: &str) -> Result<Converted, 
         }
     }
     let meta = Meta { id, name, author: String::new(), description: String::new() };
-    let mut out = convert(meta, String::new(), vec![Pass { buffer: None, code: code.to_owned(), channels }], vec![]);
+    let pass = Pass { buffer: None, code: code.to_owned(), channels, repeat: [false; 4] };
+    let mut out = convert(meta, String::new(), vec![pass], vec![]);
     out.notes = notes;
     Ok(out)
 }
@@ -235,13 +268,35 @@ fn channel(input: &Value) -> Channel {
         }
         "music" | "musicstream" | "mic" => Channel::Audio,
         "webcam" | "video" => Channel::Video,
-        "keyboard" => Channel::Unsupported("keyboard".into()),
+        "keyboard" => Channel::Keyboard,
         "cubemap" => Channel::Unsupported("a cubemap".into()),
         "volume" => Channel::Unsupported("a 3D texture".into()),
-        "texture" => Channel::Unsupported("a texture".into()),
+        "texture" if src.starts_with("/media/") && !src.contains("..") => {
+            // Shadertoy flips images unless the input says otherwise.
+            Channel::Texture { src: src.to_owned(), flip: sampler_text(input, "vflip") != "false" }
+        }
+        "texture" => Channel::Unsupported("a texture without a Shadertoy media link".into()),
         "" => Channel::Unsupported("an unknown input".into()),
         other => Channel::Unsupported(format!("\"{other}\"")),
     }
+}
+
+/// A `sampler` setting of an input (`"filter"`, `"wrap"`, `"vflip"`), as text.
+fn sampler_text(input: &Value, key: &str) -> String {
+    match input.get("sampler").and_then(|s| s.get(key)) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Bool(b)) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The IMPORTED name and file of a Shadertoy texture: `/media/a/0a40….png` becomes
+/// `st_0a40…` and `textures/0a40….png`.
+fn texture_names(src: &str) -> (String, String) {
+    let file = src.rsplit('/').next().unwrap_or(src);
+    let stem = file.split('.').next().unwrap_or(file);
+    let stem: String = stem.chars().filter(|c| c.is_ascii_alphanumeric()).take(40).collect();
+    (format!("st_{stem}"), format!("{TEXTURE_FOLDER}/{stem}.png"))
 }
 
 struct Meta {
@@ -277,6 +332,8 @@ fn convert(meta: Meta, common: String, passes: Vec<Pass>, mut notes: Vec<String>
         glsl += "\n";
     }
     let mut entry_points = Vec::new();
+    let mut textures: Vec<TextureFile> = Vec::new();
+    let mut imported = Map::new();
     for (pass, d) in passes.iter().zip(&decls) {
         let label = pass.buffer.map_or("Image", |b| BUFFER_TARGETS[b]);
         let label_text = pass.buffer.map_or("Image".to_owned(), |b| format!("Buffer {}", &"ABCD"[b..=b]));
@@ -291,28 +348,42 @@ fn convert(meta: Meta, common: String, passes: Vec<Pass>, mut notes: Vec<String>
         }
         for (i, ch) in pass.channels.iter().enumerate() {
             let name = format!("iChannel{i}");
-            let texture = match ch {
+            let texture: String = match ch {
                 Some(Channel::Buffer(b)) => {
                     if !passes.iter().any(|p| p.buffer == Some(*b)) {
                         notes.push(format!(
                             "{label_text}'s iChannel{i} reads a buffer the shader doesn't have, so it reads black"
                         ));
                     }
-                    BUFFER_TARGETS[*b]
+                    BUFFER_TARGETS[*b].into()
                 }
-                Some(Channel::Audio) => AUDIO_TEXTURE,
-                Some(Channel::Video) => INPUT_TARGET,
+                Some(Channel::Audio) => AUDIO_TEXTURE.into(),
+                Some(Channel::Video) => INPUT_TARGET.into(),
+                Some(Channel::Texture { src, flip }) => {
+                    let (tex_name, path) = texture_names(src);
+                    if !imported.contains_key(&tex_name) {
+                        imported.insert(tex_name.clone(), serde_json::json!({ "PATH": path }));
+                        textures.push(TextureFile {
+                            url: format!("https://www.shadertoy.com{src}"),
+                            path,
+                            flip: *flip,
+                        });
+                    }
+                    tex_name
+                }
+                Some(Channel::Keyboard) => BLANK_TEXTURE.into(),
                 Some(Channel::Unsupported(what)) => {
                     if !what.contains("pasted") {
                         notes.push(format!("{label_text}'s iChannel{i} ({what}) isn't supported yet and reads black"));
                     }
-                    "inputImage"
+                    BLANK_TEXTURE.into()
                 }
-                None => "inputImage",
+                None => BLANK_TEXTURE.into(),
             };
+            let sampler = if pass.repeat[i] { REPEAT_SAMPLER } else { "isf_sampler" };
             // An unused, unbound channel stays undefined: the renderer gives it a fallback.
             if ch.is_some() || uses_word(&pass.code, &name) {
-                glsl += &format!("#define {name} sampler2D({texture}, isf_sampler)\n");
+                glsl += &format!("#define {name} sampler2D({texture}, {sampler})\n");
                 undef.push(name);
             }
         }
@@ -397,6 +468,9 @@ fn convert(meta: Meta, common: String, passes: Vec<Pass>, mut notes: Vec<String>
     if pass_list.len() > 1 {
         header.insert("PASSES".into(), Value::Array(pass_list));
     }
+    if !imported.is_empty() {
+        header.insert("IMPORTED".into(), Value::Object(imported));
+    }
     let header = serde_json::to_string_pretty(&Value::Object(header)).expect("JSON serialises");
     // A `*/` inside the header's strings would end the comment early.
     let header = header.replace("*/", "*\\/");
@@ -408,7 +482,7 @@ fn convert(meta: Meta, common: String, passes: Vec<Pass>, mut notes: Vec<String>
     } else {
         format!("{base} ({}).fs", meta.id)
     };
-    Converted { id: meta.id, name: meta.name, file_name, source, is_effect, notes }
+    Converted { id: meta.id, name: meta.name, file_name, source, is_effect, notes, textures }
 }
 
 /// A file name from a shader title: no path separators or characters Finder dislikes.
@@ -711,7 +785,8 @@ mod tests {
             g.contains("if (PASSINDEX == 0) {\n        mainImage_BufferA(st_color, vv_FragNormCoord * RENDERSIZE);")
         );
         assert!(c.notes.iter().any(|n| n.contains("Sound tab")), "{:?}", c.notes);
-        assert!(c.notes.iter().any(|n| n.contains("iChannel3 (keyboard)")), "{:?}", c.notes);
+        assert!(g.contains("#define iChannel3 sampler2D(isf_blank, isf_sampler)"), "keyboard: no keys pressed");
+        assert!(!c.notes.iter().any(|n| n.contains("iChannel3")), "{:?}", c.notes);
     }
 
     #[test]
@@ -726,6 +801,39 @@ mod tests {
         assert_eq!(def.passes.len(), 2);
         assert_eq!(def.passes[0].target.as_deref(), Some("ShadertoyInput"));
         assert!(def.glsl.contains("#define iChannel0 sampler2D(ShadertoyInput, isf_sampler)"));
+    }
+
+    #[test]
+    fn textures_are_imported_next_to_the_shader() {
+        let json = api(serde_json::json!([{ "type": "image", "name": "Image",
+            "inputs": [
+                {"id": 1, "ctype": "texture", "channel": 0, "src": "/media/a/0a40562379b63dfb89227e6d172f39fdce9022cba76623f1054a2c83d6c0ba5d.png",
+                 "sampler": {"filter": "mipmap", "wrap": "repeat", "vflip": "true"}},
+                {"id": 2, "ctype": "texture", "channel": 1, "filepath": "/media/a/8de3a3924cb95bd0e95a443fff0326c869f9d4979cd1d5b6e94e2a01f5be53e9.jpg",
+                 "sampler": {"wrap": "clamp", "vflip": "false"}},
+                {"id": 3, "ctype": "cubemap", "channel": 2, "src": "/media/a/x.png"},
+                {"id": 4, "ctype": "texture", "channel": 3, "src": "https://evil.example/x.png"}],
+            "code": "void mainImage(out vec4 c, in vec2 f) { c = texture(iChannel0, f) + texture(iChannel1, f) + texture(iChannel2, f) + texture(iChannel3, f); }" }]));
+        let c = from_api_json(&json).unwrap();
+        assert_eq!(c.textures.len(), 2);
+        assert_eq!(
+            c.textures[0].url,
+            "https://www.shadertoy.com/media/a/0a40562379b63dfb89227e6d172f39fdce9022cba76623f1054a2c83d6c0ba5d.png"
+        );
+        assert!(c.textures[0].path.starts_with("textures/0a40") && c.textures[0].path.ends_with(".png"));
+        assert!(c.textures[0].flip && !c.textures[1].flip);
+        assert!(c.textures[1].path.ends_with(".png"), "always saved as PNG");
+        let def = EffectDef::parse(&c.source, "x").unwrap();
+        assert_eq!(def.imported.len(), 2);
+        assert_eq!(def.imported[0].1, c.textures[0].path);
+        assert!(def.glsl.contains(&format!("#define iChannel0 sampler2D({}, isf_sampler_repeat)", def.imported[0].0)));
+        assert!(def.glsl.contains(&format!("#define iChannel1 sampler2D({}, isf_sampler)", def.imported[1].0)));
+        assert!(def.glsl.contains("#define iChannel2 sampler2D(isf_blank, isf_sampler)"));
+        assert!(
+            c.notes.iter().any(|n| n.contains("cubemap")) && c.notes.iter().any(|n| n.contains("media link")),
+            "{:?}",
+            c.notes
+        );
     }
 
     #[test]
