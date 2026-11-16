@@ -15,7 +15,8 @@ use openvj_core::milkdrop::milk_library;
 use openvj_core::{
     AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve,
     CrossfadeSide, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage,
-    ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, TapTempo, apply_midi, library, move_effect,
+    ModInputs, ModSource, Modulation, Param, PlayMode, Playing, SYNC_BEATS, Span, TapTempo, TransitionStyle,
+    apply_midi, library, move_effect,
 };
 use openvj_media::dxv::{self, DxvDecoder, DxvFormat, DxvFrame};
 use openvj_media::hap::{self, HapDecoder, HapFormat, HapFrame};
@@ -27,10 +28,11 @@ use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffe
 use crate::browser::{self, Entry};
 use crate::link::Link;
 use crate::midi::{self, MidiPorts};
+use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, MainWindow, MappingWindow,
-    ModNames, OutputWindow, ParamData,
+    ModNames, OutputWindow, ParamData, PresetRow,
 };
 
 // The output mapping window's side of the app.
@@ -273,6 +275,9 @@ pub struct App {
 
     frames: u32,
     fps_since: Instant,
+
+    /// The Player layout's playlist and Automix (see player.rs).
+    player: PlayerState,
 }
 
 impl App {
@@ -357,6 +362,7 @@ impl App {
             images_dirty: true,
             frames: 0,
             fps_since: Instant::now(),
+            player: PlayerState::default(),
         };
         app.set_composition(comp, None);
         app.open_midi();
@@ -804,7 +810,11 @@ impl App {
         self.inputs = self.update_audio(beat, dt);
         let preview = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id);
         self.syphon_out.before_render(&mut self.engine);
-        self.engine.render(&self.comp, now, &self.inputs, preview);
+        // While Automix plays, the Player's own composition goes to the output instead.
+        match self.player.frame(&self.comp, now, beat, self.comp.bpm) {
+            Some(shown) => self.engine.render(shown, now, &self.inputs, None),
+            None => self.engine.render(&self.comp, now, &self.inputs, preview),
+        }
         if (self.output_open || self.mapping_window_open)
             && let Some(setup) = &self.mapping.setup
         {
@@ -897,6 +907,11 @@ impl App {
         if let Some(tab) = self.tab_request.take() {
             ui.set_props_tab(tab);
         }
+        if std::mem::take(&mut self.player.dirty) {
+            self.sync_player(ui);
+        }
+        let selected = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone());
+        ui.set_selected_clip_name(selected.unwrap_or_default().into());
     }
 
     /// Beat position for this frame, from Ableton Link when it's on.
@@ -1382,6 +1397,7 @@ impl App {
         }
         let now = self.now();
         if self.comp.clip(layer, col).is_some() {
+            self.stop_automix_for_mixer();
             self.comp.trigger(layer, col, now);
             self.last_column = None;
         }
@@ -1400,6 +1416,7 @@ impl App {
     }
 
     pub fn column_clicked(&mut self, col: usize) {
+        self.stop_automix_for_mixer();
         let now = self.now();
         self.comp.trigger_column(col, now);
         self.last_column = Some(col);
@@ -2481,5 +2498,188 @@ fn load_midi_preset_for(comp: &mut Composition, avc: &Path, refs: &openvj_resolu
             Some(line)
         }
         Err(e) => Some(format!("Could not read MIDI preset {}: {e}", path.display())),
+    }
+}
+
+// ---------------------------------------------------------------- Player layout
+
+/// How long a preset can play, in the Player's per-row menu.
+const PLAY_CHOICES: [Span; 8] = [
+    Span::Bars(4.0),
+    Span::Bars(8.0),
+    Span::Bars(16.0),
+    Span::Bars(32.0),
+    Span::Bars(64.0),
+    Span::Seconds(15.0),
+    Span::Seconds(30.0),
+    Span::Seconds(60.0),
+];
+
+fn play_label(span: Span) -> String {
+    match span {
+        Span::Bars(_) => span.label(),
+        Span::Seconds(s) => format!("{s:.0} s"),
+    }
+}
+
+fn strings(items: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(items.into_iter().map(SharedString::from).collect::<Vec<_>>()))
+}
+
+impl App {
+    /// Adds the clip selected in the Mixer to the playlist.
+    pub fn playlist_add_selected(&mut self) {
+        let Some(clip) = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).cloned() else {
+            self.set_status("Select a clip first, then add it to the playlist.");
+            return;
+        };
+        match self.player.add(&clip) {
+            Ok(()) => {
+                let n = self.player.playlist.presets.len();
+                self.set_status(format!("Added \"{}\" to the playlist ({n} presets).", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
+    pub fn automix_toggle(&mut self) {
+        if self.player.is_live() {
+            self.player.stop();
+            self.set_status("Automix stopped.");
+            return;
+        }
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        if self.player.start(now, beat, self.comp.bpm) {
+            self.set_status("Automix playing.");
+        } else {
+            self.set_status("The playlist is empty: add a clip first.");
+        }
+    }
+
+    pub fn automix_next(&mut self) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        self.player.next(now, beat);
+    }
+
+    /// Launching something in the Mixer takes the output back from Automix.
+    fn stop_automix_for_mixer(&mut self) {
+        if self.player.is_live() {
+            self.player.stop();
+            self.set_status("Automix stopped: the Mixer has the output again.");
+        }
+    }
+
+    pub fn playlist_remove(&mut self, index: usize) {
+        self.player.remove(index);
+    }
+
+    pub fn playlist_move(&mut self, from: usize, to: i32) {
+        if to >= 0 {
+            self.player.move_preset(from, to as usize);
+        }
+    }
+
+    pub fn playlist_play_for(&mut self, index: usize, choice: usize) {
+        if let Some(span) = PLAY_CHOICES.get(choice) {
+            self.player.set_play_for(index, *span);
+        }
+    }
+
+    pub fn playlist_length(&mut self, choice: usize) {
+        if let Some(span) = Span::TRANSITIONS.get(choice) {
+            self.player.playlist.transition = *span;
+            self.player.dirty = true;
+        }
+    }
+
+    pub fn playlist_style(&mut self, choice: usize) {
+        if let Some(style) = TransitionStyle::ALL.get(choice) {
+            self.player.playlist.style = *style;
+            self.player.dirty = true;
+        }
+    }
+
+    pub fn playlist_shuffle(&mut self) {
+        self.player.playlist.shuffle = !self.player.playlist.shuffle;
+        self.player.dirty = true;
+    }
+
+    pub fn playlist_repeat(&mut self) {
+        self.player.playlist.repeat = !self.player.playlist.repeat;
+        self.player.dirty = true;
+    }
+
+    pub fn playlist_new(&mut self) {
+        self.player = PlayerState::default();
+        self.set_status("New playlist.");
+    }
+
+    pub fn playlist_file(&self) -> Option<PathBuf> {
+        self.player.file.clone()
+    }
+
+    pub fn playlist_open(&mut self, path: &Path) {
+        match self.player.open(path) {
+            Ok(()) => self.set_status(format!("Opened playlist {}.", path.display())),
+            Err(e) => self.set_status(format!("Could not open playlist: {e}")),
+        }
+    }
+
+    pub fn playlist_save(&mut self, path: &Path) {
+        match self.player.save(path) {
+            Ok(()) => self.set_status(format!("Saved playlist {}.", path.display())),
+            Err(e) => self.set_status(format!("Could not save playlist: {e}")),
+        }
+    }
+
+    fn sync_player(&mut self, ui: &MainWindow) {
+        let list = &self.player.playlist;
+        let current = self.player.current();
+        let rows: Vec<PresetRow> = list
+            .presets
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PresetRow {
+                name: p.name().into(),
+                kind: kind_tag(&p.clip.source).into(),
+                play_for: PLAY_CHOICES.iter().position(|s| *s == p.play_for).unwrap_or(3) as i32,
+                current: current == Some(i),
+            })
+            .collect();
+        ui.set_playlist_rows(ModelRc::new(VecModel::from(rows)));
+        ui.set_playlist_name(list.name.clone().into());
+        let n = list.presets.len();
+        let info = match current {
+            Some(i) => format!("{} of {n}", i + 1),
+            None if n == 1 => "1 preset".into(),
+            None => format!("{n} presets"),
+        };
+        ui.set_playlist_info(info.into());
+        ui.set_automix_on(self.player.is_live());
+        ui.set_playlist_length_names(strings(Span::TRANSITIONS.iter().map(|s| s.label())));
+        ui.set_playlist_length_headings(strings(Span::TRANSITIONS.iter().enumerate().map(|(i, s)| match s {
+            Span::Seconds(_) if i == 0 => "TIME".to_string(),
+            Span::Bars(_) if matches!(Span::TRANSITIONS[i - 1], Span::Seconds(_)) => "BARS".to_string(),
+            _ => String::new(),
+        })));
+        ui.set_playlist_length(Span::TRANSITIONS.iter().position(|s| *s == list.transition).unwrap_or(5) as i32);
+        ui.set_playlist_style_names(strings(TransitionStyle::ALL.iter().map(|s| s.name().to_string())));
+        ui.set_playlist_style(TransitionStyle::ALL.iter().position(|s| *s == list.style).unwrap_or(0) as i32);
+        ui.set_playlist_play_names(strings(PLAY_CHOICES.iter().map(|s| play_label(*s))));
+        ui.set_playlist_shuffle(list.shuffle);
+        ui.set_playlist_repeat(list.repeat);
+    }
+}
+
+/// The source-kind tag the UI colours rows by (see Theme.kind-color).
+fn kind_tag(source: &ClipSource) -> &'static str {
+    match source {
+        ClipSource::Video { .. } => "video",
+        ClipSource::Image { .. } => "image",
+        ClipSource::Camera { .. } => "camera",
+        ClipSource::Syphon { .. } => "syphon",
+        _ => "gen",
     }
 }

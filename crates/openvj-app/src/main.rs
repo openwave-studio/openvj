@@ -5,6 +5,7 @@ mod browser;
 mod link;
 mod mapping;
 mod midi;
+mod player;
 mod prefs;
 mod syphon_out;
 
@@ -59,6 +60,10 @@ fn with_app(
 
 fn comp_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("openVJ composition", &["json"]).set_title("openVJ composition")
+}
+
+fn playlist_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new().add_filter("openVJ playlist", &[openvj_core::PLAYLIST_EXTENSION])
 }
 
 /// Opens openVJ compositions and imports Resolume ones.
@@ -272,6 +277,78 @@ fn main() -> Result<()> {
             let path = current.or_else(|| comp_dialog().set_file_name("composition.json").save_file());
             if let Some(path) = path {
                 with_app(&app, &w, &o, |a| a.save(&path));
+            }
+        });
+    }
+    // Player layout.
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_automix_toggle(move || with_app(&app, &w, &o, |a| a.automix_toggle()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_automix_next(move || with_app(&app, &w, &o, |a| a.automix_next()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_add_selected(move || with_app(&app, &w, &o, |a| a.playlist_add_selected()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_clip_to_playlist(move || with_app(&app, &w, &o, |a| a.playlist_add_selected()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_remove(move |i| with_app(&app, &w, &o, |a| a.playlist_remove(i as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_move(move |from, to| with_app(&app, &w, &o, |a| a.playlist_move(from as usize, to)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_play_for(move |i, k| with_app(&app, &w, &o, |a| a.playlist_play_for(i as usize, k as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_length_picked(move |i| with_app(&app, &w, &o, |a| a.playlist_length(i as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_style_picked(move |i| with_app(&app, &w, &o, |a| a.playlist_style(i as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_shuffle_toggled(move || with_app(&app, &w, &o, |a| a.playlist_shuffle()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_repeat_toggled(move || with_app(&app, &w, &o, |a| a.playlist_repeat()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_new(move || with_app(&app, &w, &o, |a| a.playlist_new()));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_open(move || {
+            if let Some(path) = playlist_dialog().set_title("Open playlist").pick_file() {
+                with_app(&app, &w, &o, |a| a.playlist_open(&path));
+            }
+        });
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_playlist_save(move || {
+            let current = app.try_borrow().ok().and_then(|a| a.playlist_file());
+            let path = current.or_else(|| {
+                playlist_dialog()
+                    .set_title("Save playlist")
+                    .set_file_name(format!("playlist.{}", openvj_core::PLAYLIST_EXTENSION))
+                    .save_file()
+            });
+            if let Some(path) = path {
+                with_app(&app, &w, &o, |a| a.playlist_save(&path));
             }
         });
     }

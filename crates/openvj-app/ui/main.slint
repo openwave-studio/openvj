@@ -6,7 +6,7 @@ import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
-import { Layouts, LayoutPicker, LayoutPlaceholder } from "layouts.slint";
+import { Layouts, LayoutPicker, LayoutPlaceholder, PlayerLayout, PresetRow } from "layouts.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner }
 
 export { Theme, Scope, ModNames, AudioLevels }
@@ -567,6 +567,9 @@ component Toolbar inherits Rectangle {
     in property <bool> midi-on;
     in property <int> layout;
     callback layout-picked(int);
+    // Automix is playing; shown as a chip (click stops it) outside the Player layout.
+    in property <bool> automix-on;
+    callback automix-stop();
     callback audio-toggle();
     callback link-toggle();
     callback midi-toggle();
@@ -614,6 +617,16 @@ component Toolbar inherits Rectangle {
             LayoutPicker {
                 current: root.layout;
                 picked(i) => { root.layout-picked(i); }
+            }
+        }
+        if root.automix-on && root.layout != Layouts.player: HorizontalLayout {
+            horizontal-stretch: 0;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            FlatButton {
+                text: "AUTOMIX ■";
+                active: true;
+                clicked => { root.automix-stop(); }
             }
         }
 
@@ -1439,6 +1452,35 @@ export component MainWindow inherits Window {
     in-out property <int> layout;
     // Called after the layout changes, so the app can remember it.
     callback layout-changed(int);
+
+    // Player layout (layouts.slint).
+    in property <string> playlist-name;
+    in property <string> playlist-info;
+    in property <[PresetRow]> playlist-rows;
+    in property <bool> automix-on;
+    in property <[string]> playlist-length-names;
+    in property <[string]> playlist-length-headings;
+    in property <int> playlist-length;
+    in property <[string]> playlist-style-names;
+    in property <int> playlist-style;
+    in property <[string]> playlist-play-names;
+    in property <bool> playlist-shuffle;
+    in property <bool> playlist-repeat;
+    in property <string> selected-clip-name;
+    callback automix-toggle();
+    callback automix-next();
+    callback playlist-add-selected();
+    callback playlist-remove(int);
+    callback playlist-move(int, int);
+    callback playlist-play-for(int, int);
+    callback playlist-length-picked(int);
+    callback playlist-style-picked(int);
+    callback playlist-shuffle-toggled();
+    callback playlist-repeat-toggled();
+    callback playlist-new();
+    callback playlist-open();
+    callback playlist-save();
+    callback clip-to-playlist();
     public function set-layout(i: int) {
         if (i != root.layout) {
             root.layout = i;
@@ -1492,6 +1534,8 @@ export component MainWindow inherits Window {
                 midi-on: root.midi-on;
                 layout: root.layout;
                 layout-picked(i) => { root.set-layout(i); keys.focus(); }
+                automix-on: root.automix-on;
+                automix-stop => { root.automix-toggle(); }
                 audio-toggle => { root.audio-toggle(); }
                 link-toggle => { root.link-toggle(); }
                 midi-toggle => { root.midi-toggle(); }
@@ -1509,8 +1553,39 @@ export component MainWindow inherits Window {
                 toggle-maximized => { root.toggle-maximized(); }
             }
 
-            // Player and Synthesis aren't built yet.
-            if root.layout != Layouts.mixer: LayoutPlaceholder {
+            if root.layout == Layouts.player: PlayerLayout {
+                vertical-stretch: 1;
+                output-image: root.output-image;
+                playlist-name: root.playlist-name;
+                info: root.playlist-info;
+                rows: root.playlist-rows;
+                live: root.automix-on;
+                length-names: root.playlist-length-names;
+                length-headings: root.playlist-length-headings;
+                length: root.playlist-length;
+                style-names: root.playlist-style-names;
+                style: root.playlist-style;
+                play-names: root.playlist-play-names;
+                shuffle: root.playlist-shuffle;
+                repeat: root.playlist-repeat;
+                selected-clip: root.selected-clip-name;
+                toggle => { root.automix-toggle(); keys.focus(); }
+                next => { root.automix-next(); keys.focus(); }
+                add-selected => { root.playlist-add-selected(); keys.focus(); }
+                remove(i) => { root.playlist-remove(i); }
+                move(a, b) => { root.playlist-move(a, b); }
+                play-for(i, k) => { root.playlist-play-for(i, k); }
+                length-picked(i) => { root.playlist-length-picked(i); }
+                style-picked(i) => { root.playlist-style-picked(i); }
+                shuffle-toggled => { root.playlist-shuffle-toggled(); }
+                repeat-toggled => { root.playlist-repeat-toggled(); }
+                new => { root.playlist-new(); }
+                open => { root.playlist-open(); }
+                save => { root.playlist-save(); }
+            }
+
+            // Synthesis isn't built yet.
+            if root.layout == Layouts.synthesis: LayoutPlaceholder {
                 vertical-stretch: 1;
                 layout: root.layout;
                 output-image: root.output-image;
@@ -1672,6 +1747,7 @@ export component MainWindow inherits Window {
                     remove-layer => { root.remove-layer(); }
                     clip-renamed(t) => { root.clip-renamed(t); }
                     clip-remove => { root.clip-remove(); }
+                    clip-to-playlist => { root.clip-to-playlist(); }
                     clip-restart => { root.clip-restart(); }
                     clip-play-mode-picked(i) => { root.clip-play-mode-picked(i); }
                     clip-synced-picked(b) => { root.clip-synced-picked(b); }

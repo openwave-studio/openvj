@@ -10,14 +10,15 @@
 
 ## 2. Player model
 
-- [ ] 2.1 Presets and playlist types in openvj-core, `.ovjplaylist` read/write with tests
-- [ ] 2.2 Playlist clock: durations in bars or seconds, LENGTH, STYLE, Shuffle, Repeat, with tests
+- [x] 2.1 Presets and playlist types in openvj-core, `.ovjplaylist` read/write with tests
+- [x] 2.2 Playlist clock: durations in bars or seconds, LENGTH, STYLE, Shuffle, Repeat, with tests
 
 ## 3. Player playback and screen
 
-- [ ] 3.1 Engine renders the Player's A/B layers and transition beside the composition
-- [ ] 3.2 Player screen in openDJ's Automix style: list, Automix button, LENGTH and STYLE pickers, Shuffle, Repeat, Open/Save playlist
-- [ ] 3.3 "Add to playlist" on a layer; PLAYER LIVE badge with Stop in other layouts
+- [x] 3.1 Engine renders the Player's A/B layers and transition beside the composition
+- [x] 3.2 Player screen in openDJ's Automix style: list, Automix button, LENGTH and STYLE pickers, Shuffle, Repeat, Open/Save playlist
+- [x] 3.3 "Add to playlist" on a clip; AUTOMIX chip with Stop in other layouts
+- [ ] 3.4 Videos and images in presets (need media loading for the Player's clips)
 
 ## 4. Synthesis
 

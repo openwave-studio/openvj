@@ -268,6 +268,7 @@ export component PropertiesPanel inherits Rectangle {
     callback remove-layer();
     callback clip-renamed(string);
     callback clip-remove();
+    callback clip-to-playlist();
     callback clip-restart();
     callback clip-play-mode-picked(int);
     callback clip-synced-picked(bool);
@@ -636,6 +637,10 @@ export component PropertiesPanel inherits Rectangle {
                     FlatButton {
                         text: "Remove clip";
                         clicked => { root.clip-remove(); }
+                    }
+                    FlatButton {
+                        text: "Add to playlist";
+                        clicked => { root.clip-to-playlist(); }
                     }
                 }
             }

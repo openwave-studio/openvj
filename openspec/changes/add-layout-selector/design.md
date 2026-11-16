@@ -7,12 +7,14 @@
 **Why:** a playlist is meant to be prepared and loaded separately from a composition. Writing presets into the composition's layers would change what gets saved with it, and stopping the Player would have to undo that. Two private layers keep both clean, and reuse the same clip, parameter and effect code.
 
 **Consequences:**
-- Pressing Automix makes the Player live. In Mixer and Synthesis a small "PLAYER LIVE" badge shows, with Stop. Launching a clip in Mixer while the Player is live asks nothing: the Player stops and the composition takes the output back (mirrors how openDJ's Automix yields to a manual action).
+- Pressing Automix makes the Player live. In Mixer and Synthesis an "AUTOMIX ■" chip shows in the top bar; clicking it stops Automix. Launching a clip in Mixer while the Player is live asks nothing: the Player stops and the composition takes the output back (mirrors how openDJ's Automix yields to a manual action).
 - Switching layout never starts or stops the Player.
 
 ## Presets and the playlist file
 
 A preset reuses the composition's saved types: one clip source (generator, ISF file, or media file), its parameter values and mappings, and its effect chain. The playlist file (`.ovjplaylist`, JSON, versioned like composition files) holds presets inline, so a playlist is one self-contained file. Generators are referred to by name and ISF path, like compositions do; a missing one shows as missing and is skipped.
+
+A preset is a saved clip (the composition's own `Clip` type), so it carries source, parameter values, mappings, speed, Transform and effects with no new format. The first version accepts generators (built-in, ISF, MilkDrop); videos and images need the app's media loading to follow the Player's clips and come later.
 
 A separate preset library (presets saved one by one and browsed) is left for later, if needed.
 
