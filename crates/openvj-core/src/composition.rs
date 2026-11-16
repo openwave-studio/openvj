@@ -275,6 +275,9 @@ pub struct Clip {
     /// Applied to the clip alone, top to bottom, before it reaches its layer.
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// Knobs that move several parameters at once (see [`crate::Macro`]). Empty until one is used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<crate::Macro>,
     /// What to launch when the clip finishes a pass.
     #[serde(default, skip_serializing_if = "is_default")]
     pub autopilot: Autopilot,
@@ -328,6 +331,7 @@ impl Clip {
             media_secs: None,
             transform: default_transform(),
             effects: Vec::new(),
+            macros: Vec::new(),
             autopilot: Autopilot::Off,
             trigger: TriggerStyle::Normal,
         }

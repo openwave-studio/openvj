@@ -28,7 +28,7 @@ Durations count bars from the shared tempo (BPM or Link), so changes land on bar
 
 ## Synthesis macros
 
-**Choice:** 8 macros per layer, like Ableton racks and Synesthesia's controls. A macro is a value 0..1 with a list of targets; each target is one generator or effect parameter with a from/to range. The macro sets its targets directly, so a parameter targeted by a macro shows the macro's colour and can't also take its own driver (keeps the one-driver-per-parameter rule). The macro itself takes one driver, using add-parameter-animation's model.
+**Choice:** 8 macros per visual (clip), like Ableton racks and Synesthesia's controls. They live on the clip rather than the layer so a look keeps its macros when it becomes a preset or goes into a playlist. A macro is a value 0..1 with a list of targets; each target is one generator or effect parameter with a from/to range. The macro sets its targets directly, so a parameter targeted by a macro shows the macro's colour and can't also take its own driver (keeps the one-driver-per-parameter rule). The macro itself takes one driver, using add-parameter-animation's model.
 
 **Why 8:** fits one row and matches most MIDI controllers' knob banks (Circuit Tracks has 8 macro knobs).
 

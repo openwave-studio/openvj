@@ -539,6 +539,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        assert_eq!(dec.shown, 2);
         assert_eq!(got.unwrap().len(), 160 * 120 * 4);
         assert!(dec.frame_at(0.1).is_none(), "the same frame isn't handed out twice");
         assert!(dec.frame_at(0.0).is_some(), "going back to a decoded frame comes from the cache");

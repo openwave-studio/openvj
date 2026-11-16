@@ -4,11 +4,13 @@
 //! so it can be unit-tested headless and reused by any front end.
 
 mod composition;
+pub mod discover;
 mod effect;
 pub mod effect_folders;
 mod generator;
 pub mod isf;
 pub mod library;
+mod macros;
 mod midi;
 mod midi_clock;
 pub mod milkdrop;
@@ -22,6 +24,7 @@ mod tempo;
 pub use composition::*;
 pub use effect::*;
 pub use generator::*;
+pub use macros::*;
 pub use midi::*;
 pub use midi_clock::*;
 pub use modulation::*;

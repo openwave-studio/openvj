@@ -21,7 +21,7 @@ pub fn settings_dir() -> Option<PathBuf> {
 }
 
 /// The layouts in the LAYOUT menu, in menu order (see ui/layouts.slint).
-const LAYOUTS: [&str; 3] = ["mixer", "player", "synthesis"];
+const LAYOUTS: [&str; 4] = ["mixer", "player", "synthesis", "discover"];
 
 fn prefs_file() -> Option<PathBuf> {
     Some(settings_dir()?.join("preferences.json"))
@@ -42,7 +42,7 @@ fn layout_index(name: &str) -> i32 {
     LAYOUTS.iter().position(|l| *l == name).unwrap_or(0) as i32
 }
 
-/// The layout used last time (0 Mixer, 1 Player, 2 Synthesis); Mixer the first time.
+/// The layout used last time (0 Mixer, 1 Player, 2 Synthesis, 3 Discover); Mixer the first time.
 pub fn layout() -> i32 {
     read().get("layout").and_then(|v| v.as_str()).map_or(0, layout_index)
 }
@@ -84,6 +84,7 @@ mod tests {
         assert_eq!(layout_index("mixer"), 0);
         assert_eq!(layout_index("player"), 1);
         assert_eq!(layout_index("synthesis"), 2);
+        assert_eq!(layout_index("discover"), 3);
         assert_eq!(layout_index("something-else"), 0);
     }
 }

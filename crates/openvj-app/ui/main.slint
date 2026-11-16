@@ -6,10 +6,12 @@ import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
-import { Layouts, LayoutPicker, LayoutPlaceholder, PlayerLayout, PresetRow } from "layouts.slint";
+import { Layouts, LayoutPicker, PlayerLayout, PresetRow } from "layouts.slint";
+import { Disc, DiscoverLayout, DiscParam } from "discover.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
+import { SynthesisLayout, SynthLayer } from "synthesis.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
-export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib }
+export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam }
 
 export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn }
 
@@ -1439,6 +1441,14 @@ export component MainWindow inherits Window {
     callback playlist-open();
     callback playlist-save();
     callback clip-to-playlist();
+
+    // Synthesis layout (synthesis.slint).
+    in property <[SynthLayer]> synth-layers;
+    in property <[ParamData]> macro-params;
+    in property <[int]> macro-counts;
+    callback synth-focus(int);
+    callback macro-toggle(int, int, int, int);
+    callback macro-clear(int);
     public function set-layout(i: int) {
         if (i != root.layout) {
             root.layout = i;
@@ -1464,8 +1474,11 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
-            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "1" || e.text == "2" || e.text == "3")) {
-                root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : 2);
+            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "1" || e.text == "2" || e.text == "3" || e.text == "4")) {
+                root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : e.text == "3" ? 2 : 3);
+                return accept;
+            }
+            if (root.layout == Layouts.discover && !root.settings-open && !e.modifiers.control && !e.modifiers.meta && Disc.key(e.text)) {
                 return accept;
             }
             if (e.text == Key.Tab && root.layout == Layouts.mixer && !root.settings-open) {
@@ -1564,11 +1577,30 @@ export component MainWindow inherits Window {
 
             if MidiLearn.on: MidiMapBar {}
 
-            // Synthesis isn't built yet.
-            if root.layout == Layouts.synthesis: LayoutPlaceholder {
+            if root.layout == Layouts.synthesis: SynthesisLayout {
                 vertical-stretch: 1;
-                layout: root.layout;
                 output-image: root.output-image;
+                preview-image: root.preview-image;
+                layers: root.synth-layers;
+                clip-title: root.clip-title;
+                has-clip: root.clip-valid;
+                macros: root.macro-params;
+                macro-counts: root.macro-counts;
+                clip-params: root.clip-params;
+                clip-effects: root.clip-effects;
+                layer-params: root.layer-params;
+                comp-params: root.comp-params;
+                focus-layer(l) => { root.synth-focus(l); keys.focus(); }
+                param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
+                param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
+                macro-toggle(m, s, o, i) => { root.macro-toggle(m, s, o, i); }
+                macro-clear(m) => { root.macro-clear(m); }
+                add-to-playlist => { root.clip-to-playlist(); }
+            }
+
+            if root.layout == Layouts.discover: DiscoverLayout {
+                vertical-stretch: 1;
+                preview-image: root.preview-image;
             }
 
             // Mixer: clip grid, with the monitors on the right.

@@ -18,16 +18,20 @@
 - [x] 3.1 Engine renders the Player's A/B layers and transition beside the composition
 - [x] 3.2 Player screen in openDJ's Automix style: list, Automix button, LENGTH and STYLE pickers, Shuffle, Repeat, Open/Save playlist
 - [x] 3.3 "Add to playlist" on a clip; AUTOMIX chip with Stop in other layouts
-- [ ] 3.4 Videos and images in presets (need media loading for the Player's clips)
 
 ## 4. Synthesis
 
-- [ ] 4.1 Macro model in openvj-core (8 per layer, targets with ranges), saved in compositions and presets, with tests
-- [ ] 4.2 Synthesis screen: layer strip, preview, macro row, SOURCE / FX / OUTPUT sections
-- [ ] 4.3 Assigning macro targets; MIDI learn and drivers on macros
-- [ ] 4.4 Save preset and Add to playlist
+- [x] 4.1 Macro model in openvj-core (8 per visual, targets with ranges), saved in compositions and presets, with tests
+- [x] 4.2 Synthesis screen: layer strip, preview, macro row, SOURCE / FX / OUTPUT sections, knobs
+- [x] 4.3 Assigning macro targets (Map / Done) and drivers on macros
+- [x] 4.4 Add to playlist (Save preset waits for the preset library being designed in the library thread)
 
 ## 5. Wrap up
 
-- [ ] 5.1 README "What works"
-- [ ] 5.2 Archive the change
+- [x] 5.1 README "What works"
+- [x] 5.2 Archive the change
+
+## Deferred to later changes
+
+- Videos and images in presets (need media loading for the Player's clips)
+- MIDI learn for macros (with add-midi-learn), renaming macros, editing target ranges

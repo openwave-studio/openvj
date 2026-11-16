@@ -2,6 +2,7 @@
 
 mod app;
 mod browser;
+mod discover;
 mod library;
 mod link;
 mod mapping;
@@ -153,7 +154,6 @@ fn main() -> Result<()> {
     let out = OutputWindow::new()?;
     // Open in the layout used last time (Mixer the first time).
     ui.set_layout(prefs::layout());
-    ui.on_layout_changed(prefs::set_layout);
     {
         let mut a = app.borrow_mut();
         a.attach(&ui);
@@ -168,6 +168,7 @@ fn main() -> Result<()> {
             a.cell_right_clicked(0, 0);
             a.status_message("Demo loaded. Click a clip to launch it, or a column header to launch the whole column.");
         }
+        a.layout_changed(ui.get_layout());
         a.sync(&ui, &out);
     }
 
@@ -258,6 +259,42 @@ fn main() -> Result<()> {
                 (g.get_search(), g.get_kind(), g.get_intensity(), g.get_reactive());
             let tab = ui.get_browser_tab();
             with_app(&app2, &w2, &o2, |a| a.lib_filters_changed(&search, kind, intensity, reactive, tab));
+        });
+    }
+
+    on!(on_layout_changed, |a, i: i32| {
+        prefs::set_layout(i);
+        a.layout_changed(i);
+    });
+
+    // The Discover layout (ui/discover.slint).
+    {
+        let g = ui.global::<Disc>();
+        macro_rules! disc {
+            ($setter:ident, |$app:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+                let (app, w, o) = (app.clone(), w.clone(), o.clone());
+                g.$setter(move |$($arg: $ty),*| with_app(&app, &w, &o, |$app| $body));
+            }};
+        }
+        disc!(on_pack_clicked, |a, i: i32| a.disc_pack_clicked(i));
+        disc!(on_order_picked, |a, i: i32| a.disc_order_picked(i));
+        disc!(on_param_set, |a, i: i32, v: f32| a.disc_param_set(i, v));
+        disc!(on_lock_toggled, |a, i: i32| a.disc_lock_toggled(i));
+        disc!(on_randomize, |a| a.disc_randomize());
+        disc!(on_undo, |a| a.disc_undo());
+        disc!(on_reset, |a| a.disc_reset());
+        disc!(on_set_intensity, |a, n: i32| a.disc_set_intensity(n));
+        disc!(on_add_tag, |a, t: slint::SharedString| a.disc_add_tag(&t));
+        disc!(on_remove_tag, |a, i: i32| a.disc_remove_tag(i));
+        disc!(on_crate_clicked, |a, i: i32| a.disc_crate_clicked(i));
+        disc!(on_add_crate, |a, t: slint::SharedString| a.disc_add_crate(&t));
+        disc!(on_decide, |a, i: i32| a.disc_decide(i));
+        disc!(on_jump, |a, i: i32| a.disc_jump(i));
+        let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
+        g.on_key(move |text| {
+            let mut handled = false;
+            with_app(&app2, &w2, &o2, |a| handled = a.disc_key(&text));
+            handled
         });
     }
 
@@ -390,6 +427,21 @@ fn main() -> Result<()> {
                 with_app(&app, &w, &o, |a| a.save(&path));
             }
         });
+    }
+    // Synthesis layout.
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_synth_focus(move |l| with_app(&app, &w, &o, |a| a.synth_focus(l as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_macro_toggle(move |m, scope, owner, index| {
+            with_app(&app, &w, &o, |a| a.macro_toggle(m as usize, scope, owner, index as usize))
+        });
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_macro_clear(move |m| with_app(&app, &w, &o, |a| a.macro_clear(m as usize)));
     }
     // Player layout.
     {

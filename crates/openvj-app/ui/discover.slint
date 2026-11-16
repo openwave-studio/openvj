@@ -1,0 +1,522 @@
+// The Discover layout: review the library's Not reviewed items one at a time, live with
+// audio on a preview of its own, adjust or randomize their parameters, then Keep, Save as
+// preset, Skip or Unwanted. Nothing here reaches the output.
+// See openspec/changes/add-discover-layout.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { FlatButton, ParamBar } from "controls.slint";
+import { LibChip, LibTile } from "state.slint";
+import { Chip, LabelList, LibKinds } from "library.slint";
+
+export struct DiscParam {
+    name: string,
+    value: float,
+    display: string,
+    locked: bool,
+}
+
+export global Disc {
+    // The item on screen; `has-item` is false when nothing is left to review.
+    in property <bool> has-item;
+    in property <string> name;
+    // GEN, FX, MD (see LibKinds).
+    in property <string> kind;
+    in property <string> detail;
+    in property <string> description;
+    in property <string> empty-text;
+    in property <string> remaining;
+    in property <string> session;
+    in property <float> progress;
+    // The From picker: one chip per pack with its Not reviewed count; none active = all.
+    in property <[LibChip]> packs;
+    in property <int> order;
+    in property <[DiscParam]> params;
+    in property <bool> can-undo;
+    in property <int> intensity: -1;
+    in property <[string]> tags;
+    in property <[LibChip]> crates;
+    in property <[LibTile]> up-next;
+
+    callback pack-clicked(int);
+    callback order-picked(int);
+    callback param-set(int, float);
+    callback lock-toggled(int);
+    callback randomize();
+    callback undo();
+    callback reset();
+    callback set-intensity(int);
+    callback add-tag(string);
+    callback remove-tag(int);
+    callback crate-clicked(int);
+    callback add-crate(string);
+    // 0 Keep, 1 Save as preset, 2 Skip, 3 Unwanted.
+    callback decide(int);
+    callback jump(int);
+    // Returns true when Discover handled the key.
+    callback key(string) -> bool;
+}
+
+component SectionTitle inherits Text {
+    color: Theme.text-dim;
+    font-size: Theme.font-small;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    vertical-alignment: center;
+}
+
+component LockButton inherits Rectangle {
+    in property <bool> locked;
+    callback clicked();
+    width: 24px;
+    height: 20px;
+    border-radius: Theme.radius-small;
+    background: root.locked ? Theme.accent-dim : ta.has-hover ? Theme.raised : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.locked ? Theme.accent : Theme.border;
+    Path {
+        width: 10px;
+        height: 11px;
+        viewbox-width: 10;
+        viewbox-height: 11;
+        stroke: root.locked ? Theme.accent : Theme.text-faint;
+        stroke-width: 1.3px;
+        fill: transparent;
+        commands: "M 1 5 L 9 5 L 9 10 L 1 10 Z M 2.8 5 L 2.8 3.2 Q 2.8 1 5 1 Q 7.2 1 7.2 3.2 L 7.2 5";
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Decision inherits Rectangle {
+    in property <string> text;
+    in property <color> tint: Theme.text;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 40px;
+    border-radius: Theme.radius;
+    background: root.primary ? (ta.pressed ? Theme.accent.darker(0.3) : Theme.accent)
+        : ta.pressed ? Theme.pressed : ta.has-hover ? Theme.raised : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.primary ? Theme.accent : root.tint == Theme.text ? Theme.border : root.tint.with-alpha(0.6);
+    opacity: root.enabled ? 1 : 0.4;
+    Text {
+        text: root.text;
+        color: root.primary ? Theme.on-accent : root.tint;
+        font-size: Theme.font-body;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component NextTile inherits VerticalLayout {
+    in property <LibTile> tile;
+    callback clicked();
+    spacing: 4px;
+    Rectangle {
+        height: self.width * 9 / 16;
+        background: #000;
+        border-width: 1px;
+        border-color: ta.has-hover ? Theme.border : Theme.separator;
+        // Square: a rounded clip over an image can render black (see visual-style).
+        clip: true;
+        if root.tile.has-thumb: Image {
+            width: parent.width - 2px;
+            height: parent.height - 2px;
+            source: root.tile.thumb;
+            image-fit: cover;
+        }
+        Rectangle {
+            x: 4px;
+            y: 4px;
+            width: badge.preferred-width + 6px;
+            height: 13px;
+            border-radius: 2px;
+            background: LibKinds.color(root.tile.kind);
+            badge := Text {
+                text: root.tile.kind;
+                color: #fff;
+                font-size: Theme.font-tiny;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.clicked(); }
+        }
+    }
+    Text {
+        text: root.tile.name;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        overflow: elide;
+    }
+}
+
+export component DiscoverLayout inherits Rectangle {
+    // The Discover preview: the current item, never the output.
+    in property <image> preview-image;
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // From picker, order and progress.
+        HorizontalLayout {
+            height: 26px;
+            spacing: 6px;
+            SectionTitle {
+                text: "FROM";
+            }
+            for p[i] in Disc.packs: Chip {
+                y: (parent.height - self.height) / 2;
+                text: p.label;
+                count: p.count;
+                active: p.active;
+                clicked => { Disc.pack-clicked(i); }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            SectionTitle {
+                text: "ORDER";
+            }
+            FlatButton {
+                y: (parent.height - self.height) / 2;
+                text: "Random";
+                active: Disc.order == 0;
+                clicked => { Disc.order-picked(0); }
+            }
+            FlatButton {
+                y: (parent.height - self.height) / 2;
+                text: "By pack";
+                active: Disc.order == 1;
+                clicked => { Disc.order-picked(1); }
+            }
+        }
+
+        HorizontalLayout {
+            height: 14px;
+            spacing: 10px;
+            Text {
+                text: Disc.remaining;
+                color: Theme.text;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 260px;
+                y: (parent.height - self.height) / 2;
+                height: 4px;
+                border-radius: 2px;
+                background: Theme.track;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(Disc.progress, 0, 1);
+                    border-radius: 2px;
+                    background: Theme.accent;
+                }
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: Disc.session;
+                color: Theme.text-dim;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: "Nothing here reaches the output";
+                color: Theme.text-faint;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 8px;
+
+            // The item, large, and what comes next.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 8px;
+                HorizontalLayout {
+                    height: 26px;
+                    spacing: 8px;
+                    if Disc.has-item: Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: kind.preferred-width + 8px;
+                        height: 16px;
+                        border-radius: 2px;
+                        background: LibKinds.color(Disc.kind);
+                        kind := Text {
+                            text: Disc.kind;
+                            color: #fff;
+                            font-size: Theme.font-tiny;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: Disc.has-item ? Disc.name : "Discover";
+                        color: Theme.text;
+                        font-size: Theme.font-xl;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Disc.detail;
+                        color: Theme.text-dim;
+                        font-size: Theme.font-body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #000;
+                    border-width: 1px;
+                    border-color: Theme.separator;
+                    // Square corners over the GPU frame (see visual-style).
+                    clip: true;
+                    if Disc.has-item: Image {
+                        width: parent.width - 2px;
+                        height: parent.height - 2px;
+                        source: root.preview-image;
+                        image-fit: contain;
+                    }
+                    if !Disc.has-item: Text {
+                        width: parent.width * 0.6;
+                        text: Disc.empty-text;
+                        color: Theme.text-dim;
+                        font-size: Theme.font-normal;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if Disc.description != "": Text {
+                    vertical-stretch: 0;
+                    text: Disc.description;
+                    color: Theme.text-dim;
+                    font-size: Theme.font-body;
+                    wrap: word-wrap;
+                }
+                SectionTitle {
+                    vertical-stretch: 0;
+                    height: 16px;
+                    text: "UP NEXT";
+                }
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    for t[i] in Disc.up-next: NextTile {
+                        width: 132px;
+                        tile: t;
+                        clicked => { Disc.jump(i); }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            // Parameters, intensity, crates and tags, and the four decisions.
+            Rectangle {
+                width: 400px;
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.separator;
+                border-radius: Theme.radius;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        height: 24px;
+                        spacing: 6px;
+                        SectionTitle {
+                            horizontal-stretch: 1;
+                            text: "PARAMETERS";
+                        }
+                        FlatButton {
+                            text: "Randomize (R)";
+                            primary: true;
+                            enabled: Disc.has-item && Disc.params.length > 0;
+                            clicked => { Disc.randomize(); }
+                        }
+                        FlatButton {
+                            text: "Undo";
+                            enabled: Disc.can-undo;
+                            clicked => { Disc.undo(); }
+                        }
+                        FlatButton {
+                            text: "Reset";
+                            enabled: Disc.has-item;
+                            clicked => { Disc.reset(); }
+                        }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        min-height: 80px;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 6px;
+                            for p[i] in Disc.params: HorizontalLayout {
+                                height: 20px;
+                                spacing: 8px;
+                                Text {
+                                    width: 100px;
+                                    text: p.name;
+                                    color: Theme.text-dim;
+                                    font-size: Theme.font-body;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                ParamBar {
+                                    horizontal-stretch: 1;
+                                    value: p.value;
+                                    live: p.value;
+                                    display: p.display;
+                                    changed(v) => { Disc.param-set(i, v); }
+                                }
+                                LockButton {
+                                    locked: p.locked;
+                                    clicked => { Disc.lock-toggled(i); }
+                                }
+                            }
+                            if Disc.has-item && Disc.params.length == 0: Text {
+                                text: "No parameters to adjust.";
+                                color: Theme.text-faint;
+                                font-size: Theme.font-body;
+                            }
+                        }
+                    }
+                    Text {
+                        vertical-stretch: 0;
+                        text: "Locked parameters stay put when you randomize.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-small;
+                    }
+
+                    VerticalLayout {
+                        vertical-stretch: 0;
+                        spacing: 6px;
+                        SectionTitle {
+                            text: "INTENSITY (0–5 KEYS)";
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            height: 28px;
+                            for n in 6: Rectangle {
+                                horizontal-stretch: 1;
+                                border-radius: Theme.radius;
+                                background: n == Disc.intensity ? Theme.selection : n-ta.has-hover ? Theme.raised : Theme.panel-2;
+                                border-width: 1px;
+                                border-color: n == Disc.intensity ? Theme.selection : Theme.border;
+                                Text {
+                                    text: n;
+                                    color: n == Disc.intensity ? #fff : Theme.text-dim;
+                                    font-size: Theme.font-body;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                n-ta := TouchArea {
+                                    enabled: Disc.has-item;
+                                    mouse-cursor: pointer;
+                                    clicked => { Disc.set-intensity(n == Disc.intensity ? -1 : n); }
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        vertical-stretch: 0;
+                        spacing: 6px;
+                        SectionTitle {
+                            text: "CRATES";
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            height: 22px;
+                            for c[i] in Disc.crates: Chip {
+                                text: c.label;
+                                active: c.active;
+                                clicked => { Disc.crate-clicked(i); }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        LabelList {
+                            title: "";
+                            items: [];
+                            add-hint: "+ new crate";
+                            add(t) => { Disc.add-crate(t); }
+                        }
+                    }
+                    LabelList {
+                        title: "TAGS";
+                        items: Disc.tags;
+                        add-hint: "+ tag";
+                        add(t) => { Disc.add-tag(t); }
+                        remove(i) => { Disc.remove-tag(i); }
+                    }
+
+                    GridLayout {
+                        vertical-stretch: 0;
+                        spacing: 8px;
+                        Row {
+                            Decision {
+                                text: "Unwanted (X)";
+                                tint: Theme.warn;
+                                enabled: Disc.has-item;
+                                clicked => { Disc.decide(3); }
+                            }
+                            Decision {
+                                text: "Skip for now (→)";
+                                enabled: Disc.has-item;
+                                clicked => { Disc.decide(2); }
+                            }
+                        }
+                        Row {
+                            Decision {
+                                text: "Save as preset (S)";
+                                tint: Theme.accent;
+                                enabled: Disc.has-item;
+                                clicked => { Disc.decide(1); }
+                            }
+                            Decision {
+                                text: "Keep in library (K)";
+                                primary: true;
+                                enabled: Disc.has-item;
+                                clicked => { Disc.decide(0); }
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Save as preset keeps the original and adds a preset with these values. Unwanted moves it to the Unwanted crate; nothing is deleted.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-small;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

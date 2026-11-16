@@ -655,6 +655,11 @@ impl Engine {
         self.audition = clip.map(|c| (c, None));
     }
 
+    /// The auditioned clip, to change its parameters while it plays on.
+    pub fn audition_clip_mut(&mut self) -> Option<&mut Clip> {
+        self.audition.as_mut().map(|(c, _)| c)
+    }
+
     /// Whether a clip is being auditioned on the Preview.
     pub fn auditioning(&self) -> bool {
         self.audition.is_some()
