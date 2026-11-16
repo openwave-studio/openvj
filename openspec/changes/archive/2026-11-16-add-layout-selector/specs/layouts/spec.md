@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Layout selector
-The top bar SHALL show, at its left, a layout selector like openDJ's: a button with the current layout's icon and name that opens a menu titled LAYOUT, listing Mixer, Player and Synthesis with an icon each and a check mark in the cyan accent on the current one.
+The top bar SHALL show, at its left, a layout selector like openDJ's: a button with the current layout's icon and name that opens a menu titled LAYOUT, listing Mixer, Player, Synthesis and Discover with an icon each and a check mark in the cyan accent on the current one.
 
 #### Scenario: Switch layout from the menu
 - **WHEN** the VJ opens the layout menu and picks Synthesis

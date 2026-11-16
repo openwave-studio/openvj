@@ -140,44 +140,6 @@ export component LayoutPicker inherits Rectangle {
         }
     }
 }
-
-/// Stand-in for a layout that isn't built yet: the output, large, with a note.
-export component LayoutPlaceholder inherits Rectangle {
-    in property <int> layout;
-    in property <image> output-image;
-
-    background: Theme.bg;
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
-        alignment: center;
-        Rectangle {
-            vertical-stretch: 1;
-            max-height: 540px;
-            Image {
-                width: parent.width;
-                height: parent.height;
-                source: root.output-image;
-                image-fit: contain;
-            }
-        }
-        Text {
-            text: root.layout == Layouts.player
-                ? "Player is coming: a playlist of presets that plays by itself and follows the music."
-                : "Synthesis is coming: one layer at a time, laid out like a synth, with macros to play live.";
-            color: Theme.text-dim;
-            font-size: Theme.font-normal;
-            horizontal-alignment: center;
-        }
-        Text {
-            text: "Switch back to Mixer with Cmd+1 (Ctrl+1) or the LAYOUT menu.";
-            color: Theme.text-faint;
-            font-size: Theme.font-body;
-            horizontal-alignment: center;
-        }
-    }
-}
-
 /// One preset row in the Player's playlist.
 export struct PresetRow {
     name: string,
