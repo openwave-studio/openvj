@@ -24,8 +24,8 @@
 
 ## 4. Expanded library (own PR)
 
-- [ ] 4.1 Tab/expand opens it over the clip grid; Tab/Esc returns
-- [ ] 4.2 Sidebar filters, larger grid, info panel with Put in and Add to playlist
+- [x] 4.1 Tab/expand opens it over the clip grid; Tab/Esc returns
+- [x] 4.2 Sidebar filters, larger grid, info panel with Put in and Add to playlist
 
 ## 5. Wrap up
 

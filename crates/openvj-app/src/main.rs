@@ -235,6 +235,13 @@ fn main() -> Result<()> {
         lib!(on_effect_add, |a, to: i32| a.lib_effect_add(to));
         lib!(on_use_preview_thumbnail, |a| a.lib_use_preview_thumbnail());
         lib!(on_done, |a| a.library_done());
+        lib!(on_toggle_expanded, |a| a.lib_toggle_expanded());
+        lib!(on_side_clicked, |a, i: i32| a.lib_side_clicked(i));
+        lib!(on_add_tag, |a, t: slint::SharedString| a.lib_add_tag(&t));
+        lib!(on_remove_tag, |a, i: i32| a.lib_remove_tag(i));
+        lib!(on_add_to_crate, |a, t: slint::SharedString| a.lib_add_to_crate(&t));
+        lib!(on_remove_from_crate, |a, i: i32| a.lib_remove_from_crate(i));
+        lib!(on_add_to_playlist, |a| a.lib_add_to_playlist());
         let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
         g.on_key(move |text| {
             let mut handled = false;

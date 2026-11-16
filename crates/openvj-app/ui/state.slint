@@ -125,3 +125,11 @@ export struct LibChip {
     count: string,
     active: bool,
 }
+
+// A row of the expanded library's sidebar: a heading or a filter with its count.
+export struct LibSideRow {
+    label: string,
+    count: string,
+    active: bool,
+    heading: bool,
+}

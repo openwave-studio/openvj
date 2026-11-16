@@ -31,8 +31,8 @@ use crate::midi::{self, MidiPorts};
 use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
-    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, Lib, LibChip, LibTile, MainWindow,
-    MappingWindow, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
+    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, EffectData, LayerData, Lib, LibChip, LibSideRow, LibTile,
+    MainWindow, MappingWindow, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
 };
 
 // The output mapping window's side of the app.
@@ -248,6 +248,8 @@ pub struct App {
     lib_release_keys: bool,
     /// The browser tab showing (0 Sources, 1 Files, 2 Effects).
     browser_tab: i32,
+    /// A browser tab the library asked for (its sidebar's Effects or a source kind).
+    lib_tab_request: Option<i32>,
     inputs_model: Rc<VecModel<BrowserItem>>,
     files_model: Rc<VecModel<BrowserItem>>,
     bands_model: Rc<VecModel<f32>>,
@@ -351,6 +353,7 @@ impl App {
             lib_focus_search: false,
             lib_release_keys: false,
             browser_tab: 0,
+            lib_tab_request: None,
             inputs_model: Rc::new(VecModel::default()),
             files_model: Rc::new(VecModel::default()),
             bands_model: Rc::new(VecModel::from(vec![0.0; BAND_COUNT])),
@@ -927,6 +930,9 @@ impl App {
         if std::mem::take(&mut self.lib_focus_search) {
             let lib = ui.global::<Lib>();
             lib.set_focus_search(lib.get_focus_search() + 1);
+        }
+        if let Some(tab) = self.lib_tab_request.take() {
+            ui.set_browser_tab(tab);
         }
         if std::mem::take(&mut self.lib_release_keys) {
             ui.invoke_focus_keys();
@@ -2290,6 +2296,9 @@ impl App {
             Some((l, c)) => {
                 self.place_library(l, c, id);
                 self.stop_audition();
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded(); // back to the Mixer to see it in its slot
+                }
             }
             None => self.set_status("Select a slot first (right-click a cell)"),
         }
@@ -2490,6 +2499,9 @@ impl App {
                 true
             }
             "\u{1b}" => {
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded();
+                }
                 self.library_done();
                 true
             }
@@ -2521,6 +2533,98 @@ impl App {
         self.lib_focus_search = true;
         self.library_dirty = true;
         true
+    }
+
+    /// Tab or the Expand button: the library takes the clip grid's place, or gives it back.
+    pub fn lib_toggle_expanded(&mut self) {
+        let view = &mut self.library.view;
+        view.expanded = !view.expanded;
+        if !view.expanded {
+            // The small panel has no pack or category filter to show or clear.
+            view.filter.pack.clear();
+            view.filter.category.clear();
+        }
+        if view.expanded && self.browser_tab == 1 {
+            self.lib_tab_request = Some(0);
+        }
+        self.library_dirty = true;
+    }
+
+    /// A sidebar row: a view, a kind, Effects, a pack or a category (a second click on an
+    /// active pack or category clears it).
+    pub fn lib_side_clicked(&mut self, i: i32) {
+        use crate::library::SideAction;
+        let Some(action) = usize::try_from(i).ok().and_then(|i| self.library.view.side.get(i)).cloned() else {
+            return;
+        };
+        let view = &mut self.library.view;
+        match action {
+            SideAction::Heading => return,
+            SideAction::View(v) => view.filter.view = v,
+            SideAction::Kind(k) => {
+                view.kind = k;
+                if view.effects {
+                    self.lib_tab_request = Some(0);
+                }
+            }
+            SideAction::Effects => {
+                if !view.effects {
+                    self.lib_tab_request = Some(2);
+                }
+            }
+            SideAction::Pack(p) => {
+                view.filter.pack = if view.filter.pack == p { String::new() } else { p };
+            }
+            SideAction::Category(c) => {
+                view.filter.category = if view.filter.category.eq_ignore_ascii_case(&c) { String::new() } else { c };
+            }
+        }
+        self.library_dirty = true;
+    }
+
+    pub fn lib_add_tag(&mut self, tag: &str) {
+        let tag = tag.trim().to_owned();
+        if !tag.is_empty() {
+            self.lib_edit(|lib, id| lib.add_tag(id, &tag));
+        }
+    }
+
+    pub fn lib_remove_tag(&mut self, i: i32) {
+        self.lib_edit(|lib, id| {
+            if let Some(tag) = usize::try_from(i).ok().and_then(|i| lib.entry(id).tags.get(i).cloned()) {
+                lib.remove_tag(id, &tag);
+            }
+        });
+    }
+
+    pub fn lib_add_to_crate(&mut self, name: &str) {
+        let name = name.trim().to_owned();
+        if !name.is_empty() {
+            self.lib_edit(|lib, id| lib.add_to_crate(id, &name));
+        }
+    }
+
+    pub fn lib_remove_from_crate(&mut self, i: i32) {
+        self.lib_edit(|lib, id| {
+            if let Some(name) = usize::try_from(i).ok().and_then(|i| lib.entry(id).crates.get(i).cloned()) {
+                lib.remove_from_crate(id, &name);
+            }
+        });
+    }
+
+    /// Adds the selected source to the end of the Player's playlist.
+    pub fn lib_add_to_playlist(&mut self) {
+        let Some(id) = self.library.view.selected.clone() else { return };
+        let Some(clip) = self.library_clip(&id) else { return };
+        match self.player.add(&clip) {
+            Ok(()) => {
+                self.library.lib.record_use(&id, unix_now());
+                self.library.changed();
+                self.library_dirty = true;
+                self.set_status(format!("Added {} to the playlist", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
     }
 
     /// Puts newly decoded thumbnails into the tiles that show them.
@@ -2653,6 +2757,48 @@ impl App {
                 None => "Put in slot".into(),
             };
             g.set_place_label(place.into());
+            let entry = self.library.lib.entry(id);
+            let mut detail = vec![item.kind.name().to_owned()];
+            if !item.pack.is_empty() {
+                detail.push(item.pack.clone());
+            }
+            if !item.categories.is_empty() {
+                detail.push(item.categories.join(", "));
+            }
+            let mut detail = detail.join(" · ");
+            for extra in [&item.description, &item.credit] {
+                if !extra.is_empty() {
+                    detail.push('\n');
+                    detail.push_str(extra);
+                }
+            }
+            if item.audio_reactive {
+                detail.push_str("\nReacts to audio");
+            }
+            g.set_selected_detail(detail.into());
+            g.set_selected_usage(crate::library::usage_text(entry.uses, entry.last_used, unix_now()).into());
+            let strings =
+                |v: &[String]| ModelRc::new(VecModel::from(v.iter().map(SharedString::from).collect::<Vec<_>>()));
+            g.set_selected_tags(strings(&entry.tags));
+            g.set_selected_crates(strings(&entry.crates));
+            g.set_selected_is_effect(item.kind == openvj_core::library::Kind::Effect);
+        }
+
+        g.set_kind(self.library.view.kind as i32);
+        g.set_expanded(self.library.view.expanded);
+        if self.library.view.expanded {
+            let rows = crate::library::side_rows(&self.library.lib, &self.library.view);
+            let model: Vec<LibSideRow> = rows
+                .iter()
+                .map(|r| LibSideRow {
+                    label: r.label.as_str().into(),
+                    count: r.count.as_str().into(),
+                    active: r.active,
+                    heading: r.action == crate::library::SideAction::Heading,
+                })
+                .collect();
+            g.set_side_rows(ModelRc::new(VecModel::from(model)));
+            self.library.view.side = rows.into_iter().map(|r| r.action).collect();
         }
     }
 
@@ -2686,7 +2832,10 @@ impl App {
     pub fn key(&mut self, text: &str) -> bool {
         match text {
             "\u{1b}" => {
-                if self.engine.auditioning() || self.armed.is_some() {
+                if self.library.view.expanded {
+                    self.lib_toggle_expanded();
+                    self.library_done();
+                } else if self.engine.auditioning() || self.armed.is_some() {
                     self.stop_audition();
                     self.armed = None;
                     self.browser_dirty = true;

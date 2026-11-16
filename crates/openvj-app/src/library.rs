@@ -1,7 +1,7 @@
 //! The app's side of the library: `library.json` in the settings folder, kept in step with
 //! the effect and MilkDrop folders, and a disk cache of thumbnails rendered by the engine.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -402,6 +402,10 @@ pub struct LibraryView {
     /// The views behind the chips shown, in order.
     pub chips: Vec<openvj_core::library::View>,
     pub selected: Option<String>,
+    /// The library fills the clip grid's place, with a sidebar and an info panel.
+    pub expanded: bool,
+    /// What each sidebar row does, in order.
+    pub side: Vec<SideAction>,
     /// Decoded thumbnails by file, most recently used last.
     images: HashMap<PathBuf, slint::Image>,
     order: VecDeque<PathBuf>,
@@ -441,6 +445,8 @@ impl Default for LibraryView {
             seen: HashSet::new(),
             chips: Vec::new(),
             selected: None,
+            expanded: false,
+            side: Vec::new(),
             images: HashMap::new(),
             order: VecDeque::new(),
             decoding: HashSet::new(),
@@ -509,6 +515,138 @@ impl LibraryView {
         }
         out
     }
+}
+
+/// What a row of the expanded library's sidebar does when clicked.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SideAction {
+    Heading,
+    View(openvj_core::library::View),
+    /// Index into [`SOURCE_KINDS`].
+    Kind(usize),
+    Effects,
+    Pack(String),
+    Category(String),
+}
+
+/// A row of the expanded library's sidebar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SideRow {
+    pub label: String,
+    pub count: String,
+    pub active: bool,
+    pub action: SideAction,
+}
+
+/// Categories listed in the sidebar, at most.
+const SIDE_CATEGORIES: usize = 12;
+
+/// The expanded library's sidebar: views, kinds, crates, packs and the biggest categories,
+/// each with how many items it holds in the current tab and view.
+pub fn side_rows(lib: &Library, view: &LibraryView) -> Vec<SideRow> {
+    use openvj_core::library::{Filter, View};
+    let filter = view.query_filter();
+    let heading =
+        |label: &str| SideRow { label: label.into(), count: String::new(), active: false, action: SideAction::Heading };
+    let count = |f: &Filter| lib.query(f).len();
+    let mut rows = vec![heading("LIBRARY")];
+    let kinds = Filter { kinds: filter.kinds.clone(), ..Default::default() };
+    let views = [View::MyLibrary, View::Favorites, View::Recent, View::Discover, View::Unwanted, View::All];
+    for v in views {
+        let n = count(&Filter { view: v.clone(), ..kinds.clone() });
+        rows.push(SideRow {
+            label: chip_label(&v),
+            count: thousands(n),
+            active: filter.view == v,
+            action: SideAction::View(v),
+        });
+    }
+
+    rows.push(heading("KIND"));
+    let in_view = Filter { view: filter.view.clone(), ..Default::default() };
+    for (i, (label, kind)) in SOURCE_KINDS.iter().enumerate() {
+        let kinds = match kind {
+            Some(k) => vec![*k],
+            None => vec![Kind::Generator, Kind::MilkDrop, Kind::Preset],
+        };
+        rows.push(SideRow {
+            label: if kind.is_none() { "All sources".into() } else { (*label).into() },
+            count: thousands(count(&Filter { kinds, ..in_view.clone() })),
+            active: !view.effects && view.kind == i,
+            action: SideAction::Kind(i),
+        });
+    }
+    rows.push(SideRow {
+        label: "Effects".into(),
+        count: thousands(count(&Filter { kinds: vec![Kind::Effect], ..in_view.clone() })),
+        active: view.effects,
+        action: SideAction::Effects,
+    });
+
+    if !lib.crates().is_empty() {
+        rows.push(heading("CRATES"));
+        for name in lib.crates() {
+            let v = View::Crate(name.clone());
+            rows.push(SideRow {
+                label: name.clone(),
+                count: thousands(count(&Filter { view: v.clone(), ..kinds.clone() })),
+                active: filter.view == v,
+                action: SideAction::View(v),
+            });
+        }
+    }
+
+    // Packs and categories of what the view shows (before search, pack and category).
+    let base = Filter { pack: String::new(), category: String::new(), search: String::new(), ..filter.clone() };
+    let items = lib.query(&base);
+    let mut packs: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut categories: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    for item in &items {
+        *packs.entry(item.pack.as_str()).or_default() += 1;
+        for c in &item.categories {
+            categories.entry(c.to_lowercase()).or_insert_with(|| (c.clone(), 0)).1 += 1;
+        }
+    }
+    packs.remove("");
+    if !packs.is_empty() {
+        rows.push(heading("PACK"));
+        for (pack, n) in packs {
+            rows.push(SideRow {
+                label: pack.into(),
+                count: thousands(n),
+                active: filter.pack == pack,
+                action: SideAction::Pack(pack.into()),
+            });
+        }
+    }
+    let mut categories: Vec<(String, usize)> = categories.into_values().collect();
+    categories.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    categories.truncate(SIDE_CATEGORIES);
+    if !categories.is_empty() {
+        rows.push(heading("CATEGORY"));
+        for (cat, n) in categories {
+            rows.push(SideRow {
+                active: filter.category.eq_ignore_ascii_case(&cat),
+                count: thousands(n),
+                action: SideAction::Category(cat.clone()),
+                label: cat,
+            });
+        }
+    }
+    rows
+}
+
+/// "Used 3 times, last today" for the expanded library's info panel.
+pub fn usage_text(uses: u32, last_used: Option<u64>, now: u64) -> String {
+    let Some(last) = last_used.filter(|_| uses > 0) else { return "Not used yet".into() };
+    let days = now.saturating_sub(last) / 86_400;
+    let when = match days {
+        0 => "today".to_owned(),
+        1 => "yesterday".to_owned(),
+        d => format!("{d} days ago"),
+    };
+    let times = if uses == 1 { "once".to_owned() } else { format!("{uses} times") };
+    format!("Used {times}, last {when}")
 }
 
 /// The view chips: My library, Favorites, Recent, each crate, Discover, Unwanted.
@@ -601,6 +739,53 @@ mod tests {
         let labels: Vec<String> = chip_views(&lib).iter().map(chip_label).collect();
         assert_eq!(labels, ["My library", "★ Favorites", "Recent", "Peak hour", "Discover", "Unwanted"]);
         assert_eq!(chip_views(&lib)[3], View::Crate("Peak hour".into()));
+    }
+
+    #[test]
+    fn sidebar_counts_views_kinds_and_packs() {
+        use openvj_core::library::{Library, LibraryFile, View};
+        let item = |id: &str, kind, pack: &str, cat: &str| Item {
+            id: id.into(),
+            kind,
+            name: id.into(),
+            pack: pack.into(),
+            description: String::new(),
+            credit: String::new(),
+            categories: vec![cat.into()],
+            audio_reactive: false,
+            bundled: true,
+            path: None,
+        };
+        let mut lib = Library::new(
+            vec![
+                item("gen:a", Kind::Generator, "Built-in", "Tunnel"),
+                item("isf:b", Kind::Generator, "Ghost Arcade", "tunnel"),
+                item("isf:c", Kind::Effect, "Ghost Arcade", "Glitch"),
+            ],
+            LibraryFile::default(),
+        );
+        lib.set_status("gen:a", openvj_core::library::Status::Kept);
+        lib.add_to_crate("gen:a", "Techno");
+        let mut view = LibraryView::default();
+        view.filter.view = View::All;
+        let rows = side_rows(&lib, &view);
+        let row = |label: &str| rows.iter().find(|r| r.label == label).expect(label).clone();
+        assert_eq!(row("My library").count, "1");
+        assert!(row("Everything").active);
+        assert_eq!(row("All sources").count, "2");
+        assert_eq!(row("Effects").count, "1");
+        assert_eq!(row("Techno").action, SideAction::View(View::Crate("Techno".into())));
+        assert_eq!(row("Ghost Arcade").count, "1");
+        // Categories group case-insensitively.
+        assert_eq!(row("Tunnel").count, "2");
+        assert!(rows.iter().all(|r| r.label != "Glitch"));
+    }
+
+    #[test]
+    fn usage_reads_naturally() {
+        assert_eq!(usage_text(0, None, 1000), "Not used yet");
+        assert_eq!(usage_text(1, Some(1000), 1000), "Used once, last today");
+        assert_eq!(usage_text(3, Some(0), 3 * 86_400), "Used 3 times, last 3 days ago");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme, CloseIcon } from "theme.slint";
 import { FlatButton } from "controls.slint";
-import { LibTile, LibChip } from "state.slint";
+import { LibTile, LibChip, LibSideRow } from "state.slint";
 
 /// Colour of a library kind badge.
 export global LibKinds {
@@ -262,6 +262,14 @@ export global Lib {
     in property <bool> selected-unwanted;
     in property <bool> selected-kept;
     in property <string> place-label: "Put in slot";
+    // The expanded library over the clip grid (Tab).
+    in property <bool> expanded;
+    in property <[LibSideRow]> side-rows;
+    in property <string> selected-detail;
+    in property <string> selected-usage;
+    in property <[string]> selected-tags;
+    in property <[string]> selected-crates;
+    in property <bool> selected-is-effect;
 
     callback tile-clicked(int);
     callback tile-double-clicked(int);
@@ -280,6 +288,13 @@ export global Lib {
     callback use-preview-thumbnail();
     // Esc with nothing left to clear: the grid gives the keyboard back.
     callback done();
+    callback toggle-expanded();
+    callback side-clicked(int);
+    callback add-tag(string);
+    callback remove-tag(int);
+    callback add-to-crate(string);
+    callback remove-from-crate(int);
+    callback add-to-playlist();
 }
 
 /// The library panel: search, chips, filters, grid, and a bar for the selected item.
@@ -287,6 +302,9 @@ export component LibraryPanel inherits FocusScope {
     in property <bool> is-effects;
     in property <bool> clip-selected;
     in property <bool> group-selected;
+    // The expanded view: bigger tiles, the chips live in the sidebar, the info panel
+    // replaces the selection bar.
+    in property <bool> large;
 
     property <int> focus-search: Lib.focus-search;
     changed focus-search => {
@@ -294,7 +312,7 @@ export component LibraryPanel inherits FocusScope {
         search-input.set-selection-offsets(Lib.search.character-count, Lib.search.character-count);
     }
 
-    property <length> tile-min: Lib.tile-size == 0 ? 96px : Lib.tile-size == 1 ? 132px : 190px;
+    property <length> tile-min: (Lib.tile-size == 0 ? 96px : Lib.tile-size == 1 ? 132px : 190px) + (root.large ? 60px : 0px);
     property <int> columns: max(1, floor((grid.width - 12px + 6px) / (root.tile-min + 6px)));
     property <length> tile-w: (grid.width - 12px - (root.columns - 1) * 6px) / root.columns;
     property <length> row-h: root.tile-w * 9 / 16 + 30px;
@@ -405,7 +423,7 @@ export component LibraryPanel inherits FocusScope {
         }
 
         // Views: My library, Favorites, Recent, crates, Discover, Unwanted.
-        HorizontalLayout {
+        if !root.large: HorizontalLayout {
             spacing: 4px;
             height: 22px;
             for chip[i] in Lib.chips: Chip {
@@ -498,7 +516,7 @@ export component LibraryPanel inherits FocusScope {
         }
 
         // The selected item: what keys and buttons do to it.
-        if Lib.selected >= 0: VerticalLayout {
+        if Lib.selected >= 0 && !root.large: VerticalLayout {
             spacing: 4px;
             HorizontalLayout {
                 height: 24px;
@@ -586,8 +604,8 @@ export component LibraryPanel inherits FocusScope {
                 }
             }
         }
-        if Lib.selected < 0: Text {
-            height: 52px;
+        if Lib.selected < 0 || root.large: Text {
+            height: root.large ? 20px : 52px;
             text: root.is-effects
                 ? "Click an effect to preview it on the selected clip. 0–5 intensity · F favorite · X unwanted · Enter adds it to the layer"
                 : "Click to preview, double-click or Enter to put in the slot. 0–5 intensity · F favorite · K keep · X unwanted";
@@ -597,5 +615,306 @@ export component LibraryPanel inherits FocusScope {
             vertical-alignment: center;
         }
 
+    }
+}
+
+/// A sidebar row: a heading, or a filter with its count.
+component SideRow inherits Rectangle {
+    in property <LibSideRow> entry;
+    callback clicked();
+    height: entry.heading ? 28px : 24px;
+    border-radius: Theme.radius-small;
+    background: entry.active ? Theme.accent.with-alpha(0.14) : !entry.heading && ta.has-hover ? Theme.raised : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            horizontal-stretch: 1;
+            text: entry.label;
+            color: entry.heading ? Theme.text-dim : entry.active ? Theme.accent : Theme.text;
+            font-size: entry.heading ? Theme.font-small : 12px;
+            font-weight: entry.heading ? 700 : 400;
+            vertical-alignment: entry.heading ? bottom : center;
+            overflow: elide;
+        }
+        Text {
+            text: entry.count;
+            color: Theme.text-dim;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: !entry.heading;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A removable label (a tag or a crate) with an entry to add more.
+component LabelList inherits VerticalLayout {
+    in property <string> title;
+    in property <[string]> items;
+    in property <string> add-hint;
+    callback add(string);
+    callback remove(int);
+    spacing: 4px;
+    vertical-stretch: 0;
+    Text {
+        text: root.title;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 700;
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        height: 20px;
+        for item[i] in root.items: Rectangle {
+            height: 20px;
+            width: label.preferred-width + 26px;
+            border-radius: 10px;
+            background: Theme.raised;
+            label := Text {
+                x: 8px;
+                text: item;
+                color: Theme.text;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                x: parent.width - 16px;
+                width: 14px;
+                mouse-cursor: pointer;
+                clicked => { root.remove(i); }
+                CloseIcon {
+                    size: 7px;
+                }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 80px;
+            height: 20px;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: entry.has-focus ? Theme.accent : Theme.border;
+            entry := TextInput {
+                x: 8px;
+                width: parent.width - 16px;
+                y: (parent.height - self.height) / 2;
+                color: Theme.text;
+                font-size: Theme.font-small;
+                single-line: true;
+                accepted => {
+                    if (self.text != "") {
+                        root.add(self.text);
+                        self.text = "";
+                    }
+                }
+            }
+            if entry.text == "": Text {
+                x: 8px;
+                text: root.add-hint;
+                color: Theme.text-faint;
+                font-size: Theme.font-small;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+/// The library over the clip grid: a filter sidebar, a big grid and the selected item.
+export component ExpandedLibrary inherits Rectangle {
+    in property <bool> is-effects;
+    in property <bool> clip-selected;
+    in property <bool> group-selected;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.separator;
+    border-radius: Theme.radius;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+
+        // Sidebar: library views, kinds, packs, crates, categories.
+        VerticalLayout {
+            width: 210px;
+            spacing: 6px;
+            HorizontalLayout {
+                height: 26px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "LIBRARY";
+                    color: Theme.accent;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                FlatButton {
+                    text: "Close (Tab)";
+                    clicked => { Lib.toggle-expanded(); }
+                }
+            }
+            ListView {
+                for row[i] in Lib.side-rows: SideRow {
+                    entry: row;
+                    clicked => { Lib.side-clicked(i); }
+                }
+            }
+        }
+
+        LibraryPanel {
+            horizontal-stretch: 1;
+            large: true;
+            is-effects: root.is-effects;
+            clip-selected: root.clip-selected;
+            group-selected: root.group-selected;
+        }
+
+        // The selected item. The Preview monitor beside it shows it playing.
+        VerticalLayout {
+            width: 280px;
+            spacing: 10px;
+            if Lib.selected < 0: Text {
+                vertical-stretch: 1;
+                text: "Select an item to set its intensity, tags and crates, or put it in a slot.";
+                color: Theme.text-faint;
+                font-size: Theme.font-body;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            if Lib.selected >= 0: VerticalLayout {
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: Lib.selected-name;
+                        color: Theme.text;
+                        font-size: Theme.font-large;
+                        font-weight: 600;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    FlatButton {
+                        height: 28px;
+                        text: Lib.selected-favorite ? "★" : "☆";
+                        active: Lib.selected-favorite;
+                        tint: Theme.tempo;
+                        clicked => { Lib.toggle-favorite(); }
+                    }
+                }
+                Text {
+                    text: Lib.selected-detail;
+                    color: Theme.text-dim;
+                    font-size: Theme.font-body;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "INTENSITY";
+                    color: Theme.text-dim;
+                    font-size: Theme.font-small;
+                    font-weight: 700;
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    height: 28px;
+                    for n in 6: Rectangle {
+                        border-radius: Theme.radius-small;
+                        background: n == Lib.selected-intensity ? Theme.selection : big-ta.has-hover ? Theme.raised : Theme.panel-2;
+                        border-width: 1px;
+                        border-color: n == Lib.selected-intensity ? Theme.selection : Theme.border;
+                        Text {
+                            text: n;
+                            color: n == Lib.selected-intensity ? Theme.text : Theme.text-dim;
+                            font-size: 12px;
+                        }
+                        big-ta := TouchArea {
+                            clicked => { Lib.set-intensity(n); }
+                        }
+                    }
+                }
+                Text {
+                    text: "0 calm … 5 peak";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-small;
+                }
+                LabelList {
+                    title: "TAGS";
+                    items: Lib.selected-tags;
+                    add-hint: "+ tag";
+                    add(t) => { Lib.add-tag(t); }
+                    remove(i) => { Lib.remove-tag(i); }
+                }
+                LabelList {
+                    title: "CRATES";
+                    items: Lib.selected-crates;
+                    add-hint: "+ crate";
+                    add(t) => { Lib.add-to-crate(t); }
+                    remove(i) => { Lib.remove-from-crate(i); }
+                }
+                Text {
+                    text: Lib.selected-usage;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-small;
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    if !Lib.selected-kept: FlatButton {
+                        text: "Keep";
+                        clicked => { Lib.set-kept(true); }
+                    }
+                    FlatButton {
+                        text: Lib.selected-unwanted ? "Restore" : "Unwanted";
+                        active: Lib.selected-unwanted;
+                        tint: Theme.danger;
+                        clicked => { Lib.set-unwanted(!Lib.selected-unwanted); }
+                    }
+                    FlatButton {
+                        text: "Use Preview as thumbnail";
+                        clicked => { Lib.use-preview-thumbnail(); }
+                    }
+                }
+                if !Lib.selected-is-effect: FlatButton {
+                    height: 30px;
+                    text: "Add to playlist";
+                    clicked => { Lib.add-to-playlist(); }
+                }
+                if !Lib.selected-is-effect: FlatButton {
+                    height: 34px;
+                    primary: true;
+                    text: Lib.place-label;
+                    clicked => { Lib.place(); }
+                }
+                if Lib.selected-is-effect: HorizontalLayout {
+                    spacing: 4px;
+                    if root.clip-selected: FlatButton {
+                        height: 30px;
+                        text: "+ Clip";
+                        clicked => { Lib.effect-add(0); }
+                    }
+                    FlatButton {
+                        height: 30px;
+                        text: "+ Layer";
+                        clicked => { Lib.effect-add(1); }
+                    }
+                    if root.group-selected: FlatButton {
+                        height: 30px;
+                        text: "+ Group";
+                        clicked => { Lib.effect-add(2); }
+                    }
+                    FlatButton {
+                        height: 30px;
+                        text: "+ Comp";
+                        clicked => { Lib.effect-add(3); }
+                    }
+                }
+            }
+        }
     }
 }

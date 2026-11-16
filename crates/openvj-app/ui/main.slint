@@ -8,7 +8,7 @@ import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
 import { Layouts, LayoutPicker, LayoutPlaceholder, PlayerLayout, PresetRow } from "layouts.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
-import { Lib, LibraryPanel } from "library.slint";
+import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib }
 
 export { Theme, Scope, ModNames, AudioLevels, Shadertoy }
@@ -890,6 +890,12 @@ component Browser inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
             }
+            if root.tab != 1: FlatButton {
+                y: 7px;
+                text: Lib.expanded ? "Collapse (Tab)" : "Expand (Tab)";
+                active: Lib.expanded;
+                clicked => { Lib.toggle-expanded(); }
+            }
             Text {
                 text: root.tab == 2 ? "click = preview on the selected clip" : root.tab == 0 ? "click = preview · double-click = put in slot" : "click to pick · click a slot to place";
                 color: Theme.text-faint;
@@ -901,7 +907,15 @@ component Browser inherits Rectangle {
 
         if root.tab == 0: VerticalLayout {
             spacing: 6px;
-            LibraryPanel {
+            if Lib.expanded: Text {
+                vertical-stretch: 1;
+                text: "The library is open above. Tab or Esc closes it.";
+                color: Theme.text-faint;
+                font-size: Theme.font-body;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            if !Lib.expanded: LibraryPanel {
                 vertical-stretch: 1;
                 clip-selected: root.clip-selected;
             }
@@ -948,7 +962,15 @@ component Browser inherits Rectangle {
 
         if root.tab == 2: VerticalLayout {
             spacing: 6px;
-            LibraryPanel {
+            if Lib.expanded: Text {
+                vertical-stretch: 1;
+                text: "The library is open above. Tab or Esc closes it.";
+                color: Theme.text-faint;
+                font-size: Theme.font-body;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            if !Lib.expanded: LibraryPanel {
                 vertical-stretch: 1;
                 is-effects: true;
                 clip-selected: root.clip-selected;
@@ -1302,6 +1324,10 @@ export component MainWindow inherits Window {
                 root.set-layout(e.text == "1" ? 0 : e.text == "2" ? 1 : 2);
                 return accept;
             }
+            if (e.text == Key.Tab && root.layout == Layouts.mixer && !root.settings-open) {
+                Lib.toggle-expanded();
+                return accept;
+            }
             if (root.settings-open && e.text == Key.Escape) {
                 root.settings-open = false;
                 return accept;
@@ -1389,7 +1415,13 @@ export component MainWindow inherits Window {
                 padding: 8px;
                 spacing: 8px;
 
-                VerticalLayout {
+                if Lib.expanded: ExpandedLibrary {
+                    horizontal-stretch: 1;
+                    is-effects: root.browser-tab == 2;
+                    clip-selected: root.clip-valid;
+                    group-selected: root.group-valid;
+                }
+                if !Lib.expanded: VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 6px;
                 ClipGrid {
