@@ -2842,6 +2842,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "lactea"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d688a1bd5dd4651a5ff778c70536f0a47a18cbef71aad7980b7bf1eb7dd2b172"
+dependencies = [
+ "gif",
+ "lactea-abi",
+ "lactea-audio",
+ "lactea-eel",
+ "lactea-hlsl",
+ "lactea-preset",
+ "lactea-render",
+ "log",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
+name = "lactea-abi"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "663f7b4474b25961ed5f08e1d5f1636240f90b437d22cbfa75ce8f5d037d9bcd"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "lactea-audio"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5aaa578055d572446eb0b10271205c24445cd11d3470be20fbf0cc7922be0fb"
+
+[[package]]
+name = "lactea-eel"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab30c5679eca40ed663724c252fd124bff6509e1117094c3218c3da3bd3d1f3"
+
+[[package]]
+name = "lactea-hlsl"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9856acd0e1ee882fdcf71ceae4d04ca2578934d5264286e95094256e17b5ffca"
+dependencies = [
+ "lactea-abi",
+]
+
+[[package]]
+name = "lactea-preset"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd2fd2ff3063a38baed1bf205e972e1089440c3e8464ee138035e2db1e793e0"
+
+[[package]]
+name = "lactea-render"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0d7d4bf90bfdb5fe5223d7c52b7b3183ea3c0efcd233b217e8cedba4da52f5e"
+dependencies = [
+ "bytemuck",
+ "lactea-abi",
+ "pollster 1.0.1",
+ "wgpu",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3882,7 +3948,7 @@ dependencies = [
  "openvj-media",
  "openvj-render",
  "openvj-resolume",
- "pollster",
+ "pollster 0.4.0",
  "rfd",
  "rusty_link",
  "serde_json",
@@ -3927,9 +3993,11 @@ name = "openvj-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "image",
+ "lactea",
  "naga",
  "openvj-core",
- "pollster",
+ "pollster 0.4.0",
  "serde_json",
  "wgpu",
 ]
@@ -4224,6 +4292,12 @@ name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
+name = "pollster"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
 
 [[package]]
 name = "polycool"
@@ -4535,7 +4609,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "percent-encoding",
- "pollster",
+ "pollster 0.4.0",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",

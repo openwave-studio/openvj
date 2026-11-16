@@ -43,6 +43,9 @@ out.
 
 ## Libraries
 
+- [lactea](https://github.com/M0Rf30/lactea) plays MilkDrop presets, under the MIT licence (or
+  Apache-2.0, at your option). It includes code derived from MilkDrop 2 by Ryan Geiss, released
+  under a BSD-3-Clause licence; see lactea's THIRD_PARTY_NOTICES.md in its source package.
 - [Slint](https://slint.dev) is used under its GPL-3.0 licence.
 - [Ableton Link](https://github.com/Ableton/link), through the
   [rusty_link](https://crates.io/crates/rusty_link) crate, under the GPL-2.0-or-later.

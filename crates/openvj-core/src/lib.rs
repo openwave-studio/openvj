@@ -9,6 +9,7 @@ pub mod effect_folders;
 mod generator;
 pub mod isf;
 mod midi;
+pub mod milkdrop;
 mod modulation;
 mod output;
 mod playback;

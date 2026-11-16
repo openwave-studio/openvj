@@ -839,6 +839,8 @@ component Browser inherits Rectangle {
     in property <[BrowserItem]> files;
     in property <[BrowserItem]> effects;
     in property <string> effects-hint;
+    in property <[BrowserItem]> milk-presets;
+    in property <string> milk-hint;
     in property <string> layer-name;
     in property <string> group-name;
     in property <bool> clip-selected;
@@ -853,6 +855,9 @@ component Browser inherits Rectangle {
     callback file-double-clicked(int);
     callback effect-add(int, int);
     callback open-effects-folder();
+    callback milk-clicked(int);
+    callback milk-double-clicked(int);
+    callback open-milk-folder();
     callback go-up();
     callback choose-folder();
 
@@ -887,6 +892,12 @@ component Browser inherits Rectangle {
                 height: 38px;
                 active: root.tab == 2;
                 clicked => { root.tab = 2; }
+            }
+            TabButton {
+                text: "MilkDrop";
+                height: 38px;
+                active: root.tab == 3;
+                clicked => { root.tab = 3; }
             }
             TabButton {
                 text: "Files";
@@ -1067,6 +1078,73 @@ component Browser inherits Rectangle {
             }
         }
 
+        if root.tab == 3: VerticalLayout {
+            spacing: 4px;
+            ListView {
+                for item[i] in root.milk-presets: Rectangle {
+                    height: 26px;
+                    border-radius: Theme.radius-small;
+                    background: item.armed ? Theme.accent-dim : milk-ta.has-hover ? Theme.raised : mod(i, 2) == 0 ? #161819 : transparent;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 30px;
+                            height: 14px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 3px;
+                            background: Theme.kind-color(item.kind);
+                            Text {
+                                text: Theme.kind-label(item.kind);
+                                color: #000;
+                                font-size: 8px;
+                                font-weight: 800;
+                            }
+                        }
+                        Text {
+                            text: item.name;
+                            color: Theme.text;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 0;
+                            max-width: 160px;
+                            text: item.detail;
+                            color: Theme.text-faint;
+                            font-size: 10px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    milk-ta := TouchArea {
+                        clicked => { root.milk-clicked(i); }
+                        double-clicked => { root.milk-double-clicked(i); }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                padding-left: 6px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.milk-hint;
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                FlatButton {
+                    width: 90px;
+                    horizontal-stretch: 0;
+                    text: "Open folder";
+                    clicked => { root.open-milk-folder(); }
+                }
+            }
+        }
+
         if root.tab == 1: VerticalLayout {
             spacing: 6px;
             HorizontalLayout {
@@ -1216,6 +1294,8 @@ export component MainWindow inherits Window {
     in property <[BrowserItem]> files;
     in property <[BrowserItem]> effects;
     in property <string> effects-hint;
+    in property <[BrowserItem]> milk-presets;
+    in property <string> milk-hint;
     in property <string> browser-path;
     in-out property <int> browser-tab;
 
@@ -1311,6 +1391,9 @@ export component MainWindow inherits Window {
     callback param-mod-rate(int, int, int, int);
     callback effect-add(int, int);
     callback open-effects-folder();
+    callback milk-clicked(int);
+    callback milk-double-clicked(int);
+    callback open-milk-folder();
     callback effect-toggle(int, int);
     callback effect-remove(int, int);
     callback effect-move(int, int, int);
@@ -1567,6 +1650,8 @@ export component MainWindow inherits Window {
                     files: root.files;
                     effects: root.effects;
                     effects-hint: root.effects-hint;
+                    milk-presets: root.milk-presets;
+                    milk-hint: root.milk-hint;
                     path: root.browser-path;
                     group-name: root.group-valid ? root.group-name : "";
                     clip-selected: root.clip-valid;
@@ -1580,6 +1665,9 @@ export component MainWindow inherits Window {
                     file-double-clicked(i) => { root.file-double-clicked(i); keys.focus(); }
                     effect-add(s, k) => { root.effect-add(s, k); keys.focus(); }
                     open-effects-folder => { root.open-effects-folder(); }
+                    milk-clicked(i) => { root.milk-clicked(i); keys.focus(); }
+                    milk-double-clicked(i) => { root.milk-double-clicked(i); keys.focus(); }
+                    open-milk-folder => { root.open-milk-folder(); }
                     go-up => { root.browser-up(); }
                     choose-folder => { root.browser-choose-folder(); }
                 }

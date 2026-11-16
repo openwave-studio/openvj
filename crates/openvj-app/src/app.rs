@@ -11,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
 use openvj_audio::{Analyzer, AudioInput};
+use openvj_core::milkdrop::milk_library;
 use openvj_core::{
     AudioSignal, BAND_COUNT, BeatClock, BlendMode, Clip, ClipId, ClipSource, Composition, CrossfadeCurve,
     CrossfadeSide, DEFAULT_CLIP_SECS, Effect, GeneratorKind, MAX_REACTIVITY, MOD_RATES, MidiEffect, MidiMessage,
@@ -97,6 +98,8 @@ enum Armed {
     Generator(usize),
     /// An ISF generator, by id.
     Isf(String),
+    /// A MilkDrop preset, by id.
+    Milk(String),
     File(PathBuf),
     Input(ClipSource),
 }
@@ -233,6 +236,7 @@ pub struct App {
     columns_model: Rc<VecModel<ColumnData>>,
     decks_model: Rc<VecModel<DeckData>>,
     generators_model: Rc<VecModel<BrowserItem>>,
+    milk_model: Rc<VecModel<BrowserItem>>,
     inputs_model: Rc<VecModel<BrowserItem>>,
     files_model: Rc<VecModel<BrowserItem>>,
     bands_model: Rc<VecModel<f32>>,
@@ -254,6 +258,8 @@ pub struct App {
     effects_generation: Option<u64>,
     /// Ids of the ISF generators in the Sources tab, after the built-ins, in row order.
     isf_generators: Vec<String>,
+    /// [`MilkLibrary::generation`](openvj_core::milkdrop::MilkLibrary) the MilkDrop tab shows.
+    milk_generation: Option<u64>,
     browser_dirty: bool,
     images_dirty: bool,
     /// The output window's picture must be fetched again after the next mapped frame.
@@ -327,6 +333,7 @@ impl App {
             columns_model: Rc::new(VecModel::default()),
             decks_model: Rc::new(VecModel::default()),
             generators_model: Rc::new(VecModel::default()),
+            milk_model: Rc::new(VecModel::default()),
             inputs_model: Rc::new(VecModel::default()),
             files_model: Rc::new(VecModel::default()),
             bands_model: Rc::new(VecModel::from(vec![0.0; BAND_COUNT])),
@@ -345,6 +352,7 @@ impl App {
             props_dirty: true,
             effects_generation: None,
             isf_generators: Vec::new(),
+            milk_generation: None,
             browser_dirty: true,
             images_dirty: true,
             frames: 0,
@@ -362,6 +370,7 @@ impl App {
         ui.set_columns(ModelRc::from(self.columns_model.clone()));
         ui.set_decks(ModelRc::from(self.decks_model.clone()));
         ui.set_generators(ModelRc::from(self.generators_model.clone()));
+        ui.set_milk_presets(ModelRc::from(self.milk_model.clone()));
         ui.set_inputs(ModelRc::from(self.inputs_model.clone()));
         ui.set_files(ModelRc::from(self.files_model.clone()));
         let modes: Vec<SharedString> = BlendMode::ALL.iter().map(|m| m.name().into()).collect();
@@ -823,6 +832,7 @@ impl App {
         }
 
         self.update_effect_library(ui);
+        self.update_milk_library(ui);
         if self.escape_at.is_some_and(|t| now - t > 0.8) {
             self.escape_at = None;
             self.props_dirty = true;
@@ -913,7 +923,8 @@ impl App {
             self.engine.set_spectrum(None);
             return ModInputs { beat, ..Default::default() };
         };
-        input.drain_into(&mut self.analyzer);
+        let samples = input.drain_into(&mut self.analyzer);
+        self.engine.set_audio_samples(&samples, input.sample_rate(), self.comp.reactivity);
         self.analyzer.gain = self.comp.reactivity;
         let l = self.analyzer.analyze(dt);
         self.engine.set_spectrum(Some(self.analyzer.spectrum()));
@@ -1023,6 +1034,11 @@ impl App {
                     let p = Param { value: clip.params[i], modulation: clip.mods[i] };
                     rows.push(param_row(i, spec.name, &p, spec.default, &inputs, pct));
                 }
+            }
+            if let ClipSource::Milkdrop { .. } = clip.source {
+                let i = openvj_core::MILK_SENSITIVITY;
+                let p = Param { value: clip.params[i], modulation: clip.mods[i] };
+                rows.push(param_row(i, "Sensitivity", &p, 0.5, &inputs, |v| format!("{:.0}%", v * 200.0)));
             }
             if let ClipSource::Isf { generator } = &clip.source
                 && let Some(ty) = generator.ty()
@@ -1203,6 +1219,14 @@ impl App {
                     Some(t) => t.def.description.clone(),
                     None => format!("⚠ ISF generator \"{}\" isn't installed", generator.kind),
                 },
+                (ClipSource::Milkdrop { preset }, _) => {
+                    match (milk_library().resolve(preset), self.engine.milk_error(clip.id)) {
+                        (None, _) => format!("⚠ MilkDrop preset \"{preset}\" isn't in the MilkDrop folder"),
+                        (Some(_), Some(e)) => format!("⚠ {e}"),
+                        (Some(p), None) if p.category.is_empty() => "MilkDrop preset".to_owned(),
+                        (Some(p), None) => format!("MilkDrop preset · {}", p.category),
+                    }
+                }
                 (_, Some(Media::Ready { detail, .. })) => detail.clone(),
                 (_, Some(Media::Failed(e))) => format!("⚠ {e}"),
                 (source, None) if source.is_live() => "connects when the clip plays or is selected".to_owned(),
@@ -1269,6 +1293,7 @@ impl App {
         let armed = self.armed.as_ref().map(|a| match a {
             Armed::Generator(i) => GeneratorKind::ALL[*i].name().to_owned(),
             Armed::Isf(id) => library().generator(id).map_or_else(|| id.clone(), |t| t.name().to_owned()),
+            Armed::Milk(id) => ClipSource::Milkdrop { preset: id.clone() }.default_name(),
             Armed::File(p) => p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
             Armed::Input(source) => source.live_name().unwrap_or_default(),
         });
@@ -1303,6 +1328,18 @@ impl App {
             armed: self.armed.as_ref() == Some(&Armed::Isf(t.id().to_owned())),
         }));
         update_model(&self.generators_model, gens);
+        let milk = milk_library();
+        let presets: Vec<BrowserItem> = milk
+            .presets()
+            .iter()
+            .map(|p| BrowserItem {
+                name: p.name.as_str().into(),
+                detail: p.category.as_str().into(),
+                kind: "gen".into(),
+                armed: matches!(&self.armed, Some(Armed::Milk(id)) if *id == p.id),
+            })
+            .collect();
+        update_model(&self.milk_model, presets);
         let inputs: Vec<BrowserItem> = self
             .input_sources()
             .into_iter()
@@ -1638,6 +1675,7 @@ impl App {
         match armed {
             Armed::Generator(i) => GeneratorKind::ALL.get(*i).map(|k| ClipSource::Generator { kind: *k }),
             Armed::Isf(id) => Some(ClipSource::isf(id)),
+            Armed::Milk(id) => Some(ClipSource::Milkdrop { preset: id.clone() }),
             Armed::File(p) => ClipSource::from_path(p),
             Armed::Input(source) => Some(source.clone()),
         }
@@ -1705,6 +1743,18 @@ impl App {
     pub fn generator_clicked(&mut self, i: usize) {
         if let Some(armed) = self.generator_row(i) {
             self.arm(armed);
+        }
+    }
+
+    pub fn milk_clicked(&mut self, i: usize) {
+        if let Some(p) = milk_library().presets().get(i) {
+            self.arm(Armed::Milk(p.id.clone()));
+        }
+    }
+
+    pub fn milk_double_clicked(&mut self, i: usize) {
+        if let Some(p) = milk_library().presets().get(i) {
+            self.place_in_selection(ClipSource::Milkdrop { preset: p.id.clone() });
         }
     }
 
@@ -2143,10 +2193,45 @@ impl App {
         }
     }
 
+    /// Refreshes the MilkDrop tab when the MilkDrop folders changed.
+    fn update_milk_library(&mut self, ui: &MainWindow) {
+        let lib = milk_library();
+        if self.milk_generation == Some(lib.generation) {
+            return;
+        }
+        let first = self.milk_generation.is_none();
+        self.milk_generation = Some(lib.generation);
+        let folder = openvj_core::milkdrop::user_dir()
+            .map(|d| browser::short_path(&d, 60))
+            .unwrap_or_else(|| "the openVJ MilkDrop folder".into());
+        let hint = match lib.presets().len() {
+            0 => format!("Drop MilkDrop presets (.milk) into {folder}"),
+            n => format!("{n} presets in {folder}"),
+        };
+        ui.set_milk_hint(hint.into());
+        self.browser_dirty = true;
+        self.props_dirty = true;
+        if !first && lib.generation > 1 {
+            self.set_status(format!("MilkDrop presets reloaded: {}", lib.presets().len()));
+        }
+    }
+
+    /// Opens the openVJ MilkDrop folder in Finder (or the system file manager).
+    pub fn open_milk_folder(&mut self) {
+        if let Some(dir) = openvj_core::milkdrop::user_dir() {
+            self.open_folder(&dir);
+        }
+    }
+
     /// Opens the openVJ effects folder in Finder (or the system file manager).
     pub fn open_effects_folder(&mut self) {
-        let Some(dir) = openvj_core::effect_folders::user_dir() else { return };
-        let _ = std::fs::create_dir_all(&dir);
+        if let Some(dir) = openvj_core::effect_folders::user_dir() {
+            self.open_folder(&dir);
+        }
+    }
+
+    fn open_folder(&mut self, dir: &Path) {
+        let _ = std::fs::create_dir_all(dir);
         let opener = if cfg!(target_os = "macos") {
             "open"
         } else if cfg!(windows) {
@@ -2154,7 +2239,7 @@ impl App {
         } else {
             "xdg-open"
         };
-        if let Err(e) = std::process::Command::new(opener).arg(&dir).spawn() {
+        if let Err(e) = std::process::Command::new(opener).arg(dir).spawn() {
             self.set_status(format!("Couldn't open {}: {e}", dir.display()));
         }
     }

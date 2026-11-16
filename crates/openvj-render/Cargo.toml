@@ -11,6 +11,10 @@ wgpu = { workspace = true, features = ["naga-ir"] }
 # Same version as wgpu's. `wgsl-in` is only there because naga 30's GLSL front end needs it to build.
 naga = { version = "30", features = ["glsl-in", "wgsl-in"] }
 bytemuck.workspace = true
+# MilkDrop presets (pure Rust, on the same wgpu). Young crate: pinned, bump on purpose.
+lactea = "=0.2.2"
+# Decodes the textures MilkDrop presets sample. Same major version lactea uses.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "tga", "dds", "gif"] }
 
 [dev-dependencies]
 pollster = "0.4"

@@ -12,6 +12,7 @@
 
 mod isf;
 mod mapping;
+mod milkdrop;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -22,6 +23,7 @@ use openvj_core::isf::eval_size;
 use openvj_core::{Clip, ClipId, ClipSource, Composition, Effect, EffectType, ModInputs, OutputSetup};
 
 use crate::isf::CompiledEffect;
+use crate::milkdrop::MilkClip;
 
 pub use wgpu;
 
@@ -206,6 +208,11 @@ enum Draw {
         /// (binding, view) per texture.
         textures: Vec<(u32, wgpu::TextureView)>,
     },
+    /// One frame of a MilkDrop clip's engine, at clip time `time`. Records its own passes.
+    Milk {
+        clip: ClipId,
+        time: f64,
+    },
 }
 
 /// One fullscreen draw, or just a clear.
@@ -333,6 +340,15 @@ pub struct Engine {
     last_passes: usize,
     /// Whether this frame's preview was already drawn from a clip on screen.
     previewed: bool,
+    /// MilkDrop engines, one per MilkDrop clip.
+    milk: HashMap<ClipId, MilkClip>,
+    /// This frame's audio for MilkDrop: mono samples, their rate and the Reactivity gain.
+    pcm: Vec<f32>,
+    pcm_rate: u32,
+    pcm_gain: f32,
+    /// Frames rendered so far, and the composition time of the one being built.
+    frame_no: u64,
+    now: f64,
 }
 
 /// Width of the spectrum texture (openvj-audio's `SPECTRUM_BINS`).
@@ -513,6 +529,12 @@ impl Engine {
             thumbs_at: None,
             last_passes: 0,
             previewed: false,
+            milk: HashMap::new(),
+            pcm: Vec::new(),
+            pcm_rate: 48_000,
+            pcm_gain: 1.0,
+            frame_no: 0,
+            now: 0.0,
         }
     }
 
@@ -701,6 +723,76 @@ impl Engine {
         self.media.retain(|id, _| alive.contains(id));
     }
 
+    /// Why a MilkDrop clip's preset doesn't play (it failed to load), once it has been tried.
+    pub fn milk_error(&self, id: ClipId) -> Option<&str> {
+        self.milk.get(&id)?.error.as_deref()
+    }
+
+    /// The audio MilkDrop presets hear in the next frame: the mono samples (−1..1) captured
+    /// since the last frame, at `sample_rate`, scaled by `gain` (the composition's
+    /// Reactivity). Without a call, presets hear silence.
+    pub fn set_audio_samples(&mut self, samples: &[f32], sample_rate: u32, gain: f32) {
+        self.pcm.clear();
+        self.pcm.extend_from_slice(samples);
+        self.pcm_rate = sample_rate.max(1);
+        self.pcm_gain = gain;
+    }
+
+    /// Records a MilkDrop clip's frame, once per frame, and returns the texture holding it.
+    /// `full` asks for a composition-size picture (layer, preview) rather than a thumbnail.
+    #[allow(clippy::too_many_arguments)]
+    fn milk_passes(
+        &mut self,
+        passes: &mut Vec<Pass>,
+        clip: &Clip,
+        preset: &str,
+        time: f64,
+        inputs: &ModInputs,
+        full: bool,
+    ) -> Option<Target> {
+        let found = milkdrop::resolve(preset)?;
+        let size = self.size();
+        let (now, frame_no, rate) = (self.now, self.frame_no, self.pcm_rate);
+        // A clip that just left the screen keeps its full-size engine for a moment, so its
+        // thumbnail doesn't restart the preset.
+        let full =
+            full || self.milk.get(&clip.id).is_some_and(|m| m.full && now - m.last_full < milkdrop::FULL_HOLD_SECS);
+        if self.milk.get(&clip.id).is_none_or(|m| !m.fits(size, full, rate)) {
+            match MilkClip::new(&self.device, &self.queue, size, full, rate) {
+                Ok(m) => {
+                    self.milk.insert(clip.id, m);
+                }
+                Err(e) => {
+                    eprintln!("MilkDrop engine failed to start: {e}");
+                    return None;
+                }
+            }
+        }
+        let m = self.milk.get_mut(&clip.id)?;
+        if full {
+            m.last_full = now;
+        }
+        m.load(&found);
+        if !m.is_ready() {
+            return None;
+        }
+        if m.rendered != frame_no {
+            m.rendered = frame_no;
+            let sensitivity = clip.param_values(inputs)[openvj_core::MILK_SENSITIVITY] * 2.0;
+            m.push_audio(&self.pcm, sensitivity * self.pcm_gain);
+            passes.push(Pass {
+                draw: Draw::Milk { clip: clip.id, time },
+                target: m.target.view.clone(),
+                format: m.target.format,
+                clear: TRANSPARENT,
+                uniforms: Uniforms::default(),
+                a: None,
+                b: None,
+            });
+        }
+        Some(m.target.clone())
+    }
+
     /// Why an effect type can't run (its GLSL didn't compile), once it has been tried.
     pub fn effect_error(&self, kind: &str) -> Option<&str> {
         self.compiled.get(kind)?.1.as_ref().err().map(String::as_str)
@@ -759,6 +851,13 @@ impl Engine {
         target: &Target,
         slot: u64,
     ) {
+        if let ClipSource::Milkdrop { preset } = &clip.source {
+            match self.milk_passes(passes, clip, preset, time, inputs, slot != 2) {
+                Some(out) => passes.push(Self::blend_pass(target, &out, &out, MODE_MIX, 1.0)),
+                None => passes.push(Pass::clear(target, TRANSPARENT)),
+            }
+            return;
+        }
         let ClipSource::Isf { generator } = &clip.source else {
             passes.push(self.clip_pass(clip, time, inputs, target));
             return;
@@ -1061,6 +1160,8 @@ impl Engine {
 
         let t = self.targets.clone();
         self.fx_seen.clear();
+        self.frame_no += 1;
+        self.now = now;
         let beat = inputs.beat;
         let mut passes = vec![Pass::clear(&t.comp[0], wgpu::Color::BLACK)];
         self.previewed = false;
@@ -1147,6 +1248,13 @@ impl Engine {
         // Effects and generators that didn't run this frame lose their feedback buffers.
         let seen = std::mem::take(&mut self.fx_seen);
         self.fx_state.retain(|uid, _| seen.contains(uid));
+        // MilkDrop engines live as long as their clip plays a preset.
+        self.milk.retain(|id, _| {
+            comp.find_clip(*id)
+                .and_then(|(l, c)| comp.clip(l, c))
+                .is_some_and(|c| matches!(c.source, ClipSource::Milkdrop { .. }))
+        });
+        self.pcm.clear();
 
         self.submit(passes);
     }
@@ -1196,6 +1304,12 @@ impl Engine {
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("openvj frame") });
         let mut fx_block = 0;
         for (i, p) in passes.iter().enumerate() {
+            if let Draw::Milk { clip, time } = &p.draw {
+                if let Some(m) = self.milk.get_mut(clip) {
+                    m.render(&mut encoder, *time);
+                }
+                continue;
+            }
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1210,7 +1324,7 @@ impl Engine {
                 multiview_mask: None,
             });
             match &p.draw {
-                Draw::Clear => {}
+                Draw::Clear | Draw::Milk { .. } => {}
                 Draw::Builtin(kind) => {
                     let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: None,
@@ -2048,6 +2162,160 @@ mod tests {
         set_library(EffectLibrary::builtin());
         e.render(&comp, 0.5, &inputs(0.5), None);
         assert_eq!(mean(&e.read_target(e.output())), [0.0; 3]);
+    }
+
+    /// Writes a MilkDrop preset to a temporary file and returns its path, the id a loose file saves as.
+    fn milk_file(name: &str, text: &str) -> String {
+        let path = std::env::temp_dir().join(format!("openvj-test-{}-{name}.milk", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn milkdrop_presets_play_as_clips() {
+        let Some(mut e) = engine(64, 64) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        // A thick outer border whose red follows the bass, over a black background.
+        let preset = milk_file(
+            "border",
+            "[preset00]\nfDecay=0\nzoom=1\nob_size=0.5\nob_r=0\nob_g=0\nob_b=1\nob_a=1\n\
+             per_frame_1=ob_r = min(1, bass*0.5);\n",
+        );
+        let mut comp = Composition::new(64, 64, 1, 1);
+        let id = comp.set_clip(0, 0, ClipSource::Milkdrop { preset: preset.clone() }).unwrap();
+        assert_eq!(comp.clip(0, 0).unwrap().name, std::path::Path::new(&preset).file_stem().unwrap().to_string_lossy());
+        comp.trigger(0, 0, 0.0);
+        e.thumb(id);
+        let mut silent = [0.0; 3];
+        for f in 1..=10 {
+            let t = f as f64 / 60.0;
+            e.render(&comp, t, &inputs(t), Some(id));
+            silent = mean(&e.read_target(e.output()));
+        }
+        assert_eq!(e.milk_error(id), None);
+        assert!(silent[2] > 60.0, "the blue border shows: {silent:?}");
+        let p = mean(&e.read_target(e.preview()));
+        assert!(p[2] > 60.0, "preview: {p:?}");
+        let thumb = e.thumb(id).clone();
+        assert!(mean(&e.read_target(&thumb))[2] > 60.0, "thumbnail");
+
+        // A 60 Hz tone coming in turns the border's red up (MilkDrop's bass is relative to
+        // the recent average, so the jump shows in the first frames).
+        let tone: Vec<f32> =
+            (0..800).map(|i| (i as f32 * 60.0 / 48_000.0 * std::f32::consts::TAU).sin() * 0.9).collect();
+        let mut loud = [0.0; 3];
+        for f in 11..=15 {
+            let t = f as f64 / 60.0;
+            e.set_audio_samples(&tone, 48_000, 1.0);
+            e.render(&comp, t, &inputs(t), None);
+            loud = mean(&e.read_target(e.output()));
+        }
+        assert!(loud[0] > silent[0] + 15.0, "bass turns red up: {silent:?} -> {loud:?}");
+
+        // A broken preset reports why and draws nothing; a missing one draws nothing.
+        let broken = milk_file("broken", "[preset00]\nper_frame_1=ob_r = (((;\n");
+        comp.clip_mut(0, 0).unwrap().source = ClipSource::Milkdrop { preset: broken };
+        e.render(&comp, 1.1, &inputs(1.1), None);
+        assert!(e.milk_error(id).is_some(), "broken preset reports an error");
+        assert_eq!(mean(&e.read_target(e.output())), [0.0; 3]);
+        comp.clip_mut(0, 0).unwrap().source = ClipSource::Milkdrop { preset: "Nowhere/Gone.milk".into() };
+        e.render(&comp, 1.2, &inputs(1.2), None);
+        assert_eq!(mean(&e.read_target(e.output())), [0.0; 3]);
+    }
+
+    /// Plays a sample of a MilkDrop pack and reports presets that fail to load or panic,
+    /// and the CPU time per frame. `OPENVJ_MILK_BATCH=<folder> cargo test --release -p
+    /// openvj-render milkdrop_batch -- --ignored --nocapture` (`OPENVJ_MILK_EVERY` picks every Nth).
+    #[test]
+    #[ignore]
+    fn milkdrop_batch() {
+        let Some(dir) = std::env::var_os("OPENVJ_MILK_BATCH") else { return };
+        let every: usize = std::env::var("OPENVJ_MILK_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+        let dir = std::path::PathBuf::from(dir);
+        openvj_core::milkdrop::set_milk_library(openvj_core::milkdrop::MilkLibrary::new(
+            vec![dir.clone()],
+            openvj_core::milkdrop::scan(std::slice::from_ref(&dir)),
+        ));
+        let lib = openvj_core::milkdrop::milk_library();
+        let (w, h) = (640, 360);
+        let mut e = engine(w, h).expect("GPU");
+        let music: Vec<f32> = (0..800)
+            .map(|i| {
+                let t = i as f32 / 48_000.0;
+                ((t * 55.0 * std::f32::consts::TAU).sin() * 0.6 + (t * 1760.0 * std::f32::consts::TAU).sin() * 0.2)
+                    * if i % 400 < 120 { 1.0 } else { 0.3 }
+            })
+            .collect();
+        // Baseline: a built-in generator through the same frame, to tell MilkDrop's cost from
+        // the GPU (on a software renderer the GPU work lands on the CPU too).
+        let mut base = Composition::new(w, h, 1, 1);
+        base.set_clip(0, 0, ClipSource::Generator { kind: openvj_core::GeneratorKind::ALL[0] }).unwrap();
+        base.trigger(0, 0, 0.0);
+        let start = std::time::Instant::now();
+        for f in 1..=30 {
+            e.render(&base, f as f64 / 60.0, &inputs(0.0), None);
+        }
+        let _ = e.read_target(e.output());
+        eprintln!("baseline frame: {:.2} ms", start.elapsed().as_secs_f64() * 1000.0 / 30.0);
+        let (mut tried, mut failed, mut panicked, mut black) = (0, Vec::new(), Vec::new(), 0);
+        let mut times = Vec::new();
+        for p in lib.presets().iter().step_by(every.max(1)) {
+            tried += 1;
+            let mut comp = Composition::new(w, h, 1, 1);
+            let id = comp.set_clip(0, 0, ClipSource::Milkdrop { preset: p.id.clone() }).unwrap();
+            comp.trigger(0, 0, 0.0);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut spent = std::time::Duration::ZERO;
+                for f in 1..=30 {
+                    let t = f as f64 / 60.0;
+                    e.set_audio_samples(&music, 48_000, 1.0);
+                    let start = std::time::Instant::now();
+                    e.render(&comp, t, &inputs(t), None);
+                    if f > 5 {
+                        spent += start.elapsed();
+                    }
+                }
+                (spent / 25, mean(&e.read_target(e.output())))
+            }));
+            match run {
+                Ok((dt, m)) => {
+                    if let Some(err) = e.milk_error(id) {
+                        failed.push(format!("{}: {err}", p.id));
+                    } else {
+                        times.push((dt, p.id.clone()));
+                        if m.iter().sum::<f32>() < 1.0 {
+                            black += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    panicked.push(p.id.clone());
+                    e = engine(w, h).expect("GPU");
+                }
+            }
+        }
+        times.sort();
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        let median = times.get(times.len() / 2).map_or(0.0, |t| ms(t.0));
+        let p95 = times.get(times.len() * 95 / 100).map_or(0.0, |t| ms(t.0));
+        eprintln!(
+            "tried {tried}, loaded {}, failed {}, panicked {}, black after 30 frames {black}",
+            times.len(),
+            failed.len(),
+            panicked.len()
+        );
+        eprintln!("CPU per frame at {w}x{h}: median {median:.2} ms, p95 {p95:.2} ms");
+        for (d, id) in times.iter().rev().take(5) {
+            eprintln!("  slow: {:.2} ms {id}", ms(*d));
+        }
+        for f in &failed {
+            eprintln!("  failed: {f}");
+        }
+        for p in &panicked {
+            eprintln!("  panicked: {p}");
+        }
     }
 
     #[test]

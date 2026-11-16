@@ -72,13 +72,15 @@ impl AudioInput {
         self.sample_rate
     }
 
-    /// Moves captured samples into the analyser.
-    pub fn drain_into(&self, analyzer: &mut Analyzer) {
+    /// Moves captured samples into the analyser and returns them (mono, −1..1), for
+    /// anything else that listens to the raw signal (MilkDrop presets).
+    pub fn drain_into(&self, analyzer: &mut Analyzer) -> Vec<f32> {
         let samples = match self.pending.lock() {
             Ok(mut p) => std::mem::take(&mut *p),
-            Err(_) => return,
+            Err(_) => return Vec::new(),
         };
         analyzer.push(&samples);
+        samples
     }
 }
 

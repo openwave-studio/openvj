@@ -10,6 +10,10 @@ use crate::{
 /// File extensions treated as still images.
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 /// File extensions treated as video (decoded by FFmpeg).
+/// The clip parameter holding a MilkDrop clip's Sensitivity: 0..1, shown as 0..200 %,
+/// default 0.5 (100 %, the preset as written).
+pub const MILK_SENSITIVITY: usize = 0;
+
 pub const VIDEO_EXTENSIONS: &[&str] = &["mov", "mp4", "m4v", "mkv", "webm", "avi", "mxf", "mpg", "mpeg"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -78,6 +82,11 @@ pub enum ClipSource {
     Isf {
         generator: Effect,
     },
+    /// A MilkDrop preset, by its id in the [MilkDrop library](crate::milkdrop): its path
+    /// inside a MilkDrop folder, or the full path of a file elsewhere.
+    Milkdrop {
+        preset: String,
+    },
     Image {
         path: PathBuf,
     },
@@ -105,7 +114,9 @@ impl ClipSource {
     /// Picks image or video by file extension.
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-        if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        if ext == crate::milkdrop::MILK_EXTENSION {
+            Some(ClipSource::Milkdrop { preset: crate::milkdrop::milk_library().id_for_path(path) })
+        } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
             Some(ClipSource::Image { path: path.to_owned() })
         } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
             Some(ClipSource::Video { path: path.to_owned() })
@@ -116,7 +127,7 @@ impl ClipSource {
 
     pub fn kind_label(&self) -> &'static str {
         match self {
-            ClipSource::Generator { .. } | ClipSource::Isf { .. } => "gen",
+            ClipSource::Generator { .. } | ClipSource::Isf { .. } | ClipSource::Milkdrop { .. } => "gen",
             ClipSource::Image { .. } => "image",
             ClipSource::Video { .. } => "video",
             ClipSource::Camera { .. } => "camera",
@@ -138,7 +149,7 @@ impl ClipSource {
 
     /// True for generators, built-in or ISF: drawn on the GPU, with live thumbnails.
     pub fn is_generator(&self) -> bool {
-        matches!(self, ClipSource::Generator { .. } | ClipSource::Isf { .. })
+        matches!(self, ClipSource::Generator { .. } | ClipSource::Isf { .. } | ClipSource::Milkdrop { .. })
     }
 
     /// True for sources that stream from another device or app rather than a file.
@@ -155,10 +166,15 @@ impl ClipSource {
         }
     }
 
-    fn default_name(&self) -> String {
+    /// The name a new clip with this source gets.
+    pub fn default_name(&self) -> String {
         match self {
             ClipSource::Generator { kind } => kind.name().to_owned(),
             ClipSource::Isf { generator } => generator.name(),
+            ClipSource::Milkdrop { preset } => {
+                let file = preset.rsplit(['/', '\\']).next().unwrap_or(preset);
+                file.rsplit_once('.').map_or(file, |(stem, _)| stem).to_owned()
+            }
             ClipSource::Image { path } | ClipSource::Video { path } => {
                 path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into())
             }
@@ -242,6 +258,11 @@ impl Clip {
     fn new(id: ClipId, source: ClipSource) -> Self {
         let params = match source {
             ClipSource::Generator { kind } => kind.default_params(),
+            ClipSource::Milkdrop { .. } => {
+                let mut p = [0.0; PARAM_COUNT];
+                p[MILK_SENSITIVITY] = 0.5;
+                p
+            }
             _ => [0.0; PARAM_COUNT],
         };
         Self {
