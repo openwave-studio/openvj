@@ -10,9 +10,9 @@
 
 ## 2. Thumbnails (own PR)
 
-- [ ] 2.1 Background renderer at 256×144, one per frame at most, paused when over frame budget
-- [ ] 2.2 Disk cache keyed by content hash; effects on a built-in test image
-- [ ] 2.3 "Use Preview frame as thumbnail"
+- [x] 2.1 Background renderer at 256×144, one per frame at most, paused when over frame budget
+- [x] 2.2 Disk cache keyed by content hash; effects on a built-in test image
+- [ ] 2.3 "Use Preview frame as thumbnail" (engine and cache done; the menu item comes with the grid in 3.4)
 
 ## 3. Sources and Effects grids (own PR)
 

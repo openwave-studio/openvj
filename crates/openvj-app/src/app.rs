@@ -175,6 +175,10 @@ fn hap_bc_frame(f: &HapFrame) -> BcFrame<'_> {
 pub struct App {
     pub comp: Composition,
     engine: Engine,
+    /// Every source and effect with the VJ's statuses, tags and crates, and its thumbnails.
+    pub library: crate::library::AppLibrary,
+    /// Smoothed time between frames, in seconds; thumbnails pause while it is over budget.
+    frame_time: f32,
     syphon_out: SyphonOutput,
     clock: Instant,
     tap: TapTempo,
@@ -363,6 +367,8 @@ impl App {
             frames: 0,
             fps_since: Instant::now(),
             player: PlayerState::default(),
+            library: crate::library::AppLibrary::load(),
+            frame_time: 0.0,
         };
         app.set_composition(comp, None);
         app.open_midi();
@@ -843,6 +849,7 @@ impl App {
 
         self.update_effect_library(ui);
         self.update_milk_library(ui);
+        self.update_library(dt);
         if self.escape_at.is_some_and(|t| now - t > 0.8) {
             self.escape_at = None;
             self.props_dirty = true;
@@ -2194,6 +2201,18 @@ impl App {
             };
             self.set_status(format!("Effects reloaded: {added} from folders{broken}"));
         }
+    }
+
+    /// Keeps the library in step with the folders, renders missing thumbnails in the
+    /// background and saves `library.json` after changes.
+    fn update_library(&mut self, dt: f32) {
+        self.frame_time += (dt - self.frame_time) * 0.1;
+        if self.library.refresh() {
+            self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+        }
+        let over_budget = self.frame_time > crate::library::THUMB_FRAME_BUDGET.as_secs_f32();
+        self.library.thumbs.pump(&mut self.engine, over_budget);
+        self.library.save_if_due();
     }
 
     /// Shows a finished Shadertoy import in the dialog and the status bar.

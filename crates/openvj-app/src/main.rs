@@ -2,6 +2,7 @@
 
 mod app;
 mod browser;
+mod library;
 mod link;
 mod mapping;
 mod midi;
@@ -592,5 +593,6 @@ fn main() -> Result<()> {
     ui.show()?;
     ui.invoke_focus_keys();
     slint::run_event_loop()?;
+    app.borrow_mut().library.save_now();
     Ok(())
 }

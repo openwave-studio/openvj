@@ -13,6 +13,7 @@
 mod isf;
 mod mapping;
 mod milkdrop;
+mod thumbnails;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ use openvj_core::{Clip, ClipId, ClipSource, Composition, Effect, EffectType, Mod
 
 use crate::isf::CompiledEffect;
 use crate::milkdrop::MilkClip;
+pub use crate::thumbnails::{LIBRARY_THUMB_SIZE, Thumbnail, ThumbnailSource, effect_test_source, thumbnail_clip};
 
 pub use wgpu;
 
@@ -356,6 +358,8 @@ pub struct Engine {
     /// Frames rendered so far, and the composition time of the one being built.
     frame_no: u64,
     now: f64,
+    /// Library thumbnails rendered a step per frame (see [`thumbnails`]).
+    thumbnails: thumbnails::Thumbnails,
 }
 
 /// Width of the spectrum texture (openvj-audio's `SPECTRUM_BINS`).
@@ -550,6 +554,7 @@ impl Engine {
             milk: HashMap::new(),
             pcm: Vec::new(),
             pcm_rate: 48_000,
+            thumbnails: Default::default(),
             pcm_gain: 1.0,
             frame_no: 0,
             now: 0.0,
@@ -1313,6 +1318,7 @@ impl Engine {
                 None => passes.push(Pass::clear(&t.preview, wgpu::Color::BLACK)),
             }
         }
+        let thumbnail_done = self.thumbnail_step(&mut passes, &t);
         for clip in comp.all_clips().filter(|_| refresh_thumbs) {
             if let Some(thumb) = self.thumbs.get(&clip.id).cloned() {
                 let time = clip_time(comp, clip, now, inputs.beat);
@@ -1323,14 +1329,20 @@ impl Engine {
         let seen = std::mem::take(&mut self.fx_seen);
         self.fx_state.retain(|uid, _| seen.contains(uid));
         // MilkDrop engines live as long as their clip plays a preset.
+        let job = self.thumbnails.job_clip();
         self.milk.retain(|id, _| {
-            comp.find_clip(*id)
-                .and_then(|(l, c)| comp.clip(l, c))
-                .is_some_and(|c| matches!(c.source, ClipSource::Milkdrop { .. }))
+            Some(*id) == job
+                || comp
+                    .find_clip(*id)
+                    .and_then(|(l, c)| comp.clip(l, c))
+                    .is_some_and(|c| matches!(c.source, ClipSource::Milkdrop { .. }))
         });
         self.pcm.clear();
 
         self.submit(passes);
+        if let Some(key) = thumbnail_done {
+            self.thumbnail_readback(key);
+        }
     }
 
     /// Render passes the last [`Engine::render`] encoded.
