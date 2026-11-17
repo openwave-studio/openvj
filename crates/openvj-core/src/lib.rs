@@ -18,6 +18,7 @@ mod modulation;
 mod output;
 mod playback;
 mod playlist;
+mod song;
 pub mod shadertoy;
 mod tempo;
 
@@ -31,4 +32,5 @@ pub use modulation::*;
 pub use output::*;
 pub use playback::*;
 pub use playlist::*;
+pub use song::*;
 pub use tempo::*;
