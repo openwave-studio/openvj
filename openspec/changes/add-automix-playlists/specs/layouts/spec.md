@@ -30,7 +30,33 @@ Playlists SHALL save to and open from their own files (`.ovjplaylist`, JSON), in
 - **WHEN** Automix plays "Warm up" and the VJ picks "Peak time" in the picker
 - **THEN** the first preset of "Peak time" comes in with the current transition
 
+### Requirement: Play duration and transitions
+Each preset SHALL play for a duration in bars (following BPM and Link), in seconds, or until the song changes; 32 bars by default. The transition into the next preset SHALL use LENGTH (TIME: 0 s cut, 2, 4, 8 s; BARS: 1, 2, 4 bars) and STYLE (Crossfade, Cut, Fade through black, and later others), as in openDJ's Automix pickers.
+
+#### Scenario: Bar-synced change
+- **WHEN** a preset is set to 16 bars and LENGTH is 2 bars with Crossfade at 120 BPM
+- **THEN** after 16 bars the next preset crossfades in over 2 bars, starting on a bar line
+
 ## ADDED Requirements
+
+### Requirement: Advance when the song changes
+A preset set to "Song" SHALL play until openVJ detects a new song in the audio input: a gap of silence, a jump in the tempo source's BPM, or a lasting change in the sound's spectrum and energy. It SHALL play at least 16 bars and at most 5 minutes.
+
+#### Scenario: Next track in a set with gaps
+- **WHEN** a preset is set to Song and the music stops for a second before the next track
+- **THEN** the next preset comes in as the new track starts
+
+#### Scenario: Long breakdown
+- **WHEN** a track drops to a quiet breakdown for 8 bars and comes back
+- **THEN** the preset keeps playing
+
+### Requirement: Animated thumbnails on hover
+Each row's thumbnail SHALL be a still image, and SHALL play that preset live while the mouse is over it.
+
+#### Scenario: Peek at a preset
+- **WHEN** the VJ hovers row 4 while row 2 plays
+- **THEN** row 4's thumbnail animates and the output is unchanged
+
 
 ### Requirement: Playlist edit mode
 The Player SHALL show editing controls (duration, reorder, remove, Add, LENGTH, STYLE, Repeat) only in edit mode, toggled by "Edit playlist". Outside edit mode a click on a row SHALL only play it.
