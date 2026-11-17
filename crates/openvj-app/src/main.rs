@@ -3,6 +3,7 @@
 mod app;
 mod browser;
 mod discover;
+mod finder_drop;
 mod library;
 mod link;
 mod mapping;
@@ -237,13 +238,20 @@ fn main() -> Result<()> {
                 });
             }};
         }
-        dropped!(on_dropped_on_slot, |a, item, l: i32, c: i32| a.drop_on_slot(
+        dropped!(on_dropped_on_slot, |a, item, l: i32, c: i32, copy: bool| a.drop_on_slot(
             &item,
             l.max(0) as usize,
-            c.max(0) as usize
+            c.max(0) as usize,
+            copy
         ));
-        dropped!(on_dropped_on_layer, |a, item, l: i32| a.drop_on_layer(&item, l.max(0) as usize));
+        dropped!(on_dropped_on_layer, |a, item, l: i32, copy: bool| a.drop_on_layer(&item, l.max(0) as usize, copy));
         dropped!(on_dropped_on_chain, |a, item, scope: i32| a.drop_on_chain(&item, scope));
+    }
+
+    // Files dragged in from the Finder.
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        finder_drop::install(&ui, move |files| with_app(&app, &w, &o, |a| a.set_finder_files(files)));
     }
 
     // The library grid (ui/library.slint).

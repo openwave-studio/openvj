@@ -20,9 +20,12 @@ export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn, Pl }
 component ClipCell inherits Rectangle {
     in property <CellData> data;
     in property <string> midi-id;
+    // "clip:<layer>:<column>", the drag payload of this slot's clip.
+    in property <string> slot-id;
     callback clicked();
-    // Something from the browser or library was dropped here.
-    callback dropped(string);
+    // Something from the browser, the library, the Finder or another slot was dropped
+    // here; the bool is true for a copy.
+    callback dropped(string, bool);
     callback pressed();
     callback released();
     callback right-clicked();
@@ -31,7 +34,8 @@ component ClipCell inherits Rectangle {
     height: Theme.cell-h;
     border-radius: Theme.radius-small;
     // An effect only lands on a filled slot.
-    property <bool> accepts: Drag.kind == "source" || (Drag.kind == "effect" && root.data.filled);
+    property <bool> accepts: Drag.kind == "source" || (Drag.kind == "effect" && root.data.filled)
+        || (Drag.kind == "clip" && Drag.item != root.slot-id);
     background: root.data.filled ? Theme.panel-2 : drop.has-drag ? Theme.accent-dim : ta.has-hover ? #ffffff08 : Theme.track;
     border-width: drop.has-drag || root.data.selected || root.data.playing ? 2px : 1px;
     border-color: drop.has-drag ? Theme.accent : root.data.playing ? Theme.playing : root.data.selected ? Theme.selected : (ta.has-hover ? Theme.border : Theme.separator);
@@ -128,7 +132,9 @@ component ClipCell inherits Rectangle {
         background: Theme.accent;
         Text {
             width: parent.width - 8px;
-            text: (Drag.kind == "effect" ? "Add to clip: " : root.data.filled ? "Replace: " : "Place: ") + Drag.label;
+            text: Drag.kind == "clip"
+                ? (drop.current-action == DragAction.copy ? (root.data.filled ? "Copy over" : "Copy here") : root.data.filled ? "Swap" : "Move here")
+                : (Drag.kind == "effect" ? "Add to clip: " : root.data.filled ? "Replace: " : "Place: ") + Drag.label;
             color: Theme.on-accent;
             font-size: Theme.font-small;
             font-weight: 600;
@@ -137,26 +143,39 @@ component ClipCell inherits Rectangle {
         }
     }
 
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
-                root.right-clicked();
-            }
-            // Piano clips play while the button is held.
-            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
-                root.pressed();
-            }
-            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
-                root.released();
+    DragSource {
+        enabled: root.data.filled;
+        kind: "clip";
+        item: root.slot-id;
+        label: root.data.name;
+        // No drag image: live slot thumbnails are GPU textures, which the drag overlay
+        // can't draw.
+        ta := TouchArea {
+            clicked => { root.clicked(); }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                    root.right-clicked();
+                }
+                // Piano clips play while the button is held.
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                    root.pressed();
+                }
+                if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
+                    root.released();
+                }
             }
         }
     }
     drop := DropArea {
-        can-drop(e) => { return root.accepts ? DragAction.copy : DragAction.none; }
+        can-drop(e) => {
+            if (!root.accepts) {
+                return DragAction.none;
+            }
+            return Drag.kind == "clip" ? e.proposed-action : DragAction.copy;
+        }
         dropped(e) => {
-            root.dropped(Drag.item);
-            return DragAction.copy;
+            root.dropped(Drag.item, Drag.kind == "clip" && e.proposed-action == DragAction.copy);
+            return e.proposed-action;
         }
     }
     MidiSpot {
@@ -179,7 +198,7 @@ component LayerStrip inherits Rectangle {
     callback clear();
     // Dropped from the browser or library: an effect goes on the layer, a source into
     // the layer's first empty slot.
-    callback dropped(string);
+    callback dropped(string, bool);
 
     width: Theme.strip-w;
     height: Theme.cell-h;
@@ -192,10 +211,15 @@ component LayerStrip inherits Rectangle {
         clicked => { root.select(); }
     }
     drop := DropArea {
-        can-drop(e) => { return Drag.kind != "" ? DragAction.copy : DragAction.none; }
+        can-drop(e) => {
+            if (Drag.kind == "") {
+                return DragAction.none;
+            }
+            return Drag.kind == "clip" ? e.proposed-action : DragAction.copy;
+        }
         dropped(e) => {
-            root.dropped(Drag.item);
-            return DragAction.copy;
+            root.dropped(Drag.item, Drag.kind == "clip" && e.proposed-action == DragAction.copy);
+            return e.proposed-action;
         }
     }
 
@@ -307,7 +331,7 @@ component LayerStrip inherits Rectangle {
         background: Theme.accent;
         Text {
             width: parent.width - 8px;
-            text: Drag.kind == "effect" ? "Add to layer: " + Drag.label : "Into first empty slot";
+            text: Drag.kind == "effect" ? "Add to layer: " + Drag.label : Drag.kind == "clip" ? "To first empty slot" : "Into first empty slot";
             color: Theme.on-accent;
             font-size: Theme.font-small;
             font-weight: 600;
@@ -556,11 +580,12 @@ component ClipGrid inherits Rectangle {
                     bypass => { root.layer-bypass(layer.index); }
                     solo => { root.layer-solo(layer.index); }
                     clear => { root.layer-clear(layer.index); }
-                    dropped(item) => { Drag.dropped-on-layer(item, layer.index); }
+                    dropped(item, copy) => { Drag.dropped-on-layer(item, layer.index, copy); }
                 }
                 for cell[c] in layer.cells: ClipCell {
                     data: cell;
-                    dropped(item) => { Drag.dropped-on-slot(item, layer.index, c); }
+                    slot-id: "clip:" + layer.index + ":" + c;
+                    dropped(item, copy) => { Drag.dropped-on-slot(item, layer.index, c, copy); }
                     midi-id: cell.filled ? "clip:" + layer.index + ":" + c : "";
                     clicked => { root.cell-clicked(layer.index, c); }
                     pressed => { root.cell-pressed(layer.index, c); }
@@ -1979,6 +2004,7 @@ export component MainWindow inherits Window {
                     spacing: 16px;
                     Text {
                         text: Drag.kind == "effect" ? "● " + Drag.label + ": drop it on a clip, a layer or an effect chain"
+                            : Drag.kind == "clip" ? "● " + Drag.label + ": drop on a slot to move it (swaps with a clip there), hold Ctrl to copy"
                             : Drag.kind != "" ? "● " + Drag.label + ": drop it on a slot, or on a layer for its first empty slot"
                             : root.status;
                         color: Drag.kind != "" ? Theme.accent : Theme.text-dim;

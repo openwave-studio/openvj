@@ -1,13 +1,14 @@
 // Drag and drop from the browser and library onto clip slots, layers and effect chains.
 // See openspec/changes/add-library-drag-and-drop.
 //
-// The payload names what's dragged: "lib:<tile>", "input:<i>" or "file:<i>". Slint can't
+// The payload names what's dragged: "lib:<tile>", "input:<i>", "file:<i>", "clip:<layer>:<column>",
+// or "finder" for files dragged in from the Finder (src/finder_drop.rs). Slint can't
 // build a data-transfer itself, so `payload` comes from the app; the drop targets read
 // `Drag.item` instead of the transfer.
 
 /// The drag in flight, set by the drag source when the drag starts.
 export global Drag {
-    // "" when nothing is dragged, else "source" or "effect".
+    // "" when nothing is dragged, else "source", "effect" or "clip".
     in-out property <string> kind;
     in-out property <string> item;
     // Short name of the dragged thing, for the drop hints.
@@ -16,8 +17,9 @@ export global Drag {
     pure callback payload(string) -> data-transfer;
 
     // The drop: what (`item`) and where. Handled by the app (src/app.rs).
-    callback dropped-on-slot(string, int, int);
-    callback dropped-on-layer(string, int);
+    // The bool is true for a copy (a clip dragged with the copy modifier).
+    callback dropped-on-slot(string, int, int, bool);
+    callback dropped-on-layer(string, int, bool);
     // `scope` is the effect chain's scope (clip, layer, group or composition effects).
     callback dropped-on-chain(string, int);
 
@@ -40,6 +42,8 @@ export component DragSource inherits DragArea {
     in property <string> label;
     in property <image> thumb;
     allow-copy: true;
+    // Clips move by default; the copy modifier copies them.
+    allow-move: root.kind == "clip";
     data: Drag.payload(root.item);
     drag-image: root.thumb;
     changed dragging => {

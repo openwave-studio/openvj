@@ -123,6 +123,10 @@ enum Dragged {
     Effect(String),
     /// A camera, Syphon server, Layer Router or media file.
     Source(ClipSource),
+    /// The clip in a slot (layer, column).
+    Clip(usize, usize),
+    /// Files dragged in from the Finder.
+    Files(Vec<PathBuf>),
 }
 
 /// An open camera or Syphon stream, shared by every clip that uses it.
@@ -241,6 +245,8 @@ pub struct App {
     selected: Option<(usize, usize)>,
     selected_layer: usize,
     picked: Option<Picked>,
+    /// Files being dragged in from the Finder (src/finder_drop.rs).
+    finder_files: Vec<PathBuf>,
     last_column: Option<usize>,
     file: Option<PathBuf>,
     status: String,
@@ -389,6 +395,7 @@ impl App {
             selected: None,
             selected_layer: 0,
             picked: None,
+            finder_files: Vec::new(),
             last_column: None,
             file: None,
             status: String::new(),
@@ -2949,6 +2956,14 @@ impl App {
     /// What a drag payload from ui/drag.slint ("lib:<tile>", "input:<i>", "file:<i>")
     /// stands for.
     fn dragged(&self, item: &str) -> Option<Dragged> {
+        if item == "finder" {
+            return Some(Dragged::Files(self.finder_files.clone()));
+        }
+        if let Some(slot) = item.strip_prefix("clip:") {
+            let (l, c) = slot.split_once(':')?;
+            let (l, c) = (l.parse().ok()?, c.parse().ok()?);
+            return self.comp.clip(l, c).is_some().then_some(Dragged::Clip(l, c));
+        }
         let (kind, i) = item.split_once(':')?;
         let i: usize = i.parse().ok()?;
         match kind {
@@ -2969,11 +2984,22 @@ impl App {
                 self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone())
             }
             Dragged::Source(source) => source.live_name().unwrap_or_else(|| source.default_name()),
+            Dragged::Clip(l, c) => self.comp.clip(*l, *c).map(|c| c.name.clone()).unwrap_or_default(),
+            Dragged::Files(files) => match files.as_slice() {
+                [one] => one.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+                many => format!("{} files", many.len()),
+            },
         }
     }
 
-    /// Puts a dragged source in a slot, or adds a dragged effect to the clip there.
-    pub fn drop_on_slot(&mut self, item: &str, layer: usize, col: usize) {
+    /// Files are being dragged in from the Finder.
+    pub fn set_finder_files(&mut self, files: Vec<PathBuf>) {
+        self.finder_files = files;
+    }
+
+    /// Puts a dragged source in a slot, adds a dragged effect to the clip there, or moves
+    /// (`copy`: copies) a dragged clip there, swapping with the clip already there.
+    pub fn drop_on_slot(&mut self, item: &str, layer: usize, col: usize, copy: bool) {
         let Some(what) = self.dragged(item) else { return };
         self.stop_audition();
         let name = self.dragged_name(&what);
@@ -2989,6 +3015,14 @@ impl App {
             }
             Dragged::Library(id) => self.place_library(layer, col, &id),
             Dragged::Source(source) => self.place(layer, col, source),
+            Dragged::Clip(l, c) => {
+                self.drop_clip((l, c), (layer, col), copy);
+                return;
+            }
+            Dragged::Files(files) => {
+                self.drop_files(&files, layer, col);
+                return;
+            }
         }
         self.browser_dirty = true;
         self.set_status(format!("Placed {name} in {where_}"));
@@ -2996,7 +3030,7 @@ impl App {
 
     /// An effect dropped on a layer goes on the layer; a source goes into the layer's
     /// first empty slot.
-    pub fn drop_on_layer(&mut self, item: &str, layer: usize) {
+    pub fn drop_on_layer(&mut self, item: &str, layer: usize, copy: bool) {
         let Some(what) = self.dragged(item) else { return };
         if let Dragged::Effect(id) = &what {
             self.stop_audition();
@@ -3008,7 +3042,7 @@ impl App {
         }
         let Some(l) = self.comp.layers.get(layer) else { return };
         match l.clips.iter().position(Option::is_none) {
-            Some(col) => self.drop_on_slot(item, layer, col),
+            Some(col) => self.drop_on_slot(item, layer, col, copy),
             None => {
                 let name = l.name.clone();
                 self.set_status(format!("{name} has no empty slot: drop on a slot to replace its clip"));
@@ -3022,6 +3056,54 @@ impl App {
             self.stop_audition();
             self.effect_add(scope, id.trim_start_matches("isf:"));
         }
+    }
+
+    /// Moves a clip to another slot (swapping with what's there), or copies it there.
+    fn drop_clip(&mut self, from: (usize, usize), to: (usize, usize), copy: bool) {
+        let Some(clip) = self.comp.clip(from.0, from.1).cloned() else { return };
+        if from == to {
+            return;
+        }
+        let where_ = self.slot_name(to.0, to.1);
+        if copy {
+            self.place(to.0, to.1, clip.source.clone());
+            if let Some(placed) = self.comp.clip_mut(to.0, to.1) {
+                let id = placed.id;
+                *placed = Clip { id, ..clip.clone() };
+            }
+            self.set_status(format!("Copied {} to {where_}", clip.name));
+        } else {
+            let swapped = self.comp.clip(to.0, to.1).map(|c| c.name.clone());
+            self.comp.move_clip(from, to);
+            self.select_slot(to.0, to.1);
+            self.set_status(match swapped {
+                Some(other) => format!("Swapped {} with {other}", clip.name),
+                None => format!("Moved {} to {where_}", clip.name),
+            });
+        }
+        self.library.lib.set_in_use(openvj_core::library::composition_ids(&self.comp));
+    }
+
+    /// Files from the Finder: the first in the slot, the rest in the columns after it.
+    fn drop_files(&mut self, files: &[PathBuf], layer: usize, col: usize) {
+        let sources: Vec<ClipSource> = files.iter().filter_map(|p| ClipSource::from_path(p)).collect();
+        if sources.is_empty() {
+            self.set_status("Those files aren't images or videos openVJ can play");
+            return;
+        }
+        let columns = self.comp.columns.len();
+        let mut placed = 0;
+        for (c, source) in (col..columns).zip(sources) {
+            self.place(layer, c, source);
+            placed += 1;
+        }
+        self.select_slot(layer, col);
+        let skipped = files.len() - placed;
+        let mut status = format!("Placed {placed} file{} starting at {}", plural(placed), self.slot_name(layer, col));
+        if skipped > 0 {
+            status += &format!(" ({skipped} skipped: not media, or no columns left)");
+        }
+        self.set_status(status);
     }
 
     fn select_slot(&mut self, layer: usize, col: usize) {
