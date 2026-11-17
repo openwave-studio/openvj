@@ -1,0 +1,49 @@
+# Proposal
+
+## Why
+
+The Synthesis layout (PR #18) has a preview, 8 macros and one knob section per source and effect. The maintainer wants it to play like Synesthesia's control page (screenshot, 2026-11-17): group tools to lock, undo, reset and randomize; a fixed set of "meta" look controls every visual has; and a media overlay with its own transport, transform, colour and an image browser. Everything keeps openVJ's own look (openDJ style, one cyan accent) and its performance rules.
+
+## What Changes
+
+- **Group tools.** Every Synthesis section (SOURCE, each FX, META, MEDIA's transform and colour) gets **lock**, **undo**, **default** and **random** buttons. Each row of sections (SCENE and META) also gets the four as row-wide buttons: random and default skip locked sections, undo steps back the last row-wide change. Reuses the Discover layout's `Knobs` model (lock, undo stack, reset, seeded random).
+- **META controls**, the same for every visual:
+  - **Master** (the visual's intensity, fades it to black)
+  - **Color**: Invert, Brightness, Gamma, Contrast, Hue, Saturation
+  - **Mirror**: Vertical, Horizontal
+  - **Limit colors**: on/off, Low colour, High colour (maps the image's brightness onto a two-colour gradient)
+  - **General**: Alpha channel (alpha from brightness, so Syphon receivers can key it)
+
+  Built as one hidden fixed effect, `look`, the same way the fixed Transform works: one shader pass, skipped when every value is at its default, so a visual that doesn't use META costs nothing. Its parameters are ordinary parameters, so they can take a driver (audio, tempo) and macros can move them.
+- **MEDIA overlay**: an image, video or camera drawn over the visual with a **blend mode** (the layer blend modes) and an **amount** knob. The overlay is a small clip, so it reuses clip playback and the video decoder:
+  - transport: play, previous, next (in the browser's current folder), stop; **loop mode** (the clip play modes), a **scrub bar**, **playback speed**
+  - **transform**: Scale, Fit or Fill, Vertical flip, Horizontal flip
+  - **colour**: Invert, Contrast, Gamma, Hue, Saturation (the same `look` effect, showing only these)
+- **Media browser** in the MEDIA section: chips for All, Live sources (cameras), and each media folder the VJ adds; a thumbnail grid of images and videos; **refresh**, **add folder** and **lock** (while locked, clicks in the browser don't change the overlay, to avoid accidents during a show). Clicking a tile sets the overlay. It reuses the library's grid and thumbnail cache and the file browser's media listing; folders are saved in preferences.
+- Knobs only, as Synthesis already decided; on/off controls are small switches; colours use a swatch with a colour picker popup.
+
+Out of scope: per-generator custom sections, renaming macros, MIDI learn on the new controls (they become mappable when add-midi-learn grows clip targets), video audio, and the overlay in the Mixer's clip properties (it shows in Synthesis only for now; the data is shared, so the Mixer can follow).
+
+## Capabilities
+
+### Modified Capabilities
+- `layouts`: group tools, META controls, MEDIA overlay and media browser in Synthesis.
+
+## Touches
+
+- crates/openvj-core: new `effects/look.fs` (hidden), `effect.rs` (register it), `composition.rs` (where META and the overlay are stored, see Open questions), `macros.rs` (ParamRef for META)
+- crates/openvj-render: `src/lib.rs` (look pass, overlay render and blend)
+- crates/openvj-app: `src/app.rs` (Synthesis callbacks), new `src/synth_controls.rs`, `src/browser.rs` (media folders), `src/prefs.rs`, `ui/synthesis.slint`, `ui/controls.slint` (switch and colour swatch, if not already there)
+- Specs: layouts
+- Shared hot spots: `composition.rs`, `app.rs`, `render/src/lib.rs`. Kept to small additions.
+
+## Conflicts
+
+- The library drag-and-drop thread is changing the library browser now. This change only reuses the grid tile component and the thumbnail cache; merge drag-and-drop first, then rebase.
+- add-midi-learn (open): no file overlap beyond `app.rs`. Either order.
+- add-parameter-animation: none, META parameters use the existing driver model.
+
+## Open questions
+
+1. Where META and the media overlay live: on the **layer** (they stay when you switch visuals, as in Synesthesia, where meta and media survive a scene change) or on each **visual** (they travel with presets and playlists, and macros can move them). Default: on the layer.
+2. Master: a separate intensity knob in META, or the layer's existing Opacity moved into META? Default: the layer's Opacity, shown as Master, so there is one control, not two.
