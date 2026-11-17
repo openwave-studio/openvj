@@ -220,6 +220,32 @@ fn main() -> Result<()> {
     on!(on_param_mod_tempo, |a, s: i32, o: i32, i: i32, r: i32| a.param_mod_tempo(s, o, i as usize, r));
     on!(on_open_effects_folder, |a| a.open_effects_folder());
 
+    // Drag and drop from the browser and library (ui/drag.slint).
+    {
+        let g = ui.global::<Drag>();
+        g.on_payload(slint::DataTransfer::from);
+        macro_rules! dropped {
+            ($setter:ident, |$app:ident, $item:ident $(, $arg:ident : $ty:ty)*| $body:expr) => {{
+                let (app, w, o) = (app.clone(), w.clone(), o.clone());
+                g.$setter(move |$item: slint::SharedString $(, $arg: $ty)*| {
+                    // The drag source may be rebuilt by the sync below and miss its
+                    // drag-finished, so the drag ends here too.
+                    if let Some(ui) = w.upgrade() {
+                        ui.global::<Drag>().invoke_end();
+                    }
+                    with_app(&app, &w, &o, |$app| $body)
+                });
+            }};
+        }
+        dropped!(on_dropped_on_slot, |a, item, l: i32, c: i32| a.drop_on_slot(
+            &item,
+            l.max(0) as usize,
+            c.max(0) as usize
+        ));
+        dropped!(on_dropped_on_layer, |a, item, l: i32| a.drop_on_layer(&item, l.max(0) as usize));
+        dropped!(on_dropped_on_chain, |a, item, scope: i32| a.drop_on_chain(&item, scope));
+    }
+
     // The library grid (ui/library.slint).
     {
         let g = ui.global::<Lib>();

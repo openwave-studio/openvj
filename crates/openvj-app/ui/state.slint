@@ -117,7 +117,8 @@ export struct BrowserItem {
     name: string,
     detail: string,
     kind: string,
-    armed: bool,
+    // Last clicked, shown highlighted.
+    picked: bool,
 }
 
 // One item in the library grid (ui/library.slint).
@@ -133,7 +134,6 @@ export struct LibTile {
     favorite: bool,
     reactive: bool,
     selected: bool,
-    armed: bool,
     unwanted: bool,
 }
 

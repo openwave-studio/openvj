@@ -1,0 +1,53 @@
+// Drag and drop from the browser and library onto clip slots, layers and effect chains.
+// See openspec/changes/add-library-drag-and-drop.
+//
+// The payload names what's dragged: "lib:<tile>", "input:<i>" or "file:<i>". Slint can't
+// build a data-transfer itself, so `payload` comes from the app; the drop targets read
+// `Drag.item` instead of the transfer.
+
+/// The drag in flight, set by the drag source when the drag starts.
+export global Drag {
+    // "" when nothing is dragged, else "source" or "effect".
+    in-out property <string> kind;
+    in-out property <string> item;
+    // Short name of the dragged thing, for the drop hints.
+    in-out property <string> label;
+
+    pure callback payload(string) -> data-transfer;
+
+    // The drop: what (`item`) and where. Handled by the app (src/app.rs).
+    callback dropped-on-slot(string, int, int);
+    callback dropped-on-layer(string, int);
+    // `scope` is the effect chain's scope (clip, layer, group or composition effects).
+    callback dropped-on-chain(string, int);
+
+    public function start(kind: string, item: string, label: string) {
+        Drag.kind = kind;
+        Drag.item = item;
+        Drag.label = label;
+    }
+    public function end() {
+        Drag.kind = "";
+        Drag.item = "";
+        Drag.label = "";
+    }
+}
+
+/// Wraps a draggable thing: library tile or row, input button, file row.
+export component DragSource inherits DragArea {
+    in property <string> kind: "source";
+    in property <string> item;
+    in property <string> label;
+    in property <image> thumb;
+    allow-copy: true;
+    data: Drag.payload(root.item);
+    drag-image: root.thumb;
+    changed dragging => {
+        if (self.dragging) {
+            Drag.start(root.kind, root.item, root.label);
+        }
+    }
+    drag-finished(action) => {
+        Drag.end();
+    }
+}

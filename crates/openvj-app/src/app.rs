@@ -107,13 +107,22 @@ enum Media {
     Failed(String),
 }
 
-/// What the user picked in the browser and will place with the next slot click.
+/// The input or file last clicked in the browser, shown highlighted. Dragging it onto a
+/// slot places it.
 #[derive(Clone, PartialEq)]
-enum Armed {
-    /// A library item (generator, MilkDrop preset or saved preset), by library id.
-    Library(String),
+enum Picked {
     File(PathBuf),
     Input(ClipSource),
+}
+
+/// What is being dragged onto a slot, a layer or an effect chain.
+enum Dragged {
+    /// A generator, MilkDrop preset or saved preset, by library id.
+    Library(String),
+    /// An effect, by library id.
+    Effect(String),
+    /// A camera, Syphon server, Layer Router or media file.
+    Source(ClipSource),
 }
 
 /// An open camera or Syphon stream, shared by every clip that uses it.
@@ -231,7 +240,7 @@ pub struct App {
     /// Selected slot (layer, column). Drives the preview monitor and clip properties.
     selected: Option<(usize, usize)>,
     selected_layer: usize,
-    armed: Option<Armed>,
+    picked: Option<Picked>,
     last_column: Option<usize>,
     file: Option<PathBuf>,
     status: String,
@@ -377,7 +386,7 @@ impl App {
             resolume_refs: None,
             selected: None,
             selected_layer: 0,
-            armed: None,
+            picked: None,
             last_column: None,
             file: None,
             status: String::new(),
@@ -1591,13 +1600,6 @@ impl App {
             self.status.clone()
         };
         ui.set_status(status.into());
-        let armed = self.armed.as_ref().map(|a| match a {
-            Armed::Library(id) => self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone()),
-            Armed::File(p) => p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
-            Armed::Input(source) => source.live_name().unwrap_or_else(|| source.default_name()),
-        });
-        ui.set_armed(armed.is_some());
-        ui.set_armed_label(armed.unwrap_or_default().into());
     }
 
     fn sync_browser(&mut self, ui: &MainWindow) {
@@ -1613,7 +1615,7 @@ impl App {
                 }
                 .into(),
                 kind: source.kind_label().into(),
-                armed: self.armed == Some(Armed::Input(source)),
+                picked: self.picked == Some(Picked::Input(source)),
             })
             .collect();
         update_model(&self.inputs_model, inputs);
@@ -1633,7 +1635,7 @@ impl App {
                 name: e.name.as_str().into(),
                 detail: e.detail.as_str().into(),
                 kind: e.kind().into(),
-                armed: self.armed == Some(Armed::File(e.path.clone())),
+                picked: self.picked == Some(Picked::File(e.path.clone())),
             })
             .collect();
         update_model(&self.files_model, files);
@@ -1644,18 +1646,6 @@ impl App {
 
     pub fn cell_clicked(&mut self, layer: usize, col: usize) {
         self.stop_audition();
-        if let Some(armed) = self.armed.take() {
-            self.browser_dirty = true;
-            self.library_dirty = true;
-            if let Armed::Library(id) = &armed {
-                self.place_library(layer, col, &id.clone());
-                return;
-            }
-            if let Some(source) = self.armed_source(&armed) {
-                self.place(layer, col, source);
-            }
-            return;
-        }
         let now = self.now();
         // Piano clips launched on the press already (cell_pressed).
         if self.comp.clip(layer, col).is_some_and(|c| c.trigger != TriggerStyle::Piano) {
@@ -1671,7 +1661,7 @@ impl App {
 
     /// The mouse went down on a slot: a Piano clip starts playing now, until it's let go.
     pub fn cell_pressed(&mut self, layer: usize, col: usize) {
-        if self.armed.is_some() || self.comp.clip(layer, col).is_none_or(|c| c.trigger != TriggerStyle::Piano) {
+        if self.comp.clip(layer, col).is_none_or(|c| c.trigger != TriggerStyle::Piano) {
             return;
         }
         self.stop_automix_for_mixer();
@@ -1991,14 +1981,6 @@ impl App {
 
     // ---------------------------------------------------------------- browser
 
-    fn armed_source(&self, armed: &Armed) -> Option<ClipSource> {
-        match armed {
-            Armed::Library(id) => self.library_clip(id).map(|c| c.source),
-            Armed::File(p) => ClipSource::from_path(p),
-            Armed::Input(source) => Some(source.clone()),
-        }
-    }
-
     /// The Layer Router, cameras, then Syphon servers, as clip sources for the browser.
     fn input_sources(&self) -> Vec<ClipSource> {
         let router = std::iter::once(ClipSource::Router { input: RouterInput::Composition });
@@ -2011,7 +1993,9 @@ impl App {
 
     pub fn input_clicked(&mut self, i: usize) {
         if let Some(source) = self.input_sources().into_iter().nth(i) {
-            self.arm(Armed::Input(source));
+            let name = source.live_name().unwrap_or_else(|| source.default_name());
+            self.set_status(format!("Drag {name} onto a slot to place it"));
+            self.pick(Picked::Input(source));
         }
     }
 
@@ -2031,10 +2015,9 @@ impl App {
         self.set_status(format!("Found {c} camera{} and {s} Syphon server{}", plural(c), plural(s)));
     }
 
-    fn arm(&mut self, armed: Armed) {
-        self.armed = if self.armed.as_ref() == Some(&armed) { None } else { Some(armed) };
+    fn pick(&mut self, picked: Picked) {
+        self.picked = Some(picked);
         self.browser_dirty = true;
-        self.props_dirty = true;
     }
 
     /// Places straight into the selected slot, or the first empty slot of the selected layer.
@@ -2043,8 +2026,6 @@ impl App {
             let layer = self.comp.layers.get(self.selected_layer)?;
             layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
         });
-        self.armed = None;
-        self.browser_dirty = true;
         match target {
             Some((l, c)) => self.place(l, c, source),
             None => self.set_status("Select a slot first (right-click a cell)"),
@@ -2056,7 +2037,7 @@ impl App {
         if entry.source.is_none() {
             self.set_browser_dir(entry.path);
         } else {
-            self.arm(Armed::File(entry.path));
+            self.pick(Picked::File(entry.path));
         }
     }
 
@@ -2862,8 +2843,6 @@ impl App {
             let layer = self.comp.layers.get(self.selected_layer)?;
             layer.clips.iter().position(Option::is_none).map(|c| (self.selected_layer, c))
         });
-        self.armed = None;
-        self.browser_dirty = true;
         match target {
             Some((l, c)) => {
                 self.place_library(l, c, id);
@@ -2913,10 +2892,6 @@ impl App {
     pub fn lib_tile_clicked(&mut self, i: i32) {
         let Some(id) = self.lib_id(i) else { return };
         self.audition_library(&id);
-        if !self.library.view.effects {
-            self.armed = Some(Armed::Library(id.clone()));
-            self.props_dirty = true;
-        }
         self.library.view.selected = Some(id);
         self.library_dirty = true;
     }
@@ -2950,6 +2925,99 @@ impl App {
         };
         self.stop_audition();
         self.effect_add(scope, id.trim_start_matches("isf:"));
+    }
+
+    // ---------------------------------------------------------------- drag and drop
+
+    /// What a drag payload from ui/drag.slint ("lib:<tile>", "input:<i>", "file:<i>")
+    /// stands for.
+    fn dragged(&self, item: &str) -> Option<Dragged> {
+        let (kind, i) = item.split_once(':')?;
+        let i: usize = i.parse().ok()?;
+        match kind {
+            "lib" => {
+                let id = self.library.view.shown.get(i)?.clone();
+                let effect = self.library.lib.get(&id)?.kind == openvj_core::library::Kind::Effect;
+                Some(if effect { Dragged::Effect(id) } else { Dragged::Library(id) })
+            }
+            "input" => self.input_sources().into_iter().nth(i).map(Dragged::Source),
+            "file" => self.browser_entries.get(i).and_then(|e| e.source.clone()).map(Dragged::Source),
+            _ => None,
+        }
+    }
+
+    fn dragged_name(&self, what: &Dragged) -> String {
+        match what {
+            Dragged::Library(id) | Dragged::Effect(id) => {
+                self.library.lib.get(id).map_or_else(|| id.clone(), |i| i.name.clone())
+            }
+            Dragged::Source(source) => source.live_name().unwrap_or_else(|| source.default_name()),
+        }
+    }
+
+    /// Puts a dragged source in a slot, or adds a dragged effect to the clip there.
+    pub fn drop_on_slot(&mut self, item: &str, layer: usize, col: usize) {
+        let Some(what) = self.dragged(item) else { return };
+        self.stop_audition();
+        let name = self.dragged_name(&what);
+        let where_ = self.slot_name(layer, col);
+        match what {
+            Dragged::Effect(id) => {
+                if self.comp.clip(layer, col).is_none() {
+                    return;
+                }
+                self.select_slot(layer, col);
+                self.effect_add(scope::CLIP_FX, id.trim_start_matches("isf:"));
+                return; // effect_add says where it went
+            }
+            Dragged::Library(id) => self.place_library(layer, col, &id),
+            Dragged::Source(source) => self.place(layer, col, source),
+        }
+        self.browser_dirty = true;
+        self.set_status(format!("Placed {name} in {where_}"));
+    }
+
+    /// An effect dropped on a layer goes on the layer; a source goes into the layer's
+    /// first empty slot.
+    pub fn drop_on_layer(&mut self, item: &str, layer: usize) {
+        let Some(what) = self.dragged(item) else { return };
+        if let Dragged::Effect(id) = &what {
+            self.stop_audition();
+            self.selected_layer = layer;
+            self.grid_dirty = true;
+            self.props_dirty = true;
+            self.effect_add(scope::LAYER_FX, id.trim_start_matches("isf:"));
+            return;
+        }
+        let Some(l) = self.comp.layers.get(layer) else { return };
+        match l.clips.iter().position(Option::is_none) {
+            Some(col) => self.drop_on_slot(item, layer, col),
+            None => {
+                let name = l.name.clone();
+                self.set_status(format!("{name} has no empty slot: drop on a slot to replace its clip"));
+            }
+        }
+    }
+
+    /// An effect dropped on an effect chain in the properties panel.
+    pub fn drop_on_chain(&mut self, item: &str, scope: i32) {
+        if let Some(Dragged::Effect(id)) = self.dragged(item) {
+            self.stop_audition();
+            self.effect_add(scope, id.trim_start_matches("isf:"));
+        }
+    }
+
+    fn select_slot(&mut self, layer: usize, col: usize) {
+        self.selected = Some((layer, col));
+        self.selected_layer = layer;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+    }
+
+    /// "Layer 2 · column 4", as the library's Put in button says it.
+    fn slot_name(&self, layer: usize, col: usize) -> String {
+        let name = self.comp.layers.get(layer).map(|l| l.name.clone()).unwrap_or_default();
+        format!("{name} · column {}", col + 1)
     }
 
     pub fn lib_chip_clicked(&mut self, i: i32) {
@@ -3088,10 +3156,6 @@ impl App {
     /// Esc in the grid: clears the selection and gives the keyboard back.
     pub fn library_done(&mut self) {
         self.library.view.selected = None;
-        if matches!(self.armed, Some(Armed::Library(_))) {
-            self.armed = None;
-            self.props_dirty = true;
-        }
         self.stop_audition();
         self.library_dirty = true;
         self.lib_release_keys = true;
@@ -3230,10 +3294,6 @@ impl App {
         let filter = self.library.view.query_filter();
         let rows: Vec<(String, openvj_core::library::Item)> =
             self.library.lib.query(&filter).into_iter().map(|i| (i.id.clone(), i.clone())).collect();
-        let armed = match &self.armed {
-            Some(Armed::Library(id)) => Some(id.clone()),
-            _ => None,
-        };
         let selected = self.library.view.selected.clone();
         let mut tiles = Vec::with_capacity(rows.len());
         for (id, item) in &rows {
@@ -3250,7 +3310,6 @@ impl App {
                 favorite: entry.favorite,
                 reactive: item.audio_reactive,
                 selected: selected.as_deref() == Some(id.as_str()),
-                armed: armed.as_deref() == Some(id.as_str()),
                 unwanted: self.library.lib.status(id) == Status::Unwanted,
             });
         }
@@ -3411,10 +3470,8 @@ impl App {
                 if self.library.view.expanded {
                     self.lib_toggle_expanded();
                     self.library_done();
-                } else if self.engine.auditioning() || self.armed.is_some() {
+                } else if self.engine.auditioning() {
                     self.stop_audition();
-                    self.armed = None;
-                    self.browser_dirty = true;
                     self.library_dirty = true;
                 } else if self.escape_at.take().is_some() {
                     self.clear_all();

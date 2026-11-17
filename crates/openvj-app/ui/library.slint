@@ -6,6 +6,7 @@ import { ListView } from "std-widgets.slint";
 import { Theme, CloseIcon } from "theme.slint";
 import { FlatButton } from "controls.slint";
 import { LibTile, LibChip, LibSideRow } from "state.slint";
+import { DragSource } from "drag.slint";
 
 /// Colour of a library kind badge.
 export global LibKinds {
@@ -72,12 +73,14 @@ export component Chip inherits Rectangle {
 /// intensity bars.
 component Tile inherits Rectangle {
     in property <LibTile> tile;
+    // Position in `Lib.tiles`, for dragging.
+    in property <int> index;
     callback clicked();
     callback double-clicked();
     border-radius: Theme.radius-small;
     background: Theme.panel-2;
     border-width: 1px;
-    border-color: tile.selected ? Theme.accent : tile.armed ? Theme.accent.with-alpha(0.6) : ta.has-hover ? Theme.border : Theme.separator;
+    border-color: tile.selected ? Theme.accent : ta.has-hover ? Theme.border : Theme.separator;
     opacity: tile.unwanted ? 0.55 : 1;
     VerticalLayout {
         padding: 1px;
@@ -161,16 +164,23 @@ component Tile inherits Rectangle {
             }
         }
     }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        double-clicked => { root.double-clicked(); }
+    DragSource {
+        kind: tile.kind == "FX" ? "effect" : "source";
+        item: "lib:" + root.index;
+        label: tile.name;
+        thumb: tile.has-thumb ? tile.thumb : @image-url("");
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.clicked(); }
+            double-clicked => { root.double-clicked(); }
+        }
     }
 }
 
 /// One item in the list view.
 component Row inherits Rectangle {
     in property <LibTile> tile;
+    in property <int> index;
     in property <bool> odd;
     callback clicked();
     callback double-clicked();
@@ -230,9 +240,15 @@ component Row inherits Rectangle {
             value: tile.intensity;
         }
     }
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-        double-clicked => { root.double-clicked(); }
+    DragSource {
+        kind: tile.kind == "FX" ? "effect" : "source";
+        item: "lib:" + root.index;
+        label: tile.name;
+        thumb: tile.has-thumb ? tile.thumb : @image-url("");
+        ta := TouchArea {
+            clicked => { root.clicked(); }
+            double-clicked => { root.double-clicked(); }
+        }
     }
 }
 
@@ -500,6 +516,7 @@ export component LibraryPanel inherits FocusScope {
                         height: root.row-h;
                         visible: idx < Lib.tiles.length;
                         tile: idx < Lib.tiles.length ? Lib.tiles[idx] : { name: "" };
+                        index: idx;
                         clicked => { Lib.tile-clicked(idx); root.focus(); }
                         double-clicked => { Lib.tile-double-clicked(idx); }
                     }
@@ -508,6 +525,7 @@ export component LibraryPanel inherits FocusScope {
             if Lib.list-view: ListView {
                 for tile[i] in Lib.tiles: Row {
                     tile: tile;
+                    index: i;
                     odd: mod(i, 2) == 0;
                     clicked => { Lib.tile-clicked(i); root.focus(); }
                     double-clicked => { Lib.tile-double-clicked(i); }
@@ -607,8 +625,8 @@ export component LibraryPanel inherits FocusScope {
         if Lib.selected < 0 || root.large: Text {
             height: root.large ? 20px : 52px;
             text: root.is-effects
-                ? "Click an effect to preview it on the selected clip. 0–5 intensity · F favorite · X unwanted · Enter adds it to the layer"
-                : "Click to preview, double-click or Enter to put in the slot. 0–5 intensity · F favorite · K keep · X unwanted";
+                ? "Click an effect to preview it on the selected clip, drag it onto a clip, a layer or an effect chain. 0–5 intensity · F favorite · X unwanted · Enter adds it to the layer"
+                : "Click to preview, drag onto a slot or a layer to place it (or Enter for the selected slot). 0–5 intensity · F favorite · K keep · X unwanted";
             color: Theme.text-faint;
             font-size: Theme.font-small;
             wrap: word-wrap;
