@@ -1354,7 +1354,12 @@ impl Engine {
             if !layer.transform.is_noop() {
                 src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.transform), now, inputs);
             }
-            let src = &self.effect_chain(&mut passes, &t.fx, src, &layer.effects, now, inputs);
+            let mut src = self.effect_chain(&mut passes, &t.fx, src, &layer.effects, now, inputs);
+            // META (Synthesis): one pass, only when something is set.
+            if !layer.look.is_noop() {
+                src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.look), now, inputs);
+            }
+            let src = &src;
             self.write_route(&mut passes, RouterInput::Layer(layer_index), src);
             let mode = layer.blend.shader_id();
             match &mut open {
@@ -2128,6 +2133,67 @@ mod tests {
         e.render(&comp, 0.1, &inputs(0.1), None);
         let m = mean(&e.read_target(e.output()));
         assert!(m.iter().all(|c| (c - 127.5).abs() < 2.0), "half-inverted cyan: {m:?}");
+    }
+
+    #[test]
+    fn layer_look() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let px = |e: &Engine, x: usize, y: usize| {
+            let p = e.read_target(e.output());
+            let i = (y * 32 + x) * 4;
+            [p[i], p[i + 1], p[i + 2]]
+        };
+        let mut comp = Composition::new(32, 32, 1, 1);
+        let id = comp.set_clip(0, 0, ClipSource::Image { path: "r.png".into() }).unwrap();
+        // Left half red, right half blue.
+        let mut img = Vec::new();
+        for _ in 0..2 {
+            img.extend_from_slice(&[255, 0, 0, 255, 0, 0, 255, 255]);
+        }
+        e.set_media_frame(id, 2, 2, &img);
+        comp.trigger(0, 0, 0.0);
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        let plain = e.last_pass_count();
+        assert_eq!(px(&e, 4, 16), [255, 0, 0]);
+
+        // At its defaults META costs no pass.
+        comp.layers[0].look = openvj_core::default_look();
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(e.last_pass_count(), plain);
+
+        let set = |comp: &mut Composition, key: &str, v: f32| {
+            comp.layers[0].look.param_mut(key).unwrap().value = v;
+        };
+        set(&mut comp, "invert", 1.0);
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(e.last_pass_count(), plain + 1);
+        assert_eq!(px(&e, 4, 16), [0, 255, 255]);
+
+        // Horizontal mirror: the left half shows on the right too.
+        set(&mut comp, "invert", 0.0);
+        set(&mut comp, "mirror_h", 1.0);
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(px(&e, 28, 16), [255, 0, 0]);
+
+        // Limit colors: a black frame takes the low colour.
+        set(&mut comp, "mirror_h", 0.0);
+        set(&mut comp, "limit", 1.0);
+        set(&mut comp, "brightness", 0.0);
+        for (k, v) in [("low_color.r", 0.0), ("low_color.g", 1.0), ("low_color.b", 0.0)] {
+            comp.layers[0].look.param_mut(k).unwrap().value = v;
+        }
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(px(&e, 4, 16), [0, 255, 0]);
+
+        // META is the layer's: it stays when the layer plays another clip.
+        let other = comp.set_clip(0, 0, ClipSource::Image { path: "g.png".into() }).unwrap();
+        e.set_media_frame(other, 1, 1, &[255, 255, 255, 255]);
+        comp.trigger(0, 0, 0.2);
+        e.render(&comp, 0.3, &inputs(0.3), None);
+        assert_eq!(px(&e, 4, 16), [0, 255, 0]);
     }
 
     #[test]

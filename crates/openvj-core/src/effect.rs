@@ -32,10 +32,14 @@ const BUILTIN: &[(&str, &str)] = &[
 ];
 
 /// Built-in effects that aren't listed in the Effects tab: they're fixed in a card.
-const HIDDEN: &[(&str, &str)] = &[(TRANSFORM, include_str!("../effects/clip_transform.fs"))];
+const HIDDEN: &[(&str, &str)] =
+    &[(TRANSFORM, include_str!("../effects/clip_transform.fs")), (LOOK, include_str!("../effects/layer_look.fs"))];
 
 /// Id of the fixed Transform every clip and layer has.
 pub const TRANSFORM: &str = "clip_transform";
+
+/// Id of the fixed META look every layer has (Synthesis layout).
+pub const LOOK: &str = "layer_look";
 
 /// A parsed effect plus its channel list, shared by every instance.
 #[derive(Debug)]
@@ -258,6 +262,11 @@ impl Effect {
     pub fn param_mut(&mut self, key: &str) -> Option<&mut Param> {
         let default = self.ty()?.channels.iter().find(|c| c.key == key)?.default;
         Some(self.params.entry(key.to_owned()).or_insert_with(|| Param::new(default)))
+    }
+
+    /// Every channel at its default, nothing mapped, enabled and fully mixed: as new.
+    pub fn is_default(&self) -> bool {
+        *self == Self::new(&self.kind)
     }
 
     /// True when the effect can't change its input: bypassed, fully dry, or every channel at

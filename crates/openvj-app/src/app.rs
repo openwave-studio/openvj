@@ -61,10 +61,12 @@ mod scope {
     pub const CLIP_TF: i32 = 9;
     /// The selected clip's macros (Synthesis layout); the index is the macro.
     pub const CLIP_MACRO: i32 = 10;
+    /// The selected layer's META look (Synthesis layout); the owner is ignored.
+    pub const LAYER_LOOK: i32 = 11;
 
     /// Scopes whose parameters belong to an effect (a chain entry or a Transform).
     pub fn is_effect(scope: i32) -> bool {
-        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF)
+        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF | LAYER_LOOK)
     }
 }
 
@@ -272,6 +274,8 @@ pub struct App {
     layout: i32,
     /// The Discover layout (see discover.rs).
     discover: crate::discover::DiscoverState,
+    /// Synthesis group tools: locks and undo per section.
+    synth: crate::synth_controls::Groups,
     discover_dirty: bool,
     disc_params: Rc<VecModel<DiscParam>>,
     disc_packs: Rc<VecModel<LibChip>>,
@@ -293,6 +297,8 @@ pub struct App {
     group_fx: EffectModels,
     clip_fx: EffectModels,
     layer_tf: EffectModels,
+    /// The selected layer's META look, as a one-effect chain.
+    layer_look: EffectModels,
     clip_tf: EffectModels,
 
     grid_dirty: bool,
@@ -393,6 +399,7 @@ impl App {
             lib_tab_request: None,
             layout: 0,
             discover: Default::default(),
+            synth: Default::default(),
             discover_dirty: true,
             disc_params: Rc::new(VecModel::default()),
             disc_packs: Rc::new(VecModel::default()),
@@ -413,6 +420,7 @@ impl App {
             group_fx: EffectModels::default(),
             clip_fx: EffectModels { restartable: true, ..Default::default() },
             layer_tf: EffectModels::default(),
+            layer_look: EffectModels::default(),
             clip_tf: EffectModels { restartable: true, ..Default::default() },
             grid_dirty: true,
             props_dirty: true,
@@ -466,6 +474,7 @@ impl App {
         ui.set_group_effects(ModelRc::from(self.group_fx.effects.clone()));
         ui.set_clip_effects(ModelRc::from(self.clip_fx.effects.clone()));
         ui.set_layer_transform(ModelRc::from(self.layer_tf.effects.clone()));
+        ui.set_layer_look(ModelRc::from(self.layer_look.effects.clone()));
         ui.set_clip_transform(ModelRc::from(self.clip_tf.effects.clone()));
         let names =
             |v: Vec<&str>| ModelRc::new(VecModel::from(v.into_iter().map(SharedString::from).collect::<Vec<_>>()));
@@ -978,6 +987,7 @@ impl App {
             self.grid_dirty = false;
             self.sync_grid(ui);
             self.sync_synth_layers(ui);
+            self.sync_synth_groups(ui);
         } else {
             self.sync_live_opacity();
         }
@@ -1141,11 +1151,13 @@ impl App {
                 );
                 self.layer_fx.update(&layer.effects, &inputs);
                 self.layer_tf.update(std::slice::from_ref(&layer.transform), &inputs);
+                self.layer_look.update(std::slice::from_ref(&layer.look), &inputs);
             }
             None => {
                 update_model(&self.layer_params, Vec::new());
                 self.layer_fx.update(&[], &inputs);
                 self.layer_tf.update(&[], &inputs);
+                self.layer_look.update(&[], &inputs);
             }
         }
 
@@ -2405,6 +2417,7 @@ impl App {
     fn effect_mut(&mut self, scope: i32, owner: i32) -> Option<&mut Effect> {
         match scope {
             scope::LAYER_TF => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.transform),
+            scope::LAYER_LOOK => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.look),
             scope::CLIP_TF => self.selected_clip_mut().map(|c| &mut c.transform),
             _ => self.effects_mut(scope)?.get_mut(usize::try_from(owner).ok()?),
         }
@@ -3630,6 +3643,174 @@ impl App {
             })
             .collect();
         ui.set_synth_layers(ModelRc::new(VecModel::from(rows)));
+    }
+}
+
+/// Group tool buttons (ui/synthesis.slint `GroupTools`).
+const GROUP_LOCK: i32 = 0;
+const GROUP_UNDO: i32 = 1;
+const GROUP_DEFAULT: i32 = 2;
+const GROUP_RANDOM: i32 = 3;
+/// Synthesis rows of sections.
+const ROW_SCENE: i32 = 0;
+const ROW_META: i32 = 1;
+/// META sections (the owner of a `LAYER_LOOK` group), and the look's channels in each.
+/// Channels follow effects/layer_look.fs: invert, brightness, gamma, contrast, hue,
+/// saturation, mirror v/h, limit, low colour rgba, high colour rgba, alpha.
+const META_SECTIONS: [std::ops::Range<usize>; 5] = [0..0, 0..6, 6..8, 8..17, 17..18];
+/// Channels Random leaves alone: the colours' alpha, and Alpha channel (it would punch holes).
+const META_FIXED: [usize; 3] = [12, 16, 17];
+
+impl App {
+    /// The section key for (scope, owner): the selected visual's for scene sections, the
+    /// focused layer's for META.
+    fn synth_key(&self, scope: i32, owner: i32) -> Option<crate::synth_controls::Key> {
+        if scope == scope::LAYER_LOOK {
+            let l = self.layer_index(-1)?;
+            return Some((u64::MAX - l as u64, scope, owner));
+        }
+        let (l, c) = self.selected?;
+        Some((self.comp.clip(l, c)?.id.0, scope, owner))
+    }
+
+    /// The knobs of a Synthesis section as the panel shows them.
+    fn synth_knobs(&self, scope: i32, owner: i32) -> Vec<crate::synth_controls::Knob> {
+        use crate::synth_controls::Knob;
+        let rows: Vec<ParamData> = match scope {
+            scope::CLIP => self.clip_params.iter().collect(),
+            // META: Master is the layer's opacity; the rest are the look's channels.
+            scope::LAYER_LOOK if owner == 0 => self.layer_params.iter().take(1).collect(),
+            scope::LAYER_LOOK => {
+                let range = META_SECTIONS.get(owner as usize).cloned().unwrap_or(0..0);
+                let rows: Vec<ParamData> =
+                    self.layer_look.params.first().map(|m| m.iter().collect()).unwrap_or_default();
+                return rows
+                    .iter()
+                    .filter(|r| range.contains(&(r.index as usize)))
+                    .map(|r| Knob {
+                        index: r.index as usize,
+                        value: r.value,
+                        reset: r.reset,
+                        random: !META_FIXED.contains(&(r.index as usize)),
+                    })
+                    .collect();
+            }
+            scope::CLIP_FX => usize::try_from(owner)
+                .ok()
+                .and_then(|e| self.clip_fx.params.get(e))
+                .map(|m| m.iter().collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        rows.iter()
+            .map(|r| Knob {
+                index: r.index as usize,
+                value: r.value,
+                reset: r.reset,
+                // Speed and timing rows aren't modulatable; an effect's Mix stays where it is.
+                random: r.modulatable && r.index as usize != MIX_INDEX && scope != scope::LAYER_LOOK,
+            })
+            .collect()
+    }
+
+    /// The SCENE row's sections: the source and each of the visual's effects.
+    fn synth_scene(&self) -> Vec<(i32, i32)> {
+        let n = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map_or(0, |c| c.effects.len());
+        std::iter::once((scope::CLIP, 0)).chain((0..n as i32).map(|e| (scope::CLIP_FX, e))).collect()
+    }
+
+    fn synth_write(&mut self, scope: i32, owner: i32, values: &[(usize, f32)]) {
+        let (scope, owner) = match (scope, owner) {
+            (scope::LAYER_LOOK, 0) => (scope::LAYER, -1),
+            (scope::LAYER_LOOK, _) => (scope::LAYER_LOOK, 0),
+            other => other,
+        };
+        for &(i, v) in values {
+            self.param_set(scope, owner, i, v);
+        }
+        if !values.is_empty() {
+            self.props_dirty = true;
+        }
+    }
+
+    /// A section's lock, undo, default or random button.
+    pub fn synth_group(&mut self, scope: i32, owner: i32, op: i32) {
+        let Some(key) = self.synth_key(scope, owner) else { return };
+        let knobs = self.synth_knobs(scope, owner);
+        let values = match op {
+            GROUP_LOCK => {
+                self.synth.toggle_lock(key);
+                self.grid_dirty = true;
+                return;
+            }
+            GROUP_UNDO => self.synth.undo(key),
+            GROUP_DEFAULT => self.synth.default(key, &knobs),
+            GROUP_RANDOM => self.synth.random(key, &knobs),
+            _ => return,
+        };
+        self.synth_write(scope, owner, &values);
+        self.grid_dirty = true;
+    }
+
+    /// A row's lock, undo, default or random button. Lock locks every section, or unlocks
+    /// them all when all are locked.
+    pub fn synth_row(&mut self, row: i32, op: i32) {
+        let sections = match row {
+            ROW_SCENE => self.synth_scene(),
+            ROW_META => (0..META_SECTIONS.len() as i32).map(|o| (scope::LAYER_LOOK, o)).collect(),
+            _ => return,
+        };
+        let keys: Vec<_> = sections.iter().filter_map(|&(s, o)| self.synth_key(s, o)).collect();
+        let Some(id) = keys.first().map(|k| k.0) else { return };
+        let out = match op {
+            GROUP_LOCK => {
+                let all = self.synth.all_locked(keys.iter().copied());
+                for k in keys {
+                    if self.synth.is_locked(k) == all {
+                        self.synth.toggle_lock(k);
+                    }
+                }
+                self.grid_dirty = true;
+                return;
+            }
+            GROUP_UNDO => self.synth.undo_row((id, row)),
+            GROUP_DEFAULT | GROUP_RANDOM => {
+                let knobs: Vec<_> = keys.iter().map(|&k| (k, self.synth_knobs(k.1, k.2))).collect();
+                if op == GROUP_RANDOM {
+                    self.synth.random_row((id, row), &knobs)
+                } else {
+                    self.synth.default_row((id, row), &knobs)
+                }
+            }
+            _ => return,
+        };
+        for ((_, s, o), values) in out {
+            self.synth_write(s, o, &values);
+        }
+        self.grid_dirty = true;
+    }
+
+    /// A knob in a section was grabbed: the drag that follows undoes as one step.
+    pub fn synth_touch(&mut self, scope: i32, owner: i32) {
+        if let Some(key) = self.synth_key(scope, owner) {
+            let knobs = self.synth_knobs(scope, owner);
+            self.synth.checkpoint(key, &knobs);
+        }
+    }
+
+    fn sync_synth_groups(&self, ui: &MainWindow) {
+        let id = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.id.0);
+        let locked = |s: i32, o: i32| id.is_some_and(|id| self.synth.is_locked((id, s, o)));
+        let scene = self.synth_scene();
+        ui.set_synth_source_locked(locked(scope::CLIP, 0));
+        let fx: Vec<bool> = scene.iter().skip(1).map(|&(s, o)| locked(s, o)).collect();
+        ui.set_synth_fx_locked(ModelRc::new(VecModel::from(fx)));
+        ui.set_synth_scene_locked(id.is_some_and(|id| self.synth.all_locked(scene.iter().map(|&(s, o)| (id, s, o)))));
+        let meta: Vec<_> =
+            (0..META_SECTIONS.len() as i32).filter_map(|o| self.synth_key(scope::LAYER_LOOK, o)).collect();
+        let meta_locked: Vec<bool> = meta.iter().map(|&k| self.synth.is_locked(k)).collect();
+        ui.set_synth_meta_locked(ModelRc::new(VecModel::from(meta_locked)));
+        ui.set_synth_meta_row_locked(self.synth.all_locked(meta));
     }
 }
 

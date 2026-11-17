@@ -1447,6 +1447,17 @@ export component MainWindow inherits Window {
     in property <[ParamData]> macro-params;
     in property <[int]> macro-counts;
     callback synth-focus(int);
+    // Synthesis group tools: (scope, owner, op) for a section, (row, op) for a row.
+    callback synth-group(int, int, int);
+    callback synth-row(int, int);
+    callback synth-touch(int, int);
+    in property <bool> synth-source-locked;
+    in property <[bool]> synth-fx-locked;
+    in property <bool> synth-scene-locked;
+    in property <[bool]> synth-meta-locked;
+    in property <bool> synth-meta-row-locked;
+    // The selected layer's META look, as a one-effect chain.
+    in property <[EffectData]> layer-look;
     callback macro-toggle(int, int, int, int);
     callback macro-clear(int);
     public function set-layout(i: int) {
@@ -1590,7 +1601,16 @@ export component MainWindow inherits Window {
                 clip-effects: root.clip-effects;
                 layer-params: root.layer-params;
                 comp-params: root.comp-params;
+                source-locked: root.synth-source-locked;
+                fx-locked: root.synth-fx-locked;
+                scene-locked: root.synth-scene-locked;
+                meta-locked: root.synth-meta-locked;
+                meta-row-locked: root.synth-meta-row-locked;
+                look: root.layer-look.length > 0 ? root.layer-look[0].params : [];
                 focus-layer(l) => { root.synth-focus(l); keys.focus(); }
+                group-tool(s, o, op) => { root.synth-group(s, o, op); }
+                row-tool(r, op) => { root.synth-row(r, op); }
+                group-touch(s, o) => { root.synth-touch(s, o); }
                 param-set(s, o, i, v) => { root.param-set(s, o, i, v); }
                 param-mod(s, o, i, m) => { root.param-mod(s, o, i, m); }
                 macro-toggle(m, s, o, i) => { root.macro-toggle(m, s, o, i); }

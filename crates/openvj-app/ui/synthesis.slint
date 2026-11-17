@@ -5,6 +5,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Scope, ParamData, EffectData } from "state.slint";
 import { ModButton, FlatButton } from "controls.slint";
+import { Switch } from "settings.slint";
 
 /// One layer in the Synthesis strip.
 export struct SynthLayer {
@@ -24,12 +25,16 @@ export component Knob inherits Rectangle {
     in property <ParamData> data;
     in property <length> size: 46px;
     in property <color> tint: Theme.accent;
+    // Shown instead of the parameter's own name, when set.
+    in property <string> label;
     // A macro is being mapped: clicks map instead of turning.
     in property <bool> map-mode;
     // The macro being mapped, to light the knobs it already moves.
     in property <int> map-macro: -1;
     callback set(int, float);
     callback toggled(int);
+    // A drag starts: the section remembers its values for undo.
+    callback grabbed();
 
     property <float> v: clamp(root.data.value, 0, 1);
     property <float> lv: clamp(root.data.live, 0, 1);
@@ -114,7 +119,7 @@ export component Knob inherits Rectangle {
     Text {
         y: root.size + 6px;
         width: parent.width;
-        text: root.data.name;
+        text: root.label != "" ? root.label : root.data.name;
         color: root.data.mod-source != 0 ? Theme.mod-color(root.data.mod-source) : Theme.text-dim;
         font-size: Theme.font-small;
         horizontal-alignment: center;
@@ -136,6 +141,9 @@ export component Knob inherits Rectangle {
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 root.start-value = root.data.value;
+                if (!root.map-mode) {
+                    root.grabbed();
+                }
             }
         }
         moved => {
@@ -150,9 +158,120 @@ export component Knob inherits Rectangle {
         }
         double-clicked => {
             if (!root.map-mode) {
+                root.grabbed();
                 root.set(root.data.index, root.data.reset);
             }
         }
+    }
+}
+
+/// One of the group tools: lock, undo, default (back to defaults) or random.
+export global GroupOp {
+    out property <int> lock: 0;
+    out property <int> undo: 1;
+    out property <int> default: 2;
+    out property <int> random: 3;
+}
+
+component ToolIcon inherits Path {
+    in property <int> op;
+    in property <color> tint;
+    width: 11px;
+    height: 11px;
+    viewbox-width: 12;
+    viewbox-height: 12;
+    stroke: root.tint;
+    stroke-width: 1.3px;
+    fill: transparent;
+    commands: root.op == GroupOp.lock ? "M 1.5 5.5 L 10.5 5.5 L 10.5 11 L 1.5 11 Z M 3.5 5.5 L 3.5 3.5 Q 3.5 1 6 1 Q 8.5 1 8.5 3.5 L 8.5 5.5"
+        : root.op == GroupOp.undo ? "M 3.5 1.5 L 1 4.5 L 4 7 M 1.3 4.5 L 7 4.5 Q 11 4.5 11 7.8 Q 11 11 7 11 L 4 11"
+        : root.op == GroupOp.default ? "M 11 6 L 1.5 6 M 5 2.5 L 1.5 6 L 5 9.5"
+        : "M 1 3 L 3.5 3 L 8 9 L 11 9 M 1 9 L 3.5 9 L 8 3 L 11 3 M 9.5 1.5 L 11 3 L 9.5 4.5 M 9.5 7.5 L 11 9 L 9.5 10.5";
+}
+
+/// A small square tool button, for a section's column of tools.
+component ToolButton inherits Rectangle {
+    in property <int> op;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 20px;
+    height: 18px;
+    border-radius: Theme.radius-small;
+    background: root.active ? Theme.accent-dim : ta.has-hover && root.enabled ? Theme.raised : transparent;
+    border-width: root.active ? 1px : 0;
+    border-color: Theme.accent;
+    opacity: root.enabled ? 1 : 0.4;
+    ToolIcon {
+        op: root.op;
+        tint: root.active ? Theme.accent : ta.has-hover ? Theme.text : Theme.text-dim;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A labelled tool button, for a whole row of sections.
+component RowToolButton inherits Rectangle {
+    in property <int> op;
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: label.preferred-width + 30px;
+    height: 22px;
+    border-radius: Theme.radius;
+    background: root.active ? Theme.accent-dim : ta.has-hover && root.enabled ? Theme.raised : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+    ToolIcon {
+        x: 8px;
+        op: root.op;
+        tint: root.active ? Theme.accent : Theme.text-dim;
+    }
+    label := Text {
+        x: 24px;
+        text: root.text;
+        color: root.active ? Theme.accent : Theme.text;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A row's title with lock, undo, default and random for every section in it.
+component RowHeader inherits Rectangle {
+    in property <string> title;
+    in property <bool> locked;
+    in property <bool> enabled: true;
+    callback tool(int);
+    height: 26px;
+    Text {
+        x: 2px;
+        text: root.title;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        vertical-alignment: center;
+    }
+    HorizontalLayout {
+        x: parent.width - self.preferred-width;
+        width: self.preferred-width;
+        spacing: 4px;
+        alignment: end;
+        RowToolButton { op: GroupOp.lock; text: root.locked ? "unlock" : "lock"; active: root.locked; enabled: root.enabled; clicked => { root.tool(GroupOp.lock); } }
+        RowToolButton { op: GroupOp.undo; text: "undo"; enabled: root.enabled; clicked => { root.tool(GroupOp.undo); } }
+        RowToolButton { op: GroupOp.default; text: "default"; enabled: root.enabled && !root.locked; clicked => { root.tool(GroupOp.default); } }
+        RowToolButton { op: GroupOp.random; text: "random"; enabled: root.enabled && !root.locked; clicked => { root.tool(GroupOp.random); } }
     }
 }
 
@@ -165,15 +284,19 @@ component KnobSection inherits Rectangle {
     in property <bool> map-mode;
     in property <int> map-macro;
     in property <bool> dimmed;
+    in property <bool> locked;
     callback set(int, float);
     callback toggled(int);
+    callback grabbed();
+    callback tool(int);
 
     property <length> kw: 68px;
     property <length> kh: 86px;
+    property <length> tools-w: 26px;
     property <int> cols: min(root.columns, max(1, root.params.length));
 
-    width: root.cols * root.kw + 20px;
-    height: 34px + ceil(root.params.length / root.cols) * root.kh + 8px;
+    width: root.cols * root.kw + 20px + root.tools-w;
+    height: max(34px + ceil(root.params.length / root.cols) * root.kh + 8px, 26px + 4 * 21px + 8px);
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.separator;
@@ -183,7 +306,7 @@ component KnobSection inherits Rectangle {
     Text {
         x: 10px;
         y: 8px;
-        width: parent.width - 20px;
+        width: parent.width - 20px - root.tools-w;
         text: root.title;
         color: root.title-color;
         font-size: Theme.font-small;
@@ -199,6 +322,174 @@ component KnobSection inherits Rectangle {
         map-macro: root.map-macro;
         set(k, v) => { root.set(k, v); }
         toggled(k) => { root.toggled(k); }
+        grabbed => { root.grabbed(); }
+    }
+    // Lock, undo, default and random for this section, down the right edge.
+    VerticalLayout {
+        x: parent.width - root.tools-w - 2px;
+        y: 26px;
+        width: 22px;
+        spacing: 3px;
+        alignment: start;
+        ToolButton { op: GroupOp.lock; active: root.locked; clicked => { root.tool(GroupOp.lock); } }
+        ToolButton { op: GroupOp.undo; clicked => { root.tool(GroupOp.undo); } }
+        ToolButton { op: GroupOp.default; enabled: !root.locked; clicked => { root.tool(GroupOp.default); } }
+        ToolButton { op: GroupOp.random; enabled: !root.locked; clicked => { root.tool(GroupOp.random); } }
+    }
+}
+
+/// An on/off parameter as a switch with its name under it, in a knob-sized cell.
+component SwitchCell inherits Rectangle {
+    in property <ParamData> data;
+    callback set(int, float);
+    callback grabbed();
+    width: 68px;
+    height: 86px;
+    Switch {
+        x: (parent.width - self.width) / 2;
+        y: 14px;
+        on: root.data.value >= 0.5;
+        toggled(on) => {
+            root.grabbed();
+            root.set(root.data.index, on ? 1 : 0);
+        }
+    }
+    Text {
+        y: 52px;
+        width: parent.width;
+        text: root.data.name;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
+struct Rgb { r: float, g: float, b: float }
+
+/// A colour parameter (three channels from `first`): a swatch that opens a palette.
+component ColorCell inherits Rectangle {
+    in property <[ParamData]> params;
+    in property <int> first;
+    in property <string> label;
+    callback set(int, float);
+    callback grabbed();
+    property <float> r: root.params.length > root.first + 2 ? root.params[root.first].value : 0;
+    property <float> g: root.params.length > root.first + 2 ? root.params[root.first + 1].value : 0;
+    property <float> b: root.params.length > root.first + 2 ? root.params[root.first + 2].value : 0;
+    // Hues across, then lighter and darker rows, then greys.
+    property <[Rgb]> palette: [
+        { r: 1, g: 0.23, b: 0.19 }, { r: 1, g: 0.55, b: 0 }, { r: 1, g: 0.84, b: 0.04 }, { r: 0.2, g: 0.84, b: 0.35 },
+        { r: 0.31, g: 0.9, b: 0.85 }, { r: 0.04, g: 0.52, b: 1 }, { r: 0.37, g: 0.36, b: 0.9 }, { r: 0.75, g: 0.35, b: 0.95 },
+        { r: 1, g: 0.6, b: 0.6 }, { r: 1, g: 0.8, b: 0.55 }, { r: 1, g: 0.95, b: 0.6 }, { r: 0.65, g: 0.95, b: 0.7 },
+        { r: 0.7, g: 1, b: 0.97 }, { r: 0.6, g: 0.8, b: 1 }, { r: 0.75, g: 0.74, b: 1 }, { r: 0.95, g: 0.7, b: 1 },
+        { r: 0.4, g: 0.04, b: 0.05 }, { r: 0.45, g: 0.2, b: 0 }, { r: 0.4, g: 0.33, b: 0 }, { r: 0, g: 0.3, b: 0.1 },
+        { r: 0, g: 0.3, b: 0.3 }, { r: 0, g: 0.15, b: 0.4 }, { r: 0.12, g: 0.1, b: 0.35 }, { r: 0.3, g: 0.05, b: 0.35 },
+        { r: 0, g: 0, b: 0 }, { r: 0.2, g: 0.2, b: 0.2 }, { r: 0.4, g: 0.4, b: 0.4 }, { r: 0.6, g: 0.6, b: 0.6 },
+        { r: 0.8, g: 0.8, b: 0.8 }, { r: 1, g: 1, b: 1 },
+    ];
+    width: 68px;
+    height: 86px;
+    swatch := Rectangle {
+        x: (parent.width - 30px) / 2;
+        y: 10px;
+        width: 30px;
+        height: 30px;
+        border-radius: 15px;
+        background: rgb(root.r * 255, root.g * 255, root.b * 255);
+        border-width: ta.has-hover ? 2px : 1px;
+        border-color: ta.has-hover ? Theme.accent : Theme.border;
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { popup.show(); }
+        }
+    }
+    Text {
+        y: 52px;
+        width: parent.width;
+        text: root.label;
+        color: Theme.text-dim;
+        font-size: Theme.font-small;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+    popup := PopupWindow {
+        x: 0;
+        y: 44px;
+        width: 8 * 22px + 12px;
+        height: 4 * 22px + 12px;
+        Rectangle {
+            background: Theme.raised;
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000080;
+        }
+        for c[i] in root.palette: Rectangle {
+            x: 6px + mod(i, 8) * 22px;
+            y: 6px + floor(i / 8) * 22px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: rgb(c.r * 255, c.g * 255, c.b * 255);
+            border-width: pta.has-hover ? 2px : 0;
+            border-color: Theme.text;
+            pta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.grabbed();
+                    root.set(root.first, c.r);
+                    root.set(root.first + 1, c.g);
+                    root.set(root.first + 2, c.b);
+                }
+            }
+        }
+    }
+}
+
+/// A titled panel holding any controls, with the group tools down its right edge.
+component ToolPanel inherits Rectangle {
+    in property <string> title;
+    in property <color> title-color: Theme.text-dim;
+    in property <bool> locked;
+    in property <bool> dimmed;
+    callback tool(int);
+    property <length> tools-w: 26px;
+    height: 34px + 86px + 8px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.separator;
+    border-radius: Theme.radius;
+    opacity: root.dimmed ? 0.5 : 1;
+    Text {
+        x: 10px;
+        y: 8px;
+        width: parent.width - 20px - root.tools-w;
+        text: root.title;
+        color: root.title-color;
+        font-size: Theme.font-small;
+        font-weight: 600;
+        letter-spacing: 0.6px;
+        overflow: elide;
+    }
+    Rectangle {
+        x: 10px;
+        y: 30px;
+        width: parent.width - 20px - root.tools-w;
+        height: 86px;
+        @children
+    }
+    VerticalLayout {
+        x: parent.width - root.tools-w - 2px;
+        y: 26px;
+        width: 22px;
+        spacing: 3px;
+        alignment: start;
+        ToolButton { op: GroupOp.lock; active: root.locked; clicked => { root.tool(GroupOp.lock); } }
+        ToolButton { op: GroupOp.undo; clicked => { root.tool(GroupOp.undo); } }
+        ToolButton { op: GroupOp.default; enabled: !root.locked; clicked => { root.tool(GroupOp.default); } }
+        ToolButton { op: GroupOp.random; enabled: !root.locked; clicked => { root.tool(GroupOp.random); } }
     }
 }
 
@@ -215,7 +506,19 @@ export component SynthesisLayout inherits Rectangle {
     in property <[EffectData]> clip-effects;
     in property <[ParamData]> layer-params;
     in property <[ParamData]> comp-params;
+    // Group tools: which sections are locked.
+    in property <bool> source-locked;
+    in property <[bool]> fx-locked;
+    in property <bool> scene-locked;
+    // META: the focused layer's look channels (effects/layer_look.fs order), and locks for
+    // its sections: master, color, mirror, limit colors, general.
+    in property <[ParamData]> look;
+    in property <[bool]> meta-locked;
+    in property <bool> meta-row-locked;
     callback focus-layer(int);
+    callback group-tool(int, int, int);
+    callback row-tool(int, int);
+    callback group-touch(int, int);
     callback param-set(int, int, int, float);
     callback param-mod(int, int, int, int);
     callback macro-toggle(int, int, int, int);
@@ -301,7 +604,7 @@ export component SynthesisLayout inherits Rectangle {
             // The visual, large, and the output beside it.
             HorizontalLayout {
                 vertical-stretch: 1;
-                min-height: 220px;
+                min-height: 160px;
                 spacing: 8px;
                 Rectangle {
                     horizontal-stretch: 1;
@@ -429,9 +732,15 @@ export component SynthesisLayout inherits Rectangle {
                 }
             }
 
-            // Sections: the source, each effect, and the output.
+            // SCENE CONTROLS: the visual's own sections, the source and each effect.
+            RowHeader {
+                title: "SCENE CONTROLS";
+                locked: root.scene-locked;
+                enabled: root.has-clip && root.map-macro < 0;
+                tool(op) => { root.row-tool(0, op); }
+            }
             ScrollView {
-                height: 210px;
+                height: 34px + 86px + 8px + 12px;
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
@@ -443,8 +752,11 @@ export component SynthesisLayout inherits Rectangle {
                         columns: 6;
                         map-mode: root.map-macro >= 0;
                         map-macro: root.map-macro;
+                        locked: root.source-locked;
                         set(k, v) => { root.param-set(Scope.clip, 0, k, v); }
                         toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip, 0, k); }
+                        grabbed => { root.group-touch(Scope.clip, 0); }
+                        tool(op) => { root.group-tool(Scope.clip, 0, op); }
                     }
                     for fx[e] in root.clip-effects: KnobSection {
                         y: 0;
@@ -454,11 +766,14 @@ export component SynthesisLayout inherits Rectangle {
                         dimmed: !fx.enabled;
                         map-mode: root.map-macro >= 0;
                         map-macro: root.map-macro;
+                        locked: root.fx-locked[e];
                         set(k, v) => { root.param-set(Scope.clip-fx, e, k, v); }
                         toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip-fx, e, k); }
+                        grabbed => { root.group-touch(Scope.clip-fx, e); }
+                        tool(op) => { root.group-tool(Scope.clip-fx, e, op); }
                     }
                     Rectangle {
-                        width: 2 * 68px + 20px;
+                        width: 68px + 20px;
                         height: 34px + 86px + 8px;
                         background: Theme.panel;
                         border-width: 1px;
@@ -474,17 +789,110 @@ export component SynthesisLayout inherits Rectangle {
                             font-weight: 600;
                             letter-spacing: 0.6px;
                         }
-                        if root.layer-params.length > 0: Knob {
-                            x: 10px + (68px - self.width) / 2;
-                            y: 30px;
-                            data: root.layer-params[0];
-                            set(k, v) => { root.param-set(Scope.layer, -1, k, v); }
-                        }
                         if root.comp-params.length > 0: Knob {
-                            x: 10px + 68px + (68px - self.width) / 2;
+                            x: 10px + (68px - self.width) / 2;
                             y: 30px;
                             data: root.comp-params[0];
                             set(k, v) => { root.param-set(Scope.comp, 0, k, v); }
+                        }
+                    }
+                }
+            }
+            // META CONTROLS: the layer's look, the same for every visual it plays.
+            RowHeader {
+                title: "META CONTROLS";
+                locked: root.meta-row-locked;
+                enabled: root.layers.length > 0 && root.map-macro < 0;
+                tool(op) => { root.row-tool(1, op); }
+            }
+            ScrollView {
+                height: 34px + 86px + 8px + 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    opacity: root.map-macro >= 0 ? 0.5 : 1;
+                    ToolPanel {
+                        width: 68px + 20px + 26px;
+                        title: "MASTER";
+                        title-color: Theme.accent;
+                        locked: root.meta-locked[0];
+                        tool(op) => { root.group-tool(Scope.layer-look, 0, op); }
+                        if root.layer-params.length > 0: Knob {
+                            x: (68px - self.width) / 2;
+                            data: root.layer-params[0];
+                            label: "Master";
+                            set(k, v) => { root.param-set(Scope.layer, -1, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 0); }
+                        }
+                    }
+                    ToolPanel {
+                        width: 6 * 68px + 20px + 26px;
+                        title: "COLOR";
+                        locked: root.meta-locked[1];
+                        tool(op) => { root.group-tool(Scope.layer-look, 1, op); }
+                        if root.look.length > 17: SwitchCell {
+                            x: 0;
+                            data: root.look[0];
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 1); }
+                        }
+                        for i in [1, 2, 3, 4, 5]: Knob {
+                            x: i * 68px + (68px - self.width) / 2;
+                            data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 1); }
+                        }
+                    }
+                    ToolPanel {
+                        width: 2 * 68px + 20px + 26px;
+                        title: "MIRROR";
+                        locked: root.meta-locked[2];
+                        tool(op) => { root.group-tool(Scope.layer-look, 2, op); }
+                        for i in [6, 7]: SwitchCell {
+                            x: (i - 6) * 68px;
+                            data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 2); }
+                        }
+                    }
+                    ToolPanel {
+                        width: 3 * 68px + 20px + 26px;
+                        title: "LIMIT COLORS";
+                        locked: root.meta-locked[3];
+                        tool(op) => { root.group-tool(Scope.layer-look, 3, op); }
+                        if root.look.length > 17: SwitchCell {
+                            x: 0;
+                            data: root.look[8];
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 3); }
+                        }
+                        ColorCell {
+                            x: 68px;
+                            params: root.look;
+                            first: 9;
+                            label: "Low Color";
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 3); }
+                        }
+                        ColorCell {
+                            x: 2 * 68px;
+                            params: root.look;
+                            first: 13;
+                            label: "High Color";
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 3); }
+                        }
+                    }
+                    ToolPanel {
+                        width: 68px + 20px + 26px;
+                        title: "GENERAL";
+                        locked: root.meta-locked[4];
+                        tool(op) => { root.group-tool(Scope.layer-look, 4, op); }
+                        if root.look.length > 17: SwitchCell {
+                            x: 0;
+                            data: root.look[17];
+                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                            grabbed => { root.group-touch(Scope.layer-look, 4); }
                         }
                     }
                 }

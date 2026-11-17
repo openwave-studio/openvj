@@ -290,6 +290,11 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
 
+/// A fresh META look for a layer.
+pub fn default_look() -> Effect {
+    Effect::new(crate::effect::LOOK)
+}
+
 /// A fresh fixed Transform for a clip or layer.
 pub fn default_transform() -> Effect {
     Effect::new(crate::effect::TRANSFORM)
@@ -542,6 +547,10 @@ pub struct Layer {
     /// Applied to whatever the layer plays, top to bottom, before it is blended.
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// The fixed META look (Synthesis layout), applied after the effects. It belongs to the
+    /// layer, so it stays when the layer switches clips. Not saved while at its defaults.
+    #[serde(default = "default_look", skip_serializing_if = "Effect::is_default")]
+    pub look: Effect,
     /// Index into [`Composition::groups`].
     #[serde(default)]
     pub group: Option<usize>,
@@ -587,6 +596,7 @@ impl Layer {
             opacity_mod: Modulation::default(),
             transform: default_transform(),
             effects: Vec::new(),
+            look: default_look(),
             group: None,
             crossfade: CrossfadeSide::None,
             clips: vec![None; columns],

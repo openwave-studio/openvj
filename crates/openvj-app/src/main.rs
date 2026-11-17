@@ -10,6 +10,7 @@ mod midi;
 mod player;
 mod prefs;
 mod shadertoy_import;
+mod synth_controls;
 mod syphon_out;
 
 use std::cell::RefCell;
@@ -153,7 +154,8 @@ fn main() -> Result<()> {
     }
     let out = OutputWindow::new()?;
     // Open in the layout used last time (Mixer the first time).
-    ui.set_layout(prefs::layout());
+    // OPENVJ_LAYOUT=n opens layout n (0 Mixer, 1 Player, 2 Synthesis, 3 Discover), for screenshots.
+    ui.set_layout(std::env::var("OPENVJ_LAYOUT").ok().and_then(|v| v.parse().ok()).unwrap_or_else(prefs::layout));
     {
         let mut a = app.borrow_mut();
         a.attach(&ui);
@@ -432,6 +434,18 @@ fn main() -> Result<()> {
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
         ui.on_synth_focus(move |l| with_app(&app, &w, &o, |a| a.synth_focus(l as usize)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_synth_group(move |scope, owner, op| with_app(&app, &w, &o, |a| a.synth_group(scope, owner, op)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_synth_row(move |row, op| with_app(&app, &w, &o, |a| a.synth_row(row, op)));
+    }
+    {
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        ui.on_synth_touch(move |scope, owner| with_app(&app, &w, &o, |a| a.synth_touch(scope, owner)));
     }
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());

@@ -1,17 +1,17 @@
 ## 1. Group tools (own PR)
 
-- [ ] 1.1 Section knob state in the app built on core `discover::Knobs` (lock, undo, default, random), one per Synthesis section, kept per focused visual
-- [ ] 1.2 Section header buttons (lock, undo, default, random) in `ui/synthesis.slint`, openVJ style
-- [ ] 1.3 Row-wide buttons for the SCENE row (source + effects) that skip locked sections, with their own undo
-- [ ] 1.4 Tests: random skips locked sections; undo restores; default resets
+- [x] 1.1 `synth_controls.rs`: locks and undo per section and per row, seeded random from core `discover::Rng`
+- [x] 1.2 Section header buttons (lock, undo, default, random) in `ui/synthesis.slint`, openVJ style
+- [x] 1.3 Row-wide buttons for the SCENE row (source + effects) that skip locked sections, with their own undo
+- [x] 1.4 Tests: random skips locked sections; undo restores; default resets
 
 ## 2. META controls
 
-- [ ] 2.1 `effects/look.fs` hidden fixed effect: master, invert, brightness, gamma, contrast, hue, saturation, mirror v/h, limit colors + low/high, alpha, flips, fit/fill; no-op at defaults
-- [ ] 2.2 Store it on the layer (decided); save/load with the composition
-- [ ] 2.3 Render: one pass after the effects, skipped when no-op
-- [ ] 2.4 META row in Synthesis: switches, knobs, colour swatches; group tools on each section and the row
-- [ ] 2.5 Render tests: defaults are identical; invert, limit colors and alpha give the expected pixels
+- [x] 2.1 `effects/layer_look.fs` hidden fixed effect: invert, brightness, gamma, contrast, hue, saturation, mirror v/h, limit colors + low/high, alpha; no-op at defaults (Master = the layer's Opacity)
+- [x] 2.2 Store it on the layer (decided); save/load with the composition
+- [x] 2.3 Render: one pass after the effects, skipped when no-op
+- [x] 2.4 META row in Synthesis: switches, knobs, colour swatches; group tools on each section and the row
+- [x] 2.5 Render tests: defaults are identical; invert, limit colors and alpha give the expected pixels
 
 ## 3. MEDIA overlay
 
