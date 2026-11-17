@@ -19,10 +19,10 @@ Out of scope: videos and images in presets (already deferred), advance on drops 
 
 ## Touches
 
-- `crates/openvj-audio/src/lib.rs` (song-change detector, additive)
-- `crates/openvj-core/src/playlist.rs` (Span gains "Song", history for Previous, jump to index, thumbnail path per preset; format stays version 1, new fields optional)
-- `crates/openvj-app/src/player.rs`, `crates/openvj-app/ui/layouts.slint` (Player UI)
-- `crates/openvj-app/src/library.rs`, `crates/openvj-app/ui/library.slint`, `crates/openvj-app/ui/discover.slint` (Add to playlist)
+- `crates/openvj-core/src/song.rs` (new: song-change detector on the existing band levels)
+- `crates/openvj-core/src/playlist.rs` (Span gains "Song", history for Previous, jump to index, format stays version 1; thumbnails are cached by the look itself, not stored in the file)
+- `crates/openvj-app/src/player.rs`, new `crates/openvj-app/ui/player.slint` (the Player UI moves out of `layouts.slint`)
+- `crates/openvj-app/src/library.rs` (thumbnails for playlist presets), `crates/openvj-app/ui/discover.slint` (Add to playlist; the library already had it)
 - Shared hot spots: `crates/openvj-app/src/app.rs` and `crates/openvj-app/ui/main.slint` (callback wiring only)
 - Spec: `layouts` (Player requirements)
 - README "What works"

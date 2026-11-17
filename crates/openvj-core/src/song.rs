@@ -129,8 +129,8 @@ impl SongDetector {
             self.quick_level = level;
         }
         self.heard += dt;
-        for i in 0..BAND_COUNT {
-            ease(&mut self.quick_shape[i], shape[i], QUICK);
+        for (avg, v) in self.quick_shape.iter_mut().zip(shape) {
+            ease(avg, v, QUICK);
         }
         ease(&mut self.quick_level, level, QUICK);
         let differs: f32 = self.slow_shape.iter().zip(&self.quick_shape).map(|(a, b)| (a - b).abs()).sum();
@@ -140,8 +140,8 @@ impl SongDetector {
         } else {
             self.new_sound_for = 0.0;
             // Only learn "the song so far" while the sound is the same song.
-            for i in 0..BAND_COUNT {
-                ease(&mut self.slow_shape[i], shape[i], SLOW);
+            for (avg, v) in self.slow_shape.iter_mut().zip(shape) {
+                ease(avg, v, SLOW);
             }
             ease(&mut self.slow_level, level, SLOW);
         }

@@ -8,6 +8,12 @@ use crate::Clip;
 /// File extension of a saved playlist.
 pub const PLAYLIST_EXTENSION: &str = "ovjplaylist";
 
+/// The playlists folder: `~/Documents/openVJ/Playlists`, next to Presets and Effects.
+pub fn playlists_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(std::path::PathBuf::from(home).join("Documents").join("openVJ").join("Playlists"))
+}
+
 /// Beats in a bar (openVJ counts 4/4).
 const BEATS_PER_BAR: f64 = 4.0;
 
@@ -16,6 +22,9 @@ pub const SONG_MIN_BEATS: f64 = 16.0 * BEATS_PER_BAR;
 
 /// The most a "Song" preset plays, in seconds, when no new song is heard.
 pub const SONG_MAX_SECS: f64 = 300.0;
+
+/// [`AutomixFrame::previous`] when the outgoing look came from another playlist.
+pub const OUTSIDE: usize = usize::MAX;
 
 /// Previous presets remembered for Previous.
 const HISTORY: usize = 64;
@@ -299,6 +308,30 @@ impl Automix {
         order
     }
 
+    /// Like [`Automix::start`], but from preset `index` (a click on a row while stopped).
+    pub fn start_at(list: &Playlist, index: usize, now_secs: f64, beats: f64, bpm: f32, seed: u64) -> Option<Self> {
+        let mut a = Self::start(list, now_secs, beats, bpm, seed)?;
+        if let Some(pos) = a.order.iter().position(|&i| i == index) {
+            a.pos = pos;
+        }
+        Some(a)
+    }
+
+    /// The first preset comes in over a look from another playlist, with the transition
+    /// (switching playlists while playing). [`AutomixFrame::previous`] is then [`OUTSIDE`].
+    pub fn handover(&mut self, now_secs: f64, beats: f64) {
+        self.previous = Some(OUTSIDE);
+        self.started = Moment { secs: now_secs, beats };
+    }
+
+    /// How far the current preset has played: (0..1 of its time, seconds played). A "Song"
+    /// preset counts towards its five-minute maximum.
+    pub fn played(&self, list: &Playlist, now_secs: f64, beats: f64) -> (f32, f64) {
+        let elapsed = self.started.since(Moment { secs: now_secs, beats });
+        let span = list.presets.get(self.current()).map_or(Span::DEFAULT_PLAY, |p| p.play_for);
+        (span.progress(elapsed) as f32, elapsed.secs.max(0.0))
+    }
+
     /// The preset playing now, as an index into the playlist.
     pub fn current(&self) -> usize {
         self.order[self.pos]
@@ -413,7 +446,7 @@ impl Automix {
             let current = self.order.get(self.pos).copied();
             self.order = self.make_order(list);
             self.pos = current.and_then(|c| self.order.iter().position(|&i| i == c)).unwrap_or(0);
-            self.previous = self.previous.filter(|&p| p < list.presets.len());
+            self.previous = self.previous.filter(|&p| p < list.presets.len() || p == OUTSIDE);
             self.history.retain(|&p| p < list.presets.len());
         }
     }
@@ -576,6 +609,19 @@ mod tests {
         let mut a = Automix::start(&l, 0.0, 0.0, BPM, 1).unwrap();
         let (s, b) = at(100.0);
         assert!(!a.song_changed(&l, s, b));
+    }
+
+    #[test]
+    fn start_at_a_row_and_hand_over() {
+        let l = list(3, Span::Bars(32.0));
+        let mut a = Automix::start_at(&l, 2, 0.0, 0.0, BPM, 1).unwrap();
+        assert_eq!(a.current(), 2);
+        a.handover(0.0, 0.0);
+        let (s, b) = at(4.0);
+        let f = a.tick(&l, s, b, BPM);
+        assert_eq!((f.current, f.previous), (2, Some(OUTSIDE)));
+        let (s, b) = at(8.0);
+        assert_eq!(a.tick(&l, s, b, BPM).previous, None);
     }
 
     #[test]

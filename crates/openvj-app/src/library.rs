@@ -193,6 +193,16 @@ pub fn thumb_key(id: &str, kind: Kind, path: Option<&Path>) -> String {
     format!("{h:016x}")
 }
 
+/// The thumbnail id of a clip that isn't a library item: a hash of the clip itself (source,
+/// parameter values, effects), so the same look shares one thumbnail wherever it is.
+pub fn clip_thumb_id(clip: &openvj_core::Clip) -> String {
+    let mut c = clip.clone();
+    c.id = openvj_core::ClipId(0);
+    let json = serde_json::to_vec(&c).unwrap_or_default();
+    let h = fnv1a(fnv1a(FNV_OFFSET, &THUMB_VERSION.to_le_bytes()), &json);
+    format!("clip:{h:016x}")
+}
+
 /// The VJ's own pick ("Use Preview frame as thumbnail") is stored by item id.
 fn custom_key(id: &str) -> String {
     format!("custom-{:016x}", fnv1a(FNV_OFFSET, id.as_bytes()))
@@ -209,6 +219,8 @@ pub struct ThumbCache {
     todo: VecDeque<String>,
     in_flight: HashMap<String, String>,
     sources: HashMap<String, Item>,
+    /// Clips that aren't library items (the Player's presets), by their [`clip_thumb_id`].
+    clips: HashMap<String, openvj_core::Clip>,
     keys_rx: Option<mpsc::Receiver<Vec<(String, String)>>>,
     saved_tx: mpsc::Sender<(String, Option<String>)>,
     saved_rx: mpsc::Receiver<(String, Option<String>)>,
@@ -233,6 +245,7 @@ impl ThumbCache {
             todo: VecDeque::new(),
             in_flight: HashMap::new(),
             sources: HashMap::new(),
+            clips: HashMap::new(),
             keys_rx: None,
             saved_tx,
             saved_rx,
@@ -259,6 +272,26 @@ impl ThumbCache {
     /// Thumbnails waiting to render.
     pub fn pending(&self) -> usize {
         self.todo.len() + self.in_flight.len()
+    }
+
+    /// Queues thumbnails for clips that aren't library items (the Player's presets), ahead
+    /// of the library's. Returns each clip's id for [`ThumbCache::path`].
+    pub fn want_clips<'a>(&mut self, clips: impl IntoIterator<Item = &'a openvj_core::Clip>) -> Vec<String> {
+        let mut ids = Vec::new();
+        for clip in clips {
+            let id = clip_thumb_id(clip);
+            ids.push(id.clone());
+            if self.dir.is_none() || self.keys.contains_key(&id) {
+                continue;
+            }
+            let key = id.trim_start_matches("clip:").to_owned();
+            if !self.on_disk.contains(&key) {
+                self.todo.push_front(id.clone());
+                self.clips.insert(id.clone(), clip.clone());
+            }
+            self.keys.insert(id, key);
+        }
+        ids
     }
 
     /// Hashes every item's file on a worker thread; items without a cached thumbnail then
@@ -294,7 +327,9 @@ impl ThumbCache {
     pub fn pump(&mut self, engine: &mut Engine, over_budget: bool) {
         if let Some(keys) = self.keys_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.keys_rx = None;
-            self.todo.clear();
+            // Keep the Player's clips queued; the library's items are listed again below.
+            let clips = &self.clips;
+            self.todo.retain(|id| clips.contains_key(id));
             for (id, key) in keys {
                 if self.on_disk.contains(&key) {
                     self.updated.push(id.clone());
@@ -307,11 +342,16 @@ impl ThumbCache {
         engine.pause_thumbnails(over_budget);
         while !over_budget && self.in_flight.len() < IN_FLIGHT {
             let Some(id) = self.todo.pop_front() else { break };
-            let (Some(item), Some(key)) = (self.sources.get(&id), self.keys.get(&id)) else { continue };
+            let Some(key) = self.keys.get(&id) else { continue };
             if self.on_disk.contains(key) || self.in_flight.values().any(|k| k == key) {
                 continue;
             }
-            let Some(source) = thumbnail_source(item) else { continue };
+            let source = match (self.sources.get(&id), self.clips.get(&id)) {
+                (Some(item), _) => thumbnail_source(item),
+                (None, Some(clip)) => Some(ThumbnailSource::Clip(Box::new(clip.clone()))),
+                _ => None,
+            };
+            let Some(source) = source else { continue };
             engine.request_thumbnail(key.clone(), source);
             self.in_flight.insert(id, key.clone());
         }
@@ -339,6 +379,7 @@ impl ThumbCache {
         let id = self.in_flight.iter().find(|(_, k)| **k == thumb.key).map(|(id, _)| id.clone());
         if let Some(id) = &id {
             self.in_flight.remove(id);
+            self.clips.remove(id);
         }
         let (Some(dir), Some(rgba)) = (self.dir.clone(), thumb.rgba) else { return };
         let tx = self.saved_tx.clone();

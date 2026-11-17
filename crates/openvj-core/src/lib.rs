@@ -18,8 +18,8 @@ mod modulation;
 mod output;
 mod playback;
 mod playlist;
-mod song;
 pub mod shadertoy;
+mod song;
 mod tempo;
 
 pub use composition::*;

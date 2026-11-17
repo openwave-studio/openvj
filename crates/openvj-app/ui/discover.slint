@@ -53,6 +53,8 @@ export global Disc {
     // 0 Keep, 1 Save as preset, 2 Skip, 3 Unwanted.
     callback decide(int);
     callback jump(int);
+    // Adds the look under review, as adjusted, to the Player's playlist.
+    callback add-to-playlist();
     // Returns true when Discover handled the key.
     callback key(string) -> bool;
 }
@@ -508,6 +510,12 @@ export component DiscoverLayout inherits Rectangle {
                                 clicked => { Disc.decide(0); }
                             }
                         }
+                    }
+                    Decision {
+                        vertical-stretch: 0;
+                        text: "Add to playlist (P)";
+                        enabled: Disc.has-item;
+                        clicked => { Disc.add-to-playlist(); }
                     }
                     Text {
                         text: "Save as preset keeps the original and adds a preset with these values. Unwanted moves it to the Unwanted crate; nothing is deleted.";

@@ -6,14 +6,15 @@ import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
 import { SettingsOverlay, GearIcon } from "settings.slint";
 import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
-import { Layouts, LayoutPicker, PlayerLayout, PresetRow } from "layouts.slint";
+import { Layouts, LayoutPicker } from "layouts.slint";
+import { Pl, PlayerLayout, PresetRow } from "player.slint";
 import { Disc, DiscoverLayout, DiscParam } from "discover.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 import { SynthesisLayout, SynthLayer } from "synthesis.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam }
 
-export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn }
+export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn, Pl }
 
 component ClipCell inherits Rectangle {
     in property <CellData> data;
@@ -1547,6 +1548,7 @@ export component MainWindow inherits Window {
             if root.layout == Layouts.player: PlayerLayout {
                 vertical-stretch: 1;
                 output-image: root.output-image;
+                hover-image: root.preview-image;
                 playlist-name: root.playlist-name;
                 info: root.playlist-info;
                 rows: root.playlist-rows;
