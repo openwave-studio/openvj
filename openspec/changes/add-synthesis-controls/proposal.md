@@ -32,9 +32,9 @@ Out of scope: Synesthesia's row of preset slots above the scene controls (preset
 
 ## Touches
 
-- crates/openvj-core: new `effects/look.fs` (hidden), `effect.rs` (register it), `composition.rs` (Layer gets `look` and `overlay`)
+- crates/openvj-core: new `effects/layer_look.fs` (hidden), new `overlay.rs`, `effect.rs` (register it), `composition.rs` (Layer gets `look` and `overlay`)
 - crates/openvj-render: `src/lib.rs` (look pass, overlay render and blend)
-- crates/openvj-app: `src/app.rs` (Synthesis callbacks), new `src/synth_controls.rs`, `src/browser.rs` (media folders), `src/prefs.rs`, `ui/synthesis.slint`, `ui/controls.slint` (switch and colour swatch, if not already there)
+- crates/openvj-app: `src/app.rs` (Synthesis callbacks), new `src/synth_controls.rs`, new `src/media_browser.rs`, `src/prefs.rs` (media folders), `ui/synthesis.slint`, `ui/main.slint`, `ui/state.slint` (new scopes)
 - Specs: layouts
 - Shared hot spots: `composition.rs`, `app.rs`, `render/src/lib.rs`. Kept to small additions.
 

@@ -313,7 +313,7 @@ impl Clip {
         std::array::from_fn(|i| self.mods[i].apply(self.params[i], inputs))
     }
 
-    fn new(id: ClipId, source: ClipSource) -> Self {
+    pub(crate) fn new(id: ClipId, source: ClipSource) -> Self {
         let params = match source {
             ClipSource::Generator { kind } => kind.default_params(),
             ClipSource::Milkdrop { .. } => {
@@ -551,6 +551,9 @@ pub struct Layer {
     /// layer, so it stays when the layer switches clips. Not saved while at its defaults.
     #[serde(default = "default_look", skip_serializing_if = "Effect::is_default")]
     pub look: Effect,
+    /// An image, video or camera over whatever the layer plays (Synthesis layout).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<crate::MediaOverlay>,
     /// Index into [`Composition::groups`].
     #[serde(default)]
     pub group: Option<usize>,
@@ -597,6 +600,7 @@ impl Layer {
             transform: default_transform(),
             effects: Vec::new(),
             look: default_look(),
+            overlay: None,
             group: None,
             crossfade: CrossfadeSide::None,
             clips: vec![None; columns],
@@ -885,6 +889,31 @@ impl Composition {
         amount.modulation = bass;
         comp.layers[2].effects.push(split);
         comp
+    }
+
+    /// Puts `source` on `layer` as its media overlay, keeping the overlay's settings if it
+    /// had one. Returns the overlay clip's id (new for every source, so media reloads).
+    pub fn set_overlay(&mut self, layer: usize, source: ClipSource) -> Option<ClipId> {
+        if layer >= self.layers.len() {
+            return None;
+        }
+        let id = self.next_clip_id();
+        let l = &mut self.layers[layer];
+        match &mut l.overlay {
+            Some(o) => {
+                let old = std::mem::replace(&mut o.clip, Clip::new(id, source));
+                o.clip.speed = old.speed;
+                o.clip.play_mode = old.play_mode;
+                o.transport = crate::Transport::default();
+            }
+            None => l.overlay = Some(crate::MediaOverlay::new(id, source)),
+        }
+        Some(id)
+    }
+
+    /// Every layer's overlay clip.
+    pub fn overlay_clips(&self) -> impl Iterator<Item = &Clip> {
+        self.layers.iter().filter_map(|l| l.overlay.as_ref().map(|o| &o.clip))
     }
 
     fn next_clip_id(&mut self) -> ClipId {
@@ -1317,7 +1346,7 @@ impl Composition {
                 row.resize(deck.columns.len(), None);
             }
         }
-        let max_id = comp.every_clip().map(|c| c.id.0).max().unwrap_or(0);
+        let max_id = comp.every_clip().chain(comp.overlay_clips()).map(|c| c.id.0).max().unwrap_or(0);
         comp.next_id = comp.next_id.max(max_id + 1);
         Ok(comp)
     }

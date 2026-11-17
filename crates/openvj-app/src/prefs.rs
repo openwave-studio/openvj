@@ -63,6 +63,21 @@ pub fn set_flag(key: &str, on: bool) {
     set(key, on.into());
 }
 
+/// Folders the Synthesis media browser shows, in the order they were added.
+pub fn media_folders() -> Vec<PathBuf> {
+    read()
+        .get("media_folders")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(PathBuf::from).collect())
+        .unwrap_or_default()
+}
+
+/// Remembers the media browser's folders for next launch.
+pub fn set_media_folders(folders: &[PathBuf]) {
+    let list = folders.iter().map(|f| serde_json::Value::from(f.to_string_lossy().into_owned())).collect();
+    set("media_folders", serde_json::Value::Array(list));
+}
+
 /// Sets one preference, keeping the others in the file.
 fn set(key: &str, value: serde_json::Value) {
     let Some(path) = prefs_file() else { return };

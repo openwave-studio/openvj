@@ -321,6 +321,8 @@ pub struct Engine {
     fx_uniform_buf: wgpu::Buffer,
     dummy: wgpu::TextureView,
     targets: Targets,
+    /// Scratch targets for layers' media overlays, made the first time one is used.
+    overlay_targets: Option<[Target; 3]>,
     thumbs: HashMap<ClipId, Target>,
     media: HashMap<ClipId, MediaTexture>,
     /// By effect id: the [`EffectType::version`] compiled and the result.
@@ -546,6 +548,7 @@ impl Engine {
             targets,
             thumbs: HashMap::new(),
             media: HashMap::new(),
+            overlay_targets: None,
             compiled: HashMap::new(),
             fx_state: HashMap::new(),
             fx_seen: HashSet::new(),
@@ -599,6 +602,7 @@ impl Engine {
     pub fn resize(&mut self, width: u32, height: u32) {
         if (width, height) != self.size() {
             self.targets = Targets::new(&self.device, width.max(16), height.max(16));
+            self.overlay_targets = None;
             self.fx_state.clear();
             if self.shared.is_some() {
                 self.shared = None;
@@ -1184,6 +1188,44 @@ impl Engine {
         }
     }
 
+    /// Draws a layer's media overlay over `src`, through its colour look, and returns the
+    /// target holding the result. Uses its own scratch targets, so `src` (which may be an
+    /// effect scratch) is never overwritten.
+    fn draw_overlay(
+        &mut self,
+        passes: &mut Vec<Pass>,
+        t: &Targets,
+        ov: &openvj_core::MediaOverlay,
+        src: Target,
+        now: f64,
+        inputs: &ModInputs,
+    ) -> Target {
+        let Some(m) = self.media.get(&ov.clip.id) else { return src };
+        let (mode, crop, view, chroma, size) = (m.mode, m.crop, m.view.clone(), m.chroma.clone(), (m.width, m.height));
+        if self.overlay_targets.is_none() {
+            let (w, h) = (t.comp[0].width, t.comp[0].height);
+            let hdr = |label| Target::new(&self.device, label, w, h, HDR);
+            self.overlay_targets = Some([hdr("overlay 0"), hdr("overlay 1"), hdr("overlay 2")]);
+        }
+        let o = self.overlay_targets.clone().expect("overlay targets just made");
+        let target = &o[0];
+        let u = Uniforms {
+            res: [target.width as f32, target.height as f32],
+            uv_scale: ov.uv_scale(cover_scale(size.0, size.1, target.width, target.height), ov.scale.eval(inputs)),
+            mode,
+            crop,
+            ..Default::default()
+        };
+        passes.push(Pass::builtin(Some(Pipeline::Media), target, TRANSPARENT, u, Some(view), chroma));
+        let mut top = target.clone();
+        if !ov.look.is_noop() {
+            top = self.effect_chain(passes, &o, top, std::slice::from_ref(&ov.look), now, inputs);
+        }
+        let dst = o.iter().find(|x| x.id != top.id).expect("three overlay targets").clone();
+        passes.push(Self::blend_pass(&dst, &src, &top, ov.blend.shader_id(), ov.amount.eval(inputs).clamp(0.0, 1.0)));
+        dst
+    }
+
     /// Runs a finished group mix through the group's effects and blends it into the
     /// composition. Returns the composition's new ping-pong slot.
     #[allow(clippy::too_many_arguments)]
@@ -1355,6 +1397,9 @@ impl Engine {
                 src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.transform), now, inputs);
             }
             let mut src = self.effect_chain(&mut passes, &t.fx, src, &layer.effects, now, inputs);
+            if let Some(ov) = layer.overlay.as_ref().filter(|o| o.visible()) {
+                src = self.draw_overlay(&mut passes, &t, ov, src, now, inputs);
+            }
             // META (Synthesis): one pass, only when something is set.
             if !layer.look.is_noop() {
                 src = self.effect_chain(&mut passes, &t.fx, src, std::slice::from_ref(&layer.look), now, inputs);
@@ -2133,6 +2178,50 @@ mod tests {
         e.render(&comp, 0.1, &inputs(0.1), None);
         let m = mean(&e.read_target(e.output()));
         assert!(m.iter().all(|c| (c - 127.5).abs() < 2.0), "half-inverted cyan: {m:?}");
+    }
+
+    #[test]
+    fn media_overlay() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let px = |e: &Engine, x: usize, y: usize| {
+            let p = e.read_target(e.output());
+            let i = (y * 32 + x) * 4;
+            [p[i], p[i + 1], p[i + 2]]
+        };
+        // Within a few levels: the overlay is sampled with linear filtering.
+        let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 8);
+        let mut comp = Composition::new(32, 32, 1, 1);
+        let base = comp.set_clip(0, 0, ClipSource::Image { path: "g.png".into() }).unwrap();
+        e.set_media_frame(base, 1, 1, &[0, 255, 0, 255]);
+        comp.trigger(0, 0, 0.0);
+        // An 8×1 overlay: red on the left half, blue on the right.
+        let ov = comp.set_overlay(0, ClipSource::Image { path: "rb.png".into() }).unwrap();
+        let row: Vec<u8> = (0..8).flat_map(|x| if x < 4 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }).collect();
+        e.set_media_frame(ov, 8, 1, &row);
+        let o = comp.layers[0].overlay.as_mut().unwrap();
+        o.blend = openvj_core::BlendMode::Normal;
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert!(near(px(&e, 0, 16), [255, 0, 0]), "fill covers the frame: {:?}", px(&e, 0, 16));
+
+        let o = comp.layers[0].overlay.as_mut().unwrap();
+        o.flip_h = true;
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert!(near(px(&e, 0, 16), [0, 0, 255]), "flipped: {:?}", px(&e, 0, 16));
+
+        // Fit: a wide picture leaves the top and bottom showing the layer's own clip.
+        let o = comp.layers[0].overlay.as_mut().unwrap();
+        o.fill = false;
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(px(&e, 16, 1), [0, 255, 0], "letterbox shows what's below");
+
+        // Amount 0 hides it.
+        let o = comp.layers[0].overlay.as_mut().unwrap();
+        o.amount.value = 0.0;
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        assert_eq!(px(&e, 4, 16), [0, 255, 0]);
     }
 
     #[test]

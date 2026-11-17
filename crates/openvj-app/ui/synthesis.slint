@@ -4,8 +4,54 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Scope, ParamData, EffectData } from "state.slint";
-import { ModButton, FlatButton } from "controls.slint";
+import { ModButton, FlatButton, BlendPicker } from "controls.slint";
 import { Switch } from "settings.slint";
+
+/// One tile in the media browser.
+export struct MediaTile {
+    name: string,
+    // ClipSource kind label: image, video, camera, syphon.
+    kind: string,
+    thumb: image,
+    has-thumb: bool,
+    // It's the focused layer's overlay now.
+    current: bool,
+}
+
+/// Overlay transport buttons, as the app numbers them.
+global Transport {
+    out property <int> play: 0;
+    out property <int> prev: 1;
+    out property <int> next: 2;
+    out property <int> stop: 3;
+}
+
+/// A square transport button with a drawn icon.
+component TransportButton inherits Rectangle {
+    in property <string> icon;
+    in property <bool> active;
+    in property <bool> round;
+    callback clicked();
+    width: root.round ? 40px : 32px;
+    height: self.width;
+    border-radius: root.round ? self.width / 2 : Theme.radius;
+    background: root.active ? Theme.accent-dim : ta.pressed ? Theme.pressed : ta.has-hover ? Theme.raised : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.border;
+    Path {
+        width: 14px;
+        height: 14px;
+        viewbox-width: 14;
+        viewbox-height: 14;
+        fill: root.active ? Theme.accent : Theme.text;
+        stroke: transparent;
+        commands: root.icon;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
 
 /// One layer in the Synthesis strip.
 export struct SynthLayer {
@@ -252,6 +298,7 @@ component RowHeader inherits Rectangle {
     in property <string> title;
     in property <bool> locked;
     in property <bool> enabled: true;
+    in property <bool> tools: true;
     callback tool(int);
     height: 26px;
     Text {
@@ -263,7 +310,7 @@ component RowHeader inherits Rectangle {
         letter-spacing: 0.6px;
         vertical-alignment: center;
     }
-    HorizontalLayout {
+    if root.tools: HorizontalLayout {
         x: parent.width - self.preferred-width;
         width: self.preferred-width;
         spacing: 4px;
@@ -515,6 +562,38 @@ export component SynthesisLayout inherits Rectangle {
     in property <[ParamData]> look;
     in property <[bool]> meta-locked;
     in property <bool> meta-row-locked;
+    // MEDIA: the focused layer's overlay (params: amount, speed, scale, fill, flip v, flip h;
+    // look: META channels, of which colour shows invert, gamma, contrast, hue, saturation),
+    // locks for its transform and colour sections, and the media browser.
+    in property <[bool]> media-locked;
+    in property <bool> overlay-valid;
+    in property <string> overlay-name;
+    in property <image> overlay-thumb;
+    in property <bool> overlay-has-thumb;
+    in property <bool> overlay-playing;
+    in property <float> overlay-progress;
+    in property <bool> overlay-has-length;
+    in property <int> overlay-blend;
+    in property <int> overlay-play-mode;
+    in property <[ParamData]> overlay-params;
+    in property <[ParamData]> overlay-look;
+    in property <[string]> blend-modes;
+    in property <[string]> play-modes;
+    in property <[string]> media-chips;
+    in property <int> media-chip;
+    in property <bool> media-browser-locked;
+    in property <[MediaTile]> media-items;
+    callback overlay-pick(int);
+    callback overlay-clear();
+    callback overlay-transport(int);
+    callback overlay-scrub(float);
+    callback overlay-play-mode-picked(int);
+    callback overlay-blend-picked(int);
+    callback media-chip-picked(int);
+    callback media-lock();
+    callback media-refresh();
+    callback media-add-folder();
+    callback media-remove-folder(int);
     callback focus-layer(int);
     callback group-tool(int, int, int);
     callback row-tool(int, int);
@@ -603,8 +682,7 @@ export component SynthesisLayout inherits Rectangle {
 
             // The visual, large, and the output beside it.
             HorizontalLayout {
-                vertical-stretch: 1;
-                min-height: 160px;
+                height: 250px;
                 spacing: 8px;
                 Rectangle {
                     horizontal-stretch: 1;
@@ -660,239 +738,544 @@ export component SynthesisLayout inherits Rectangle {
                 }
             }
 
-            // Macros.
-            Rectangle {
-                height: 150px;
-                background: Theme.panel;
-                border-width: 1px;
-                border-color: root.map-macro >= 0 ? Theme.accent : Theme.separator;
-                border-radius: Theme.radius;
-                opacity: root.has-clip ? 1 : 0.5;
-                Text {
-                    x: 10px;
-                    y: 8px;
-                    text: root.map-macro >= 0
-                        ? "MAPPING MACRO " + (root.map-macro + 1) + ": click knobs below to add or remove them, then Done"
-                        : "MACROS";
-                    color: root.map-macro >= 0 ? Theme.accent : Theme.text-dim;
-                    font-size: Theme.font-small;
-                    font-weight: 600;
-                    letter-spacing: 0.6px;
-                }
-                HorizontalLayout {
-                    y: 26px;
-                    height: parent.height - 30px;
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 4px;
-                    alignment: start;
-                    for m[i] in root.macros: VerticalLayout {
-                        spacing: 2px;
-                        Knob {
-                            size: 52px;
-                            data: m;
-                            set(k, v) => { root.param-set(Scope.clip-macro, 0, k, v); }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            alignment: center;
-                            ModButton {
-                                width: 44px;
-                                source: m.mod-source;
-                                rate: m.mod-rate;
-                                picked(s) => { root.param-mod(Scope.clip-macro, 0, i, s); }
-                            }
-                            Rectangle {
-                                width: 28px;
-                                height: 20px;
-                                border-radius: Theme.radius-small;
-                                background: root.map-macro == i ? Theme.accent : map-ta.has-hover ? Theme.raised : Theme.panel-2;
-                                border-width: 1px;
-                                border-color: root.map-macro == i ? Theme.accent : Theme.border;
-                                Text {
-                                    text: root.map-macro == i ? "Done" : "Map";
-                                    color: root.map-macro == i ? Theme.on-accent : root.macro-counts[i] > 0 ? Theme.accent : Theme.text-dim;
-                                    font-size: Theme.font-tiny;
-                                    font-weight: 700;
-                                }
-                                map-ta := TouchArea {
-                                    enabled: root.has-clip;
-                                    mouse-cursor: pointer;
-                                    clicked => { root.map-macro = root.map-macro == i ? -1 : i; }
-                                }
-                            }
-                        }
-                        Text {
-                            text: root.macro-counts[i] == 0 ? "empty" : root.macro-counts[i] == 1 ? "1 param" : root.macro-counts[i] + " params";
-                            color: Theme.text-faint;
-                            font-size: Theme.font-tiny;
-                            horizontal-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            // SCENE CONTROLS: the visual's own sections, the source and each effect.
-            RowHeader {
-                title: "SCENE CONTROLS";
-                locked: root.scene-locked;
-                enabled: root.has-clip && root.map-macro < 0;
-                tool(op) => { root.row-tool(0, op); }
-            }
-            ScrollView {
-                height: 34px + 86px + 8px + 12px;
-                HorizontalLayout {
+            // Everything below the preview scrolls.
+            below := ScrollView {
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                content-height: col.preferred-height;
+                col := VerticalLayout {
+                    width: below.visible-width;
                     spacing: 8px;
-                    alignment: start;
-                    if root.clip-params.length > 0: KnobSection {
-                        y: 0;
-                        title: "SOURCE";
-                        title-color: Theme.gen;
-                        params: root.clip-params;
-                        columns: 6;
-                        map-mode: root.map-macro >= 0;
-                        map-macro: root.map-macro;
-                        locked: root.source-locked;
-                        set(k, v) => { root.param-set(Scope.clip, 0, k, v); }
-                        toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip, 0, k); }
-                        grabbed => { root.group-touch(Scope.clip, 0); }
-                        tool(op) => { root.group-tool(Scope.clip, 0, op); }
-                    }
-                    for fx[e] in root.clip-effects: KnobSection {
-                        y: 0;
-                        title: "FX · " + fx.name;
-                        params: fx.params;
-                        columns: 4;
-                        dimmed: !fx.enabled;
-                        map-mode: root.map-macro >= 0;
-                        map-macro: root.map-macro;
-                        locked: root.fx-locked[e];
-                        set(k, v) => { root.param-set(Scope.clip-fx, e, k, v); }
-                        toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip-fx, e, k); }
-                        grabbed => { root.group-touch(Scope.clip-fx, e); }
-                        tool(op) => { root.group-tool(Scope.clip-fx, e, op); }
-                    }
+                    // Macros.
                     Rectangle {
-                        width: 68px + 20px;
-                        height: 34px + 86px + 8px;
+                        height: 150px;
                         background: Theme.panel;
                         border-width: 1px;
-                        border-color: Theme.separator;
+                        border-color: root.map-macro >= 0 ? Theme.accent : Theme.separator;
                         border-radius: Theme.radius;
-                        opacity: root.map-macro >= 0 ? 0.5 : 1;
+                        opacity: root.has-clip ? 1 : 0.5;
                         Text {
                             x: 10px;
                             y: 8px;
-                            text: "OUTPUT";
-                            color: Theme.accent;
+                            text: root.map-macro >= 0
+                                ? "MAPPING MACRO " + (root.map-macro + 1) + ": click knobs below to add or remove them, then Done"
+                                : "MACROS";
+                            color: root.map-macro >= 0 ? Theme.accent : Theme.text-dim;
                             font-size: Theme.font-small;
                             font-weight: 600;
                             letter-spacing: 0.6px;
                         }
-                        if root.comp-params.length > 0: Knob {
-                            x: 10px + (68px - self.width) / 2;
-                            y: 30px;
-                            data: root.comp-params[0];
-                            set(k, v) => { root.param-set(Scope.comp, 0, k, v); }
+                        HorizontalLayout {
+                            y: 26px;
+                            height: parent.height - 30px;
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 4px;
+                            alignment: start;
+                            for m[i] in root.macros: VerticalLayout {
+                                spacing: 2px;
+                                Knob {
+                                    size: 52px;
+                                    data: m;
+                                    set(k, v) => { root.param-set(Scope.clip-macro, 0, k, v); }
+                                }
+                                HorizontalLayout {
+                                    spacing: 2px;
+                                    alignment: center;
+                                    ModButton {
+                                        width: 44px;
+                                        source: m.mod-source;
+                                        rate: m.mod-rate;
+                                        picked(s) => { root.param-mod(Scope.clip-macro, 0, i, s); }
+                                    }
+                                    Rectangle {
+                                        width: 28px;
+                                        height: 20px;
+                                        border-radius: Theme.radius-small;
+                                        background: root.map-macro == i ? Theme.accent : map-ta.has-hover ? Theme.raised : Theme.panel-2;
+                                        border-width: 1px;
+                                        border-color: root.map-macro == i ? Theme.accent : Theme.border;
+                                        Text {
+                                            text: root.map-macro == i ? "Done" : "Map";
+                                            color: root.map-macro == i ? Theme.on-accent : root.macro-counts[i] > 0 ? Theme.accent : Theme.text-dim;
+                                            font-size: Theme.font-tiny;
+                                            font-weight: 700;
+                                        }
+                                        map-ta := TouchArea {
+                                            enabled: root.has-clip;
+                                            mouse-cursor: pointer;
+                                            clicked => { root.map-macro = root.map-macro == i ? -1 : i; }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: root.macro-counts[i] == 0 ? "empty" : root.macro-counts[i] == 1 ? "1 param" : root.macro-counts[i] + " params";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-tiny;
+                                    horizontal-alignment: center;
+                                }
+                            }
                         }
                     }
-                }
-            }
-            // META CONTROLS: the layer's look, the same for every visual it plays.
-            RowHeader {
-                title: "META CONTROLS";
-                locked: root.meta-row-locked;
-                enabled: root.layers.length > 0 && root.map-macro < 0;
-                tool(op) => { root.row-tool(1, op); }
-            }
-            ScrollView {
-                height: 34px + 86px + 8px + 12px;
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    opacity: root.map-macro >= 0 ? 0.5 : 1;
-                    ToolPanel {
-                        width: 68px + 20px + 26px;
-                        title: "MASTER";
-                        title-color: Theme.accent;
-                        locked: root.meta-locked[0];
-                        tool(op) => { root.group-tool(Scope.layer-look, 0, op); }
-                        if root.layer-params.length > 0: Knob {
-                            x: (68px - self.width) / 2;
-                            data: root.layer-params[0];
-                            label: "Master";
-                            set(k, v) => { root.param-set(Scope.layer, -1, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 0); }
+
+                    // SCENE CONTROLS: the visual's own sections, the source and each effect.
+                    RowHeader {
+                        title: "SCENE CONTROLS";
+                        locked: root.scene-locked;
+                        enabled: root.has-clip && root.map-macro < 0;
+                        tool(op) => { root.row-tool(0, op); }
+                    }
+                    ScrollView {
+                        height: 34px + 86px + 8px + 12px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            if root.clip-params.length > 0: KnobSection {
+                                y: 0;
+                                title: "SOURCE";
+                                title-color: Theme.gen;
+                                params: root.clip-params;
+                                columns: 6;
+                                map-mode: root.map-macro >= 0;
+                                map-macro: root.map-macro;
+                                locked: root.source-locked;
+                                set(k, v) => { root.param-set(Scope.clip, 0, k, v); }
+                                toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip, 0, k); }
+                                grabbed => { root.group-touch(Scope.clip, 0); }
+                                tool(op) => { root.group-tool(Scope.clip, 0, op); }
+                            }
+                            for fx[e] in root.clip-effects: KnobSection {
+                                y: 0;
+                                title: "FX · " + fx.name;
+                                params: fx.params;
+                                columns: 4;
+                                dimmed: !fx.enabled;
+                                map-mode: root.map-macro >= 0;
+                                map-macro: root.map-macro;
+                                locked: root.fx-locked[e];
+                                set(k, v) => { root.param-set(Scope.clip-fx, e, k, v); }
+                                toggled(k) => { root.macro-toggle(root.map-macro, Scope.clip-fx, e, k); }
+                                grabbed => { root.group-touch(Scope.clip-fx, e); }
+                                tool(op) => { root.group-tool(Scope.clip-fx, e, op); }
+                            }
+                            Rectangle {
+                                width: 68px + 20px;
+                                height: 34px + 86px + 8px;
+                                background: Theme.panel;
+                                border-width: 1px;
+                                border-color: Theme.separator;
+                                border-radius: Theme.radius;
+                                opacity: root.map-macro >= 0 ? 0.5 : 1;
+                                Text {
+                                    x: 10px;
+                                    y: 8px;
+                                    text: "OUTPUT";
+                                    color: Theme.accent;
+                                    font-size: Theme.font-small;
+                                    font-weight: 600;
+                                    letter-spacing: 0.6px;
+                                }
+                                if root.comp-params.length > 0: Knob {
+                                    x: 10px + (68px - self.width) / 2;
+                                    y: 30px;
+                                    data: root.comp-params[0];
+                                    set(k, v) => { root.param-set(Scope.comp, 0, k, v); }
+                                }
+                            }
                         }
                     }
-                    ToolPanel {
-                        width: 6 * 68px + 20px + 26px;
-                        title: "COLOR";
-                        locked: root.meta-locked[1];
-                        tool(op) => { root.group-tool(Scope.layer-look, 1, op); }
-                        if root.look.length > 17: SwitchCell {
-                            x: 0;
-                            data: root.look[0];
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 1); }
-                        }
-                        for i in [1, 2, 3, 4, 5]: Knob {
-                            x: i * 68px + (68px - self.width) / 2;
-                            data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 1); }
+                    // META CONTROLS: the layer's look, the same for every visual it plays.
+                    RowHeader {
+                        title: "META CONTROLS";
+                        locked: root.meta-row-locked;
+                        enabled: root.layers.length > 0 && root.map-macro < 0;
+                        tool(op) => { root.row-tool(1, op); }
+                    }
+                    ScrollView {
+                        height: 34px + 86px + 8px + 12px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            opacity: root.map-macro >= 0 ? 0.5 : 1;
+                            ToolPanel {
+                                width: 68px + 20px + 26px;
+                                title: "MASTER";
+                                title-color: Theme.accent;
+                                locked: root.meta-locked[0];
+                                tool(op) => { root.group-tool(Scope.layer-look, 0, op); }
+                                if root.layer-params.length > 0: Knob {
+                                    x: (68px - self.width) / 2;
+                                    data: root.layer-params[0];
+                                    label: "Master";
+                                    set(k, v) => { root.param-set(Scope.layer, -1, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 0); }
+                                }
+                            }
+                            ToolPanel {
+                                width: 6 * 68px + 20px + 26px;
+                                title: "COLOR";
+                                locked: root.meta-locked[1];
+                                tool(op) => { root.group-tool(Scope.layer-look, 1, op); }
+                                if root.look.length > 17: SwitchCell {
+                                    x: 0;
+                                    data: root.look[0];
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 1); }
+                                }
+                                for i in [1, 2, 3, 4, 5]: Knob {
+                                    x: i * 68px + (68px - self.width) / 2;
+                                    data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 1); }
+                                }
+                            }
+                            ToolPanel {
+                                width: 2 * 68px + 20px + 26px;
+                                title: "MIRROR";
+                                locked: root.meta-locked[2];
+                                tool(op) => { root.group-tool(Scope.layer-look, 2, op); }
+                                for i in [6, 7]: SwitchCell {
+                                    x: (i - 6) * 68px;
+                                    data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 2); }
+                                }
+                            }
+                            ToolPanel {
+                                width: 3 * 68px + 20px + 26px;
+                                title: "LIMIT COLORS";
+                                locked: root.meta-locked[3];
+                                tool(op) => { root.group-tool(Scope.layer-look, 3, op); }
+                                if root.look.length > 17: SwitchCell {
+                                    x: 0;
+                                    data: root.look[8];
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 3); }
+                                }
+                                ColorCell {
+                                    x: 68px;
+                                    params: root.look;
+                                    first: 9;
+                                    label: "Low Color";
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 3); }
+                                }
+                                ColorCell {
+                                    x: 2 * 68px;
+                                    params: root.look;
+                                    first: 13;
+                                    label: "High Color";
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 3); }
+                                }
+                            }
+                            ToolPanel {
+                                width: 68px + 20px + 26px;
+                                title: "GENERAL";
+                                locked: root.meta-locked[4];
+                                tool(op) => { root.group-tool(Scope.layer-look, 4, op); }
+                                if root.look.length > 17: SwitchCell {
+                                    x: 0;
+                                    data: root.look[17];
+                                    set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.layer-look, 4); }
+                                }
+                            }
                         }
                     }
-                    ToolPanel {
-                        width: 2 * 68px + 20px + 26px;
-                        title: "MIRROR";
-                        locked: root.meta-locked[2];
-                        tool(op) => { root.group-tool(Scope.layer-look, 2, op); }
-                        for i in [6, 7]: SwitchCell {
-                            x: (i - 6) * 68px;
-                            data: root.look.length > 17 ? root.look[i] : { name: "", index: -1 };
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 2); }
+
+                    // MEDIA: an image, video or camera over the visual, belonging to the layer.
+                    RowHeader {
+                        title: "MEDIA";
+                        tools: false;
+                    }
+                    HorizontalLayout {
+                        height: 190px;
+                        spacing: 8px;
+                        alignment: start;
+                        opacity: root.map-macro >= 0 ? 0.5 : 1;
+                        // What plays, its transport and how it mixes in.
+                        Rectangle {
+                            width: 420px;
+                            background: Theme.panel;
+                            border-width: 1px;
+                            border-color: Theme.separator;
+                            border-radius: Theme.radius;
+                            Rectangle {
+                                x: 10px;
+                                y: 10px;
+                                width: 72px;
+                                height: 72px;
+                                background: Theme.track;
+                                if root.overlay-has-thumb: Image {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    source: root.overlay-thumb;
+                                    image-fit: cover;
+                                }
+                                if !root.overlay-valid: Text {
+                                    text: "none";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-small;
+                                }
+                            }
+                            Text {
+                                x: 92px;
+                                y: 12px;
+                                width: 200px;
+                                text: root.overlay-valid ? root.overlay-name : "Pick media below";
+                                color: root.overlay-valid ? Theme.text : Theme.text-faint;
+                                font-size: Theme.font-normal;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                            if root.overlay-valid: FlatButton {
+                                x: 92px;
+                                y: 36px;
+                                width: 80px;
+                                text: "Remove";
+                                clicked => { root.overlay-clear(); }
+                            }
+                            BlendPicker {
+                                x: 300px;
+                                y: 10px;
+                                width: 110px;
+                                modes: root.blend-modes;
+                                current: root.overlay-blend;
+                                picked(i) => { root.overlay-blend-picked(i); }
+                            }
+                            HorizontalLayout {
+                                x: 10px;
+                                y: 100px;
+                                spacing: 8px;
+                                alignment: start;
+                                TransportButton {
+                                    round: true;
+                                    active: root.overlay-playing;
+                                    icon: root.overlay-playing ? "M 3.5 2 L 5.5 2 L 5.5 12 L 3.5 12 Z M 8.5 2 L 10.5 2 L 10.5 12 L 8.5 12 Z" : "M 3 1.5 L 12.5 7 L 3 12.5 Z";
+                                    clicked => { root.overlay-transport(Transport.play); }
+                                }
+                                TransportButton {
+                                    y: 4px;
+                                    icon: "M 2 2 L 4 2 L 4 12 L 2 12 Z M 12 2 L 5 7 L 12 12 Z";
+                                    clicked => { root.overlay-transport(Transport.prev); }
+                                }
+                                TransportButton {
+                                    y: 4px;
+                                    icon: "M 2 2 L 9 7 L 2 12 Z M 10 2 L 12 2 L 12 12 L 10 12 Z";
+                                    clicked => { root.overlay-transport(Transport.next); }
+                                }
+                                TransportButton {
+                                    y: 4px;
+                                    icon: "M 3 3 L 11 3 L 11 11 L 3 11 Z";
+                                    clicked => { root.overlay-transport(Transport.stop); }
+                                }
+                                BlendPicker {
+                                    y: 9px;
+                                    width: 100px;
+                                    modes: root.play-modes;
+                                    current: root.overlay-play-mode;
+                                    picked(i) => { root.overlay-play-mode-picked(i); }
+                                }
+                            }
+                            // Scrub bar.
+                            Rectangle {
+                                x: 10px;
+                                y: 156px;
+                                width: 268px;
+                                height: 14px;
+                                opacity: root.overlay-has-length ? 1 : 0.4;
+                                Rectangle {
+                                    y: 5px;
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Theme.track;
+                                }
+                                Rectangle {
+                                    y: 5px;
+                                    width: parent.width * clamp(root.overlay-progress, 0, 1);
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Theme.accent;
+                                }
+                                Rectangle {
+                                    x: parent.width * clamp(root.overlay-progress, 0, 1) - 3px;
+                                    width: 6px;
+                                    height: 14px;
+                                    border-radius: 2px;
+                                    background: Theme.text;
+                                }
+                                scrub := TouchArea {
+                                    enabled: root.overlay-has-length;
+                                    mouse-cursor: pointer;
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down) {
+                                            root.overlay-scrub(clamp(self.mouse-x / self.width, 0, 1));
+                                        }
+                                    }
+                                    moved => {
+                                        if (self.pressed) {
+                                            root.overlay-scrub(clamp(self.mouse-x / self.width, 0, 1));
+                                        }
+                                    }
+                                }
+                            }
+                            if root.overlay-params.length > 1: Knob {
+                                x: 284px;
+                                y: 40px;
+                                data: root.overlay-params[0];
+                                set(k, v) => { root.param-set(Scope.overlay, 0, k, v); }
+                            }
+                            if root.overlay-params.length > 1: Knob {
+                                x: 350px;
+                                y: 40px;
+                                data: root.overlay-params[1];
+                                set(k, v) => { root.param-set(Scope.overlay, 0, k, v); }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            opacity: root.overlay-valid ? 1 : 0.5;
+                            ToolPanel {
+                                width: 4 * 68px + 20px + 26px;
+                                title: "TRANSFORM";
+                                locked: root.media-locked.length > 0 && root.media-locked[0];
+                                tool(op) => { root.group-tool(Scope.overlay, 0, op); }
+                                if root.overlay-params.length > 5: Knob {
+                                    x: (68px - self.width) / 2;
+                                    data: root.overlay-params[2];
+                                    set(k, v) => { root.param-set(Scope.overlay, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.overlay, 0); }
+                                }
+                                for i in [3, 4, 5]: SwitchCell {
+                                    x: (i - 2) * 68px;
+                                    data: root.overlay-params.length > 5 ? root.overlay-params[i] : { name: "", index: -1 };
+                                    set(k, v) => { root.param-set(Scope.overlay, 0, k, v); }
+                                    grabbed => { root.group-touch(Scope.overlay, 0); }
+                                }
+                            }
+                        }
+                        ToolPanel {
+                            width: 5 * 68px + 20px + 26px;
+                            title: "COLOR";
+                            opacity: root.overlay-valid ? 1 : 0.5;
+                            locked: root.media-locked.length > 1 && root.media-locked[1];
+                            tool(op) => { root.group-tool(Scope.overlay-look, 0, op); }
+                            if root.overlay-look.length > 17: SwitchCell {
+                                x: 0;
+                                data: root.overlay-look[0];
+                                set(k, v) => { root.param-set(Scope.overlay-look, 0, k, v); }
+                                grabbed => { root.group-touch(Scope.overlay-look, 0); }
+                            }
+                            for i[n] in [3, 2, 4, 5]: Knob {
+                                x: (n + 1) * 68px + (68px - self.width) / 2;
+                                data: root.overlay-look.length > 17 ? root.overlay-look[i] : { name: "", index: -1 };
+                                set(k, v) => { root.param-set(Scope.overlay-look, 0, k, v); }
+                                grabbed => { root.group-touch(Scope.overlay-look, 0); }
+                            }
                         }
                     }
-                    ToolPanel {
-                        width: 3 * 68px + 20px + 26px;
-                        title: "LIMIT COLORS";
-                        locked: root.meta-locked[3];
-                        tool(op) => { root.group-tool(Scope.layer-look, 3, op); }
-                        if root.look.length > 17: SwitchCell {
-                            x: 0;
-                            data: root.look[8];
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 3); }
+
+                    // The media browser: folders, live sources and thumbnails.
+                    Rectangle {
+                        height: 34px + 3 * 64px + 8px;
+                        background: Theme.panel;
+                        border-width: 1px;
+                        border-color: Theme.separator;
+                        border-radius: Theme.radius;
+                        HorizontalLayout {
+                            x: 8px;
+                            y: 6px;
+                            height: 24px;
+                            width: parent.width - 16px;
+                            spacing: 4px;
+                            for c[i] in root.media-chips: Rectangle {
+                                width: chip-text.preferred-width + 18px;
+                                border-radius: Theme.radius;
+                                background: i == root.media-chip ? Theme.accent-dim : chip-ta.has-hover ? Theme.raised : Theme.panel-2;
+                                border-width: 1px;
+                                border-color: i == root.media-chip ? Theme.accent : Theme.border;
+                                chip-text := Text {
+                                    text: c;
+                                    color: i == root.media-chip ? Theme.accent : Theme.text;
+                                    font-size: Theme.font-small;
+                                    font-weight: 600;
+                                }
+                                chip-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.media-chip-picked(i); }
+                                    double-clicked => {
+                                        if (i >= 2) {
+                                            root.media-remove-folder(i);
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            RowToolButton {
+                                op: GroupOp.lock;
+                                text: root.media-browser-locked ? "locked" : "lock";
+                                active: root.media-browser-locked;
+                                clicked => { root.media-lock(); }
+                            }
+                            RowToolButton {
+                                op: GroupOp.undo;
+                                text: "refresh";
+                                clicked => { root.media-refresh(); }
+                            }
+                            FlatButton {
+                                text: "+ add folder";
+                                clicked => { root.media-add-folder(); }
+                            }
                         }
-                        ColorCell {
-                            x: 68px;
-                            params: root.look;
-                            first: 9;
-                            label: "Low Color";
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 3); }
+                        if root.media-items.length == 0: Text {
+                            y: 34px;
+                            height: parent.height - 40px;
+                            width: parent.width;
+                            text: root.media-chip == 1 ? "No cameras or Syphon servers found" : "Add a folder of images or videos";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-body;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
-                        ColorCell {
-                            x: 2 * 68px;
-                            params: root.look;
-                            first: 13;
-                            label: "High Color";
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 3); }
-                        }
-                    }
-                    ToolPanel {
-                        width: 68px + 20px + 26px;
-                        title: "GENERAL";
-                        locked: root.meta-locked[4];
-                        tool(op) => { root.group-tool(Scope.layer-look, 4, op); }
-                        if root.look.length > 17: SwitchCell {
-                            x: 0;
-                            data: root.look[17];
-                            set(k, v) => { root.param-set(Scope.layer-look, 0, k, v); }
-                            grabbed => { root.group-touch(Scope.layer-look, 4); }
+                        grid := ScrollView {
+                            x: 8px;
+                            y: 34px;
+                            width: parent.width - 16px;
+                            height: parent.height - 40px;
+                            property <int> cols: max(1, floor((self.visible-width) / 108px));
+                            content-height: ceil(root.media-items.length / self.cols) * 64px;
+                            for t[i] in root.media-items: Rectangle {
+                                x: mod(i, grid.cols) * 108px;
+                                y: floor(i / grid.cols) * 64px;
+                                width: 104px;
+                                height: 60px;
+                                background: Theme.track;
+                                border-width: t.current ? 2px : tile-ta.has-hover ? 1px : 0;
+                                border-color: t.current ? Theme.accent : Theme.text-dim;
+                                if t.has-thumb: Image {
+                                    x: 2px;
+                                    y: 2px;
+                                    width: parent.width - 4px;
+                                    height: parent.height - 4px;
+                                    source: t.thumb;
+                                    image-fit: cover;
+                                }
+                                if !t.has-thumb: Text {
+                                    width: parent.width - 8px;
+                                    text: t.name;
+                                    color: t.kind == "camera" ? Theme.camera : t.kind == "syphon" ? Theme.syphon : Theme.text-dim;
+                                    font-size: Theme.font-tiny;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                }
+                                tile-ta := TouchArea {
+                                    mouse-cursor: root.media-browser-locked ? not-allowed : pointer;
+                                    clicked => { root.overlay-pick(i); }
+                                }
+                            }
                         }
                     }
                 }

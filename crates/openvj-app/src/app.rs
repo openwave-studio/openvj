@@ -33,8 +33,8 @@ use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData, Lib, LibChip,
-    LibSideRow, LibTile, MainWindow, MappingWindow, MidiLearn, ModNames, OutputWindow, ParamData, PresetRow, Shadertoy,
-    SynthLayer,
+    LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, ModNames, OutputWindow, ParamData, PresetRow,
+    Shadertoy, SynthLayer,
 };
 
 // The output mapping window's side of the app.
@@ -63,10 +63,14 @@ mod scope {
     pub const CLIP_MACRO: i32 = 10;
     /// The selected layer's META look (Synthesis layout); the owner is ignored.
     pub const LAYER_LOOK: i32 = 11;
+    /// The selected layer's media overlay: amount, speed, scale, fill, flips (see `OV_*`).
+    pub const OVERLAY: i32 = 12;
+    /// The selected layer's media overlay colour; the owner is ignored.
+    pub const OVERLAY_LOOK: i32 = 13;
 
     /// Scopes whose parameters belong to an effect (a chain entry or a Transform).
     pub fn is_effect(scope: i32) -> bool {
-        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF | LAYER_LOOK)
+        matches!(scope, COMP_FX | LAYER_FX | GROUP_FX | CLIP_FX | LAYER_TF | CLIP_TF | LAYER_LOOK | OVERLAY_LOOK)
     }
 }
 
@@ -243,6 +247,17 @@ pub struct App {
     media: HashMap<ClipId, Media>,
     /// Running decoders, keyed by clip, with the launch time they were opened for.
     decoders: HashMap<ClipId, (f64, Player)>,
+    /// The beat at the last frame, to move media overlays on by the beats since.
+    last_beat: Option<f64>,
+    /// Synthesis media browser, and thumbnails of its files by path.
+    media_browser: crate::media_browser::MediaBrowser,
+    media_thumbs: HashMap<PathBuf, Image>,
+    media_dirty: bool,
+    /// The browser was listed once (it lists again on refresh or a chip change).
+    media_listed: bool,
+    media_tiles: Rc<VecModel<MediaTile>>,
+    overlay_params: Rc<VecModel<ParamData>>,
+    overlay_look: EffectModels,
     live: HashMap<LiveSource, LiveInput>,
     /// Inputs that failed, and when to try them again.
     live_retry: HashMap<LiveSource, f64>,
@@ -379,6 +394,14 @@ impl App {
             thumbs: HashMap::new(),
             media: HashMap::new(),
             decoders: HashMap::new(),
+            last_beat: None,
+            media_browser: crate::media_browser::MediaBrowser::load(),
+            media_thumbs: HashMap::new(),
+            media_dirty: true,
+            media_listed: false,
+            media_tiles: Rc::new(VecModel::default()),
+            overlay_params: Rc::new(VecModel::default()),
+            overlay_look: EffectModels::default(),
             live: HashMap::new(),
             live_retry: HashMap::new(),
             cameras: live::list_cameras(),
@@ -475,6 +498,9 @@ impl App {
         ui.set_clip_effects(ModelRc::from(self.clip_fx.effects.clone()));
         ui.set_layer_transform(ModelRc::from(self.layer_tf.effects.clone()));
         ui.set_layer_look(ModelRc::from(self.layer_look.effects.clone()));
+        ui.set_overlay_params(ModelRc::from(self.overlay_params.clone()));
+        ui.set_media_items(ModelRc::from(self.media_tiles.clone()));
+        ui.set_overlay_look(ModelRc::from(self.overlay_look.effects.clone()));
         ui.set_clip_transform(ModelRc::from(self.clip_tf.effects.clone()));
         let names =
             |v: Vec<&str>| ModelRc::new(VecModel::from(v.into_iter().map(SharedString::from).collect::<Vec<_>>()));
@@ -645,7 +671,13 @@ impl App {
     /// Drops thumbnails, textures and decoders of clips that were removed.
     fn collect_garbage(&mut self) {
         // Clips in closed decks stay loaded so switching back is instant.
-        let alive: HashSet<ClipId> = self.comp.every_clip().chain(self.comp.all_clips()).map(|c| c.id).collect();
+        let alive: HashSet<ClipId> = self
+            .comp
+            .every_clip()
+            .chain(self.comp.all_clips())
+            .chain(self.comp.overlay_clips())
+            .map(|c| c.id)
+            .collect();
         self.thumbs.retain(|id, _| alive.contains(id));
         self.media.retain(|id, _| alive.contains(id));
         self.decoders.retain(|id, _| alive.contains(id));
@@ -690,6 +722,11 @@ impl App {
                         for clip in self.comp.every_clip_mut().filter(|c| c.id == id) {
                             clip.media_secs = Some(secs);
                         }
+                        for o in self.comp.layers.iter_mut().filter_map(|l| l.overlay.as_mut()) {
+                            if o.clip.id == id {
+                                o.clip.media_secs = Some(secs);
+                            }
+                        }
                     }
                     let thumb =
                         SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&m.thumb.rgba, m.thumb.width, m.thumb.height);
@@ -722,15 +759,38 @@ impl App {
                 live.insert(p.clip_id, (p, li));
             }
         }
-        self.decoders.retain(|id, (started, _)| live.get(id).map(|l| l.0.started_at) == Some(*started));
+        // Media overlays play on their own transport; their decoders are marked started at -1.
+        let overlays: HashMap<ClipId, usize> = self
+            .comp
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| l.overlay.as_ref().filter(|o| o.visible()).map(|o| (o.clip.id, i)))
+            .collect();
+        self.decoders.retain(|id, (started, _)| {
+            overlays.contains_key(id) && *started < 0.0 || live.get(id).map(|l| l.0.started_at) == Some(*started)
+        });
+        let jobs: Vec<(ClipId, f64, usize, Option<Playing>)> = live
+            .into_iter()
+            .map(|(id, (p, li))| (id, p.started_at, li, Some(p)))
+            .chain(overlays.into_iter().map(|(id, li)| (id, -1.0, li, None)))
+            .collect();
 
-        for (id, (playing, li)) in live {
-            let started = playing.started_at;
+        for (id, started, li, playing) in jobs {
+            let layer = &self.comp.layers[li];
             // Look up through the layer so clips held over from another deck keep playing.
-            let Some(clip) = self.comp.layers[li].clip_by_id(id) else { continue };
+            let (clip, time) = match playing {
+                Some(p) => {
+                    let Some(clip) = layer.clip_by_id(id) else { continue };
+                    (clip, p.time(clip, now, beat).secs)
+                }
+                None => {
+                    let Some(o) = layer.overlay.as_ref() else { continue };
+                    (&o.clip, o.time().secs)
+                }
+            };
             let ClipSource::Video { path } = &clip.source else { continue };
             let Some(Media::Ready { video: Some(info), .. }) = self.media.get(&id) else { continue };
-            let time = playing.time(clip, now, beat).secs;
             if !self.decoders.contains_key(&id) {
                 match self.open_player(path, *info) {
                     Ok(player) => {
@@ -775,7 +835,10 @@ impl App {
         }
         let mut clips: HashMap<LiveSource, Vec<ClipId>> = HashMap::new();
         let mut wanted: HashSet<LiveSource> = HashSet::new();
-        for clip in self.comp.all_clips() {
+        for o in self.comp.layers.iter().filter_map(|l| l.overlay.as_ref()).filter(|o| o.visible()) {
+            shown.insert(o.clip.id);
+        }
+        for clip in self.comp.all_clips().chain(self.comp.overlay_clips()) {
             let Some(source) = live_source(&clip.source) else { continue };
             if shown.contains(&clip.id) {
                 wanted.insert(source.clone());
@@ -890,6 +953,11 @@ impl App {
             self.grid_dirty = true; // A play-once clip ended.
         }
         self.poll_loads();
+        let dbeats = self.last_beat.map_or(0.0, |b| (beat - b).max(0.0));
+        self.last_beat = Some(beat);
+        for o in self.comp.layers.iter_mut().filter_map(|l| l.overlay.as_mut()) {
+            o.advance(dt as f64, dbeats);
+        }
         self.update_videos(now, beat);
         self.update_live(now);
         self.update_midi(now);
@@ -982,6 +1050,14 @@ impl App {
             ui.set_output_image(output);
             ui.set_preview_image(preview);
             ui.set_comp_info(format!("{}×{}", self.comp.width, self.comp.height).into());
+        }
+        self.poll_media_thumbs();
+        if self.layout == SYNTHESIS_LAYOUT {
+            self.sync_overlay_transport(ui);
+        }
+        if self.grid_dirty || self.media_dirty {
+            let browser = std::mem::take(&mut self.media_dirty);
+            self.sync_media(ui, browser);
         }
         if self.grid_dirty {
             self.grid_dirty = false;
@@ -1152,12 +1228,49 @@ impl App {
                 self.layer_fx.update(&layer.effects, &inputs);
                 self.layer_tf.update(std::slice::from_ref(&layer.transform), &inputs);
                 self.layer_look.update(std::slice::from_ref(&layer.look), &inputs);
+                match &layer.overlay {
+                    Some(o) => {
+                        let speed = o.clip.speed;
+                        let flag = |i, name: &str, on: bool| fixed_row(i, name, on as u8 as f32, 0.0, String::new());
+                        update_model(
+                            &self.overlay_params,
+                            vec![
+                                param_row(OV_AMOUNT, "Amount", &o.amount, 1.0, &inputs, pct),
+                                fixed_row(
+                                    OV_SPEED,
+                                    "Speed",
+                                    speed / MAX_SPEED,
+                                    1.0 / MAX_SPEED,
+                                    format!("{speed:.2}×"),
+                                ),
+                                param_row(
+                                    OV_SCALE,
+                                    "Scale",
+                                    &o.scale,
+                                    1.0 / openvj_core::OVERLAY_MAX_SCALE,
+                                    &inputs,
+                                    |v| format!("{:.0}%", v * openvj_core::OVERLAY_MAX_SCALE * 100.0),
+                                ),
+                                fixed_row(OV_FILL, "Fit or Fill", o.fill as u8 as f32, 1.0, String::new()),
+                                flag(OV_FLIP_V, "Vert Flip", o.flip_v),
+                                flag(OV_FLIP_H, "Hor Flip", o.flip_h),
+                            ],
+                        );
+                        self.overlay_look.update(std::slice::from_ref(&o.look), &inputs);
+                    }
+                    None => {
+                        update_model(&self.overlay_params, Vec::new());
+                        self.overlay_look.update(&[], &inputs);
+                    }
+                }
             }
             None => {
                 update_model(&self.layer_params, Vec::new());
                 self.layer_fx.update(&[], &inputs);
                 self.layer_tf.update(&[], &inputs);
                 self.layer_look.update(&[], &inputs);
+                update_model(&self.overlay_params, Vec::new());
+                self.overlay_look.update(&[], &inputs);
             }
         }
 
@@ -2418,6 +2531,7 @@ impl App {
         match scope {
             scope::LAYER_TF => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.transform),
             scope::LAYER_LOOK => self.comp.layers.get_mut(self.selected_layer).map(|l| &mut l.look),
+            scope::OVERLAY_LOOK => self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut().map(|o| &mut o.look),
             scope::CLIP_TF => self.selected_clip_mut().map(|c| &mut c.transform),
             _ => self.effects_mut(scope)?.get_mut(usize::try_from(owner).ok()?),
         }
@@ -2451,6 +2565,10 @@ impl App {
                 Some(&mut self.comp.layers[l].opacity_mod)
             }
             (scope::CLIP_MACRO, i) => self.selected_clip_mut()?.macro_mut(i).map(|m| &mut m.value.modulation),
+            (scope::OVERLAY, OV_AMOUNT | OV_SCALE) => {
+                let o = self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut()?;
+                Some(if index == OV_AMOUNT { &mut o.amount.modulation } else { &mut o.scale.modulation })
+            }
             (scope::CLIP, i) if i >= ISF_PARAM_BASE => {
                 self.isf_param_mut(i - ISF_PARAM_BASE).map(|p| &mut p.modulation)
             }
@@ -2499,6 +2617,21 @@ impl App {
             scope::CLIP_MACRO => {
                 if let Some(m) = self.selected_clip_mut().and_then(|c| c.macro_mut(index)) {
                     m.value.value = v;
+                }
+            }
+            scope::OVERLAY => {
+                let Some(o) = self.comp.layers.get_mut(self.selected_layer).and_then(|l| l.overlay.as_mut()) else {
+                    return;
+                };
+                let on = v >= 0.5;
+                match index {
+                    OV_AMOUNT => o.amount.value = v,
+                    OV_SPEED => o.clip.speed = ((v * MAX_SPEED * 100.0).round() / 100.0).max(0.01),
+                    OV_SCALE => o.scale.value = v,
+                    OV_FILL => o.fill = on,
+                    OV_FLIP_V => o.flip_v = on,
+                    OV_FLIP_H => o.flip_h = on,
+                    _ => {}
                 }
             }
             scope::CLIP => {
@@ -3660,12 +3793,26 @@ const ROW_META: i32 = 1;
 const META_SECTIONS: [std::ops::Range<usize>; 5] = [0..0, 0..6, 6..8, 8..17, 17..18];
 /// Channels Random leaves alone: the colours' alpha, and Alpha channel (it would punch holes).
 const META_FIXED: [usize; 3] = [12, 16, 17];
+/// Media overlay rows (`scope::OVERLAY`).
+const OV_AMOUNT: usize = 0;
+const OV_SPEED: usize = 1;
+const OV_SCALE: usize = 2;
+const OV_FILL: usize = 3;
+const OV_FLIP_V: usize = 4;
+const OV_FLIP_H: usize = 5;
+/// The look channels the overlay's colour section shows: invert, gamma, contrast, hue, saturation.
+const OVERLAY_COLOR: [usize; 5] = [0, 2, 3, 4, 5];
+/// Overlay transport buttons (ui/synthesis.slint).
+const OV_PLAY: i32 = 0;
+const OV_PREV: i32 = 1;
+const OV_NEXT: i32 = 2;
+const OV_STOP: i32 = 3;
 
 impl App {
     /// The section key for (scope, owner): the selected visual's for scene sections, the
     /// focused layer's for META.
     fn synth_key(&self, scope: i32, owner: i32) -> Option<crate::synth_controls::Key> {
-        if scope == scope::LAYER_LOOK {
+        if matches!(scope, scope::LAYER_LOOK | scope::OVERLAY | scope::OVERLAY_LOOK) {
             let l = self.layer_index(-1)?;
             return Some((u64::MAX - l as u64, scope, owner));
         }
@@ -3678,6 +3825,24 @@ impl App {
         use crate::synth_controls::Knob;
         let rows: Vec<ParamData> = match scope {
             scope::CLIP => self.clip_params.iter().collect(),
+            // MEDIA transform: scale, fit or fill and the flips; Amount and Speed stay put.
+            scope::OVERLAY => {
+                return self
+                    .overlay_params
+                    .iter()
+                    .filter(|r| r.index as usize >= OV_SCALE)
+                    .map(|r| Knob { index: r.index as usize, value: r.value, reset: r.reset, random: true })
+                    .collect();
+            }
+            scope::OVERLAY_LOOK => {
+                let rows: Vec<ParamData> =
+                    self.overlay_look.params.first().map(|m| m.iter().collect()).unwrap_or_default();
+                return rows
+                    .iter()
+                    .filter(|r| OVERLAY_COLOR.contains(&(r.index as usize)))
+                    .map(|r| Knob { index: r.index as usize, value: r.value, reset: r.reset, random: true })
+                    .collect();
+            }
             // META: Master is the layer's opacity; the rest are the look's channels.
             scope::LAYER_LOOK if owner == 0 => self.layer_params.iter().take(1).collect(),
             scope::LAYER_LOOK => {
@@ -3723,6 +3888,7 @@ impl App {
         let (scope, owner) = match (scope, owner) {
             (scope::LAYER_LOOK, 0) => (scope::LAYER, -1),
             (scope::LAYER_LOOK, _) => (scope::LAYER_LOOK, 0),
+            (scope::OVERLAY | scope::OVERLAY_LOOK, _) => (scope, 0),
             other => other,
         };
         for &(i, v) in values {
@@ -3811,6 +3977,203 @@ impl App {
         let meta_locked: Vec<bool> = meta.iter().map(|&k| self.synth.is_locked(k)).collect();
         ui.set_synth_meta_locked(ModelRc::new(VecModel::from(meta_locked)));
         ui.set_synth_meta_row_locked(self.synth.all_locked(meta));
+        let media: Vec<bool> = [scope::OVERLAY, scope::OVERLAY_LOOK]
+            .iter()
+            .map(|&s| self.synth_key(s, 0).is_some_and(|k| self.synth.is_locked(k)))
+            .collect();
+        ui.set_synth_media_locked(ModelRc::new(VecModel::from(media)));
+    }
+
+    // ---------------------------------------------------------------- media overlay
+
+    fn overlay_mut(&mut self) -> Option<&mut openvj_core::MediaOverlay> {
+        self.comp.layers.get_mut(self.selected_layer)?.overlay.as_mut()
+    }
+
+    /// Puts `source` on the focused layer as its overlay.
+    fn set_overlay(&mut self, source: ClipSource) {
+        let media = source.media_path().map(|p| (p.to_owned(), matches!(source, ClipSource::Video { .. })));
+        let Some(id) = self.comp.set_overlay(self.selected_layer, source) else { return };
+        if let Some((path, is_video)) = media {
+            self.start_load(id, path, is_video);
+        }
+        self.collect_garbage();
+        self.media_dirty = true;
+        self.grid_dirty = true;
+    }
+
+    /// A tile in the media browser was clicked.
+    pub fn overlay_pick(&mut self, item: usize) {
+        if self.media_browser.locked {
+            self.set_status("The media browser is locked. Unlock it to change the overlay.");
+            return;
+        }
+        if let Some(it) = self.media_browser.items.get(item).cloned() {
+            self.set_overlay(it.source);
+        }
+    }
+
+    pub fn overlay_clear(&mut self) {
+        if let Some(l) = self.comp.layers.get_mut(self.selected_layer) {
+            l.overlay = None;
+            self.collect_garbage();
+            self.media_dirty = true;
+            self.grid_dirty = true;
+        }
+    }
+
+    pub fn overlay_transport(&mut self, op: i32) {
+        match op {
+            OV_PLAY => {
+                if let Some(o) = self.overlay_mut() {
+                    o.transport.playing = !o.transport.playing;
+                }
+            }
+            OV_STOP => {
+                if let Some(o) = self.overlay_mut() {
+                    o.stop();
+                }
+            }
+            OV_PREV | OV_NEXT => {
+                let current = self
+                    .comp
+                    .layers
+                    .get(self.selected_layer)
+                    .and_then(|l| l.overlay.as_ref())
+                    .and_then(|o| o.clip.source.media_path().map(Path::to_owned));
+                let by = if op == OV_NEXT { 1 } else { -1 };
+                if let Some(it) = self.media_browser.step(current.as_deref(), by).cloned() {
+                    self.set_overlay(it.source);
+                }
+            }
+            _ => {}
+        }
+        self.media_dirty = true;
+    }
+
+    pub fn overlay_scrub(&mut self, at: f32) {
+        if let Some(o) = self.overlay_mut() {
+            o.scrub(at);
+        }
+    }
+
+    pub fn overlay_play_mode(&mut self, i: usize) {
+        if let Some(o) = self.overlay_mut() {
+            o.clip.play_mode = PlayMode::from_index(i);
+            self.media_dirty = true;
+        }
+    }
+
+    pub fn overlay_blend(&mut self, i: usize) {
+        if let Some(o) = self.overlay_mut() {
+            o.blend = BlendMode::ALL.get(i).copied().unwrap_or_default();
+            self.media_dirty = true;
+        }
+    }
+
+    pub fn media_chip(&mut self, chip: usize) {
+        self.media_browser.chip = chip;
+        self.media_refresh();
+    }
+
+    pub fn media_lock(&mut self) {
+        self.media_browser.locked = !self.media_browser.locked;
+        self.media_dirty = true;
+    }
+
+    pub fn media_refresh(&mut self) {
+        let live = self.input_sources();
+        self.media_browser.refresh(&live);
+        self.media_dirty = true;
+    }
+
+    pub fn media_add_folder(&mut self, dir: PathBuf) {
+        self.media_browser.add_folder(dir);
+        self.media_refresh();
+    }
+
+    pub fn media_remove_folder(&mut self, chip: usize) {
+        self.media_browser.remove_folder(chip);
+        self.media_refresh();
+    }
+
+    /// Takes finished browser thumbnails.
+    fn poll_media_thumbs(&mut self) {
+        let Some(rx) = &self.media_browser.done else { return };
+        let mut got = false;
+        while let Ok((path, thumb)) = rx.try_recv() {
+            let image = match thumb {
+                Some((w, h, rgba)) => Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h)),
+                None => Image::default(),
+            };
+            self.media_thumbs.insert(path, image);
+            got = true;
+        }
+        self.media_dirty |= got;
+    }
+
+    /// The overlay's transport, every frame while Synthesis shows.
+    fn sync_overlay_transport(&self, ui: &MainWindow) {
+        let o = self.comp.layers.get(self.selected_layer).and_then(|l| l.overlay.as_ref());
+        ui.set_overlay_playing(o.is_some_and(|o| o.transport.playing));
+        ui.set_overlay_progress(o.map_or(0.0, |o| o.progress()));
+    }
+
+    /// The overlay's settings and the browser, when the overlay or the browser changed.
+    fn sync_media(&mut self, ui: &MainWindow, browser: bool) {
+        if browser && !self.media_listed {
+            self.media_listed = true;
+            let live = self.input_sources();
+            self.media_browser.refresh(&live);
+        }
+        if browser {
+            self.media_browser.want_thumbs(&self.media_thumbs);
+        }
+        let o = self.comp.layers.get(self.selected_layer).and_then(|l| l.overlay.as_ref());
+        ui.set_overlay_valid(o.is_some());
+        let current = o.map(|o| o.clip.source.clone());
+        if let Some(o) = o {
+            let name = o.clip.source.media_path().and_then(|p| p.file_name()).map_or_else(
+                || o.clip.source.live_name().unwrap_or_else(|| o.clip.source.default_name()),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            ui.set_overlay_name(name.into());
+            let thumb = o
+                .clip
+                .source
+                .media_path()
+                .and_then(|p| self.media_thumbs.get(p))
+                .or_else(|| self.thumbs.get(&o.clip.id))
+                .cloned();
+            ui.set_overlay_has_thumb(thumb.is_some());
+            ui.set_overlay_thumb(thumb.unwrap_or_default());
+            ui.set_overlay_blend(BlendMode::ALL.iter().position(|m| *m == o.blend).unwrap_or(0) as i32);
+            ui.set_overlay_play_mode(o.clip.play_mode.index() as i32);
+            ui.set_overlay_has_length(o.clip.length().is_some() && matches!(o.clip.source, ClipSource::Video { .. }));
+        }
+        if !browser {
+            return;
+        }
+        let chips: Vec<SharedString> = self.media_browser.chip_labels().into_iter().map(SharedString::from).collect();
+        ui.set_media_chips(ModelRc::new(VecModel::from(chips)));
+        ui.set_media_chip(self.media_browser.chip as i32);
+        ui.set_media_locked(self.media_browser.locked);
+        let tiles: Vec<MediaTile> = self
+            .media_browser
+            .items
+            .iter()
+            .map(|it| {
+                let thumb = it.path().and_then(|p| self.media_thumbs.get(p));
+                MediaTile {
+                    name: it.name.as_str().into(),
+                    kind: it.source.kind_label().into(),
+                    has_thumb: thumb.is_some_and(|t| t.size().width > 0),
+                    thumb: thumb.cloned().unwrap_or_default(),
+                    current: current.as_ref() == Some(&it.source),
+                }
+            })
+            .collect();
+        update_model(&self.media_tiles, tiles);
     }
 }
 
@@ -3818,6 +4181,8 @@ impl App {
 
 /// The Discover layout's index in `Layouts` (ui/layouts.slint).
 pub const DISCOVER_LAYOUT: i32 = 3;
+/// The Synthesis layout's index in `Layouts`.
+pub const SYNTHESIS_LAYOUT: i32 = 2;
 
 impl App {
     /// The window switched layout. Entering Discover shows its item on the Preview; leaving

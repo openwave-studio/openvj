@@ -15,18 +15,18 @@
 
 ## 3. MEDIA overlay
 
-- [ ] 3.1 Overlay model: a small clip (image, video or camera) + blend mode + amount + its own `look` for transform and colour
-- [ ] 3.2 Render the overlay through the clip pipeline and blend it over the visual; skip when there is none
-- [ ] 3.3 Transport: play, stop, previous/next in folder, loop mode, scrub bar, playback speed
-- [ ] 3.4 MEDIA section UI with transform and colour sections and their group tools
+- [x] 3.1 Overlay model (core `overlay.rs`): a small clip (image, video or camera) + blend mode + amount + scale/fit/flips + its own `look` for colour, on the layer
+- [x] 3.2 Render the overlay through the clip pipeline and blend it over the visual; skip when there is none
+- [x] 3.3 Transport: play, stop, previous/next in folder, loop mode, scrub bar, playback speed
+- [x] 3.4 MEDIA section UI with transform and colour sections and their group tools
 
 ## 4. Media browser
 
-- [ ] 4.1 Media folders in preferences; listing images and videos via `browser.rs`; Live sources from the camera list
-- [ ] 4.2 Thumbnails for images and video first frames, cached like library thumbnails, built in the background
-- [ ] 4.3 Browser UI: chips, grid, refresh, add folder, lock
+- [x] 4.1 Media folders in preferences; listing images and videos via `browser.rs`; Live sources from the camera list
+- [x] 4.2 Thumbnails for images and video first frames, made one at a time on a background thread and kept in memory
+- [x] 4.3 Browser UI: chips, grid, refresh, add folder, lock
 
 ## 5. Finish
 
-- [ ] 5.1 README "What works"
-- [ ] 5.2 `openspec archive add-synthesis-controls -y`, `openspec validate --all --strict`
+- [x] 5.1 README "What works"
+- [x] 5.2 `openspec archive add-synthesis-controls -y`, `openspec validate --all --strict`

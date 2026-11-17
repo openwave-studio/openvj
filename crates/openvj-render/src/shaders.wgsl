@@ -187,6 +187,10 @@ const MEDIA_SCALED_YCOCG_ALPHA: u32 = 6u;
 @fragment
 fn fs_media(in: VOut) -> @location(0) vec4f {
     let uv = (in.uv - 0.5) * u.uv_scale + 0.5 + u.uv_offset;
+    // Outside the picture (a fitted or shrunk overlay) is transparent.
+    if any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec4f(0.0);
+    }
     // Stay half a texel inside the cropped area so padding never bleeds in.
     let edge_a = u.crop.xy - 0.5 / vec2f(textureDimensions(tex_a));
     var c = textureSampleLevel(tex_a, samp, min(uv * u.crop.xy, edge_a), 0.0);

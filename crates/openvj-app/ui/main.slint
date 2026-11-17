@@ -9,7 +9,7 @@ import { MappingWindow, MapLayer, MapHandle, MapCorner } from "mapping.slint";
 import { Layouts, LayoutPicker, PlayerLayout, PresetRow } from "layouts.slint";
 import { Disc, DiscoverLayout, DiscParam } from "discover.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
-import { SynthesisLayout, SynthLayer } from "synthesis.slint";
+import { SynthesisLayout, SynthLayer, MediaTile } from "synthesis.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam }
 
@@ -1458,6 +1458,34 @@ export component MainWindow inherits Window {
     in property <bool> synth-meta-row-locked;
     // The selected layer's META look, as a one-effect chain.
     in property <[EffectData]> layer-look;
+    in property <[bool]> synth-media-locked;
+    // The focused layer's media overlay, and the media browser.
+    in property <bool> overlay-valid;
+    in property <string> overlay-name;
+    in property <image> overlay-thumb;
+    in property <bool> overlay-has-thumb;
+    in property <bool> overlay-playing;
+    in property <float> overlay-progress;
+    in property <bool> overlay-has-length;
+    in property <int> overlay-blend;
+    in property <int> overlay-play-mode;
+    in property <[ParamData]> overlay-params;
+    in property <[EffectData]> overlay-look;
+    in property <[string]> media-chips;
+    in property <int> media-chip;
+    in property <bool> media-locked;
+    in property <[MediaTile]> media-items;
+    callback overlay-pick(int);
+    callback overlay-clear();
+    callback overlay-transport(int);
+    callback overlay-scrub(float);
+    callback overlay-play-mode-picked(int);
+    callback overlay-blend-picked(int);
+    callback media-chip-picked(int);
+    callback media-lock();
+    callback media-refresh();
+    callback media-add-folder();
+    callback media-remove-folder(int);
     callback macro-toggle(int, int, int, int);
     callback macro-clear(int);
     public function set-layout(i: int) {
@@ -1607,6 +1635,35 @@ export component MainWindow inherits Window {
                 meta-locked: root.synth-meta-locked;
                 meta-row-locked: root.synth-meta-row-locked;
                 look: root.layer-look.length > 0 ? root.layer-look[0].params : [];
+                media-locked: root.synth-media-locked;
+                overlay-valid: root.overlay-valid;
+                overlay-name: root.overlay-name;
+                overlay-thumb: root.overlay-thumb;
+                overlay-has-thumb: root.overlay-has-thumb;
+                overlay-playing: root.overlay-playing;
+                overlay-progress: root.overlay-progress;
+                overlay-has-length: root.overlay-has-length;
+                overlay-blend: root.overlay-blend;
+                overlay-play-mode: root.overlay-play-mode;
+                overlay-params: root.overlay-params;
+                overlay-look: root.overlay-look.length > 0 ? root.overlay-look[0].params : [];
+                blend-modes: root.blend-modes;
+                play-modes: root.play-modes;
+                media-chips: root.media-chips;
+                media-chip: root.media-chip;
+                media-browser-locked: root.media-locked;
+                media-items: root.media-items;
+                overlay-pick(i) => { root.overlay-pick(i); }
+                overlay-clear => { root.overlay-clear(); }
+                overlay-transport(op) => { root.overlay-transport(op); }
+                overlay-scrub(at) => { root.overlay-scrub(at); }
+                overlay-play-mode-picked(i) => { root.overlay-play-mode-picked(i); }
+                overlay-blend-picked(i) => { root.overlay-blend-picked(i); }
+                media-chip-picked(i) => { root.media-chip-picked(i); }
+                media-lock => { root.media-lock(); }
+                media-refresh => { root.media-refresh(); }
+                media-add-folder => { root.media-add-folder(); }
+                media-remove-folder(i) => { root.media-remove-folder(i); }
                 focus-layer(l) => { root.synth-focus(l); keys.focus(); }
                 group-tool(s, o, op) => { root.synth-group(s, o, op); }
                 row-tool(r, op) => { root.synth-row(r, op); }

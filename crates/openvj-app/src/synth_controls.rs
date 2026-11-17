@@ -24,6 +24,9 @@ pub struct Knob {
 /// Values to write: (index, value).
 pub type Values = Vec<(usize, f32)>;
 
+/// One row-wide step: each section it changed, as it was before.
+type RowStep = Vec<(Key, Values)>;
+
 /// How many steps undo keeps per section and per row.
 const UNDO_DEPTH: usize = 64;
 
@@ -31,7 +34,7 @@ const UNDO_DEPTH: usize = 64;
 pub struct Groups {
     locked: HashSet<Key>,
     undo: HashMap<Key, Vec<Values>>,
-    row_undo: HashMap<(u64, i32), Vec<Vec<(Key, Values)>>>,
+    row_undo: HashMap<(u64, i32), Vec<RowStep>>,
     rng: Rng,
 }
 
