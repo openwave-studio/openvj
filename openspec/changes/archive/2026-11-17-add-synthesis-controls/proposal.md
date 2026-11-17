@@ -48,4 +48,4 @@ Out of scope: Synesthesia's row of preset slots above the scene controls (preset
 
 Decided (the maintainer, 2026-11-17): META and the media overlay live on the **layer**, so they stay when the VJ switches visuals, as in Synesthesia. Macros (per visual) don't move them.
 
-1. Master: a separate intensity knob in META, or the layer's existing Opacity moved into META? Default: the layer's Opacity, shown as Master, so there is one control, not two.
+1. Master: a separate intensity knob in META, or the layer's existing Opacity moved into META? Built with the default: the layer's Opacity, shown as Master, so there is one control, not two. Easy to change if the maintainer prefers a separate knob.
