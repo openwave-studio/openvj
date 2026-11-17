@@ -20,6 +20,7 @@ mod overlay;
 mod playback;
 mod playlist;
 pub mod shadertoy;
+mod song;
 mod tempo;
 
 pub use composition::*;
@@ -33,4 +34,5 @@ pub use output::*;
 pub use overlay::*;
 pub use playback::*;
 pub use playlist::*;
+pub use song::*;
 pub use tempo::*;

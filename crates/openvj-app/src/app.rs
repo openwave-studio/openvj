@@ -33,8 +33,8 @@ use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
     AudioLevels, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData, Lib, LibChip,
-    LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, ModNames, OutputWindow, ParamData, PresetRow,
-    Shadertoy, SynthLayer,
+    LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, ModNames, OutputWindow, ParamData, Pl,
+    PresetRow, Shadertoy, SynthLayer,
 };
 
 // The output mapping window's side of the app.
@@ -348,6 +348,8 @@ pub struct App {
 
     /// The Player layout's playlist and Automix (see player.rs).
     player: PlayerState,
+    /// Thumbnail ids of the playlist's presets, in row order.
+    player_thumbs: Vec<String>,
 }
 
 impl App {
@@ -463,6 +465,7 @@ impl App {
             frames: 0,
             fps_since: Instant::now(),
             player: PlayerState::default(),
+            player_thumbs: Vec::new(),
             library: crate::library::AppLibrary::load(),
             frame_time: 0.0,
         };
@@ -972,6 +975,7 @@ impl App {
         self.update_midi(now);
         self.inputs = self.update_audio(beat, dt);
         let inputs = self.inputs;
+        self.player.listen(&inputs, self.comp.bpm, dt, now, beat);
         for clip in self.comp.layers.iter_mut().flat_map(|l| l.clips.iter_mut().flatten().chain(l.held.iter_mut())) {
             clip.apply_macros(&inputs);
         }
@@ -1110,9 +1114,16 @@ impl App {
         if let Some(tab) = self.tab_request.take() {
             ui.set_props_tab(tab);
         }
+        if let Err(e) = self.player.autosave() {
+            self.set_status(format!("Could not save the playlist: {e}"));
+        }
+        if self.player.refresh_folder() {
+            self.player.dirty = true;
+        }
         if std::mem::take(&mut self.player.dirty) {
             self.sync_player(ui);
         }
+        self.sync_player_time(ui);
         let selected = self.selected.and_then(|(l, c)| self.comp.clip(l, c)).map(|c| c.name.clone());
         ui.set_selected_clip_name(selected.unwrap_or_default().into());
     }
@@ -2709,12 +2720,18 @@ impl App {
         for id in self.library.thumbs.take_updated() {
             if let Some(path) = self.library.thumbs.path(&id) {
                 self.library.view.forget_image(&path);
-                if self.library.view.seen.contains(&id) {
+                if self.library.view.seen.contains(&id) || self.player_thumbs.contains(&id) {
                     self.library.view.want_image(path);
                 }
             }
         }
         let decoded = self.library.view.take_decoded();
+        if !decoded.is_empty() && !self.player_thumbs.is_empty() {
+            let thumbs = &self.library.thumbs;
+            if self.player_thumbs.iter().filter_map(|id| thumbs.path(id)).any(|p| decoded.contains(&p)) {
+                self.player.dirty = true;
+            }
+        }
         if !decoded.is_empty() {
             self.set_tile_images(&decoded);
             self.discover_dirty |= self.layout == DISCOVER_LAYOUT;
@@ -4409,6 +4426,22 @@ impl App {
         self.discover_load();
     }
 
+    /// Adds the look under review, with its adjusted values, to the Player's playlist.
+    pub fn disc_add_to_playlist(&mut self) {
+        let Some(id) = self.discover_id() else { return };
+        let Some(mut clip) = self.discover.clip.clone() else { return };
+        if let Some(item) = self.library.lib.get(&id) {
+            clip.name = item.name.clone();
+        }
+        match self.player.add(&clip) {
+            Ok(()) => {
+                let n = self.player.playlist.presets.len();
+                self.set_status(format!("Added \"{}\" to the playlist ({n} presets).", clip.name));
+            }
+            Err(e) => self.set_status(e),
+        }
+    }
+
     /// Saves the clip under review as a new preset, carrying the item's intensity, tags and
     /// crates. Effects have no presets: returns false and the item is just kept.
     fn disc_save_preset(&mut self, id: &str) -> bool {
@@ -4484,6 +4517,7 @@ impl App {
             "s" | "S" => self.disc_decide(1),
             RIGHT => self.disc_decide(2),
             "x" | "X" => self.disc_decide(3),
+            "p" | "P" => self.disc_add_to_playlist(),
             _ => return false,
         }
         true
@@ -4603,7 +4637,8 @@ impl App {
 // ---------------------------------------------------------------- Player layout
 
 /// How long a preset can play, in the Player's per-row menu.
-const PLAY_CHOICES: [Span; 8] = [
+const PLAY_CHOICES: [Span; 9] = [
+    Span::Song,
     Span::Bars(4.0),
     Span::Bars(8.0),
     Span::Bars(16.0),
@@ -4618,7 +4653,14 @@ fn play_label(span: Span) -> String {
     match span {
         Span::Bars(_) => span.label(),
         Span::Seconds(s) => format!("{s:.0} s"),
+        Span::Song => "Song".into(),
     }
+}
+
+/// Minutes and seconds, as "1:05".
+fn clock(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
 fn strings(items: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
@@ -4689,34 +4731,100 @@ impl App {
     pub fn playlist_length(&mut self, choice: usize) {
         if let Some(span) = Span::TRANSITIONS.get(choice) {
             self.player.playlist.transition = *span;
-            self.player.dirty = true;
+            self.player.edited();
         }
     }
 
     pub fn playlist_style(&mut self, choice: usize) {
         if let Some(style) = TransitionStyle::ALL.get(choice) {
             self.player.playlist.style = *style;
-            self.player.dirty = true;
+            self.player.edited();
         }
     }
 
     pub fn playlist_shuffle(&mut self) {
         self.player.playlist.shuffle = !self.player.playlist.shuffle;
-        self.player.dirty = true;
+        self.player.edited();
     }
 
     pub fn playlist_repeat(&mut self) {
         self.player.playlist.repeat = !self.player.playlist.repeat;
-        self.player.dirty = true;
+        self.player.edited();
     }
 
     pub fn playlist_new(&mut self) {
-        self.player = PlayerState::default();
-        self.set_status("New playlist.");
+        self.player.new_playlist();
+        self.set_status("New playlist: add presets and it saves itself in the Playlists folder.");
     }
 
-    pub fn playlist_file(&self) -> Option<PathBuf> {
-        self.player.file.clone()
+    pub fn playlist_name(&self) -> String {
+        self.player.playlist.name.clone()
+    }
+
+    /// Opens a playlist from the picker; while Automix plays, it comes in with the transition.
+    pub fn playlist_pick(&mut self, index: usize) {
+        let Some(entry) = self.player.folder.get(index).cloned() else { return };
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        match self.player.switch(&entry.path, now, beat, self.comp.bpm) {
+            Ok(()) => self.set_status(format!("Playlist \"{}\".", entry.name)),
+            Err(e) => self.set_status(format!("Could not open playlist: {e}")),
+        }
+    }
+
+    pub fn automix_prev(&mut self) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        if !self.player.back(now, beat) {
+            self.set_status("Nothing played before this preset.");
+        }
+    }
+
+    /// A click on a row: plays that preset (starting Automix if it was stopped).
+    pub fn automix_jump(&mut self, index: usize) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        self.player.jump(index, now, beat, self.comp.bpm);
+    }
+
+    /// The mouse is over row `index` (-1: no row): its preset plays on the Preview, which
+    /// that row's thumbnail shows.
+    pub fn playlist_hover(&mut self, index: i32) {
+        let clip =
+            usize::try_from(index).ok().and_then(|i| self.player.playlist.presets.get(i)).map(|p| p.clip.clone());
+        self.player.hover = clip.as_ref().map(|_| index as usize);
+        match clip {
+            Some(mut clip) => {
+                clip.id = openvj_render::AUDITION_CLIP;
+                self.engine.audition(Some(clip));
+            }
+            None => self.stop_audition(),
+        }
+        self.player.dirty = true;
+    }
+
+    /// The playing preset's progress bar and time, every frame while Automix plays.
+    fn sync_player_time(&mut self, ui: &MainWindow) {
+        let now = self.now();
+        let beat = self.comp.beat_at(now);
+        let pl = ui.global::<Pl>();
+        let (progress, time) = match self.player.played(now, beat) {
+            None => (0.0, String::new()),
+            Some((p, secs)) => {
+                let song = self.player.current().and_then(|i| self.player.playlist.presets.get(i)).map(|p| p.play_for);
+                match song {
+                    Some(Span::Song) => (p, format!("Song · {}", clock(secs))),
+                    _ if p > 0.0 => (p, format!("{} left", clock(secs / p as f64 - secs))),
+                    _ => (p, String::new()),
+                }
+            }
+        };
+        if (pl.get_progress() - progress).abs() > 0.001 {
+            pl.set_progress(progress);
+        }
+        if pl.get_time().as_str() != time {
+            pl.set_time(time.into());
+        }
     }
 
     pub fn playlist_open(&mut self, path: &Path) {
@@ -4734,20 +4842,45 @@ impl App {
     }
 
     fn sync_player(&mut self, ui: &MainWindow) {
+        let thumb_ids = self.library.thumbs.want_clips(self.player.playlist.presets.iter().map(|p| &p.clip));
+        let mut thumbs = Vec::with_capacity(thumb_ids.len());
+        for id in &thumb_ids {
+            let path = self.library.thumbs.path(id);
+            let img = path.as_deref().and_then(|p| self.library.view.image(p));
+            if img.is_none()
+                && let Some(p) = path
+            {
+                self.library.view.want_image(p);
+            }
+            thumbs.push(img);
+        }
+        self.player_thumbs = thumb_ids;
         let list = &self.player.playlist;
         let current = self.player.current();
         let rows: Vec<PresetRow> = list
             .presets
             .iter()
+            .zip(thumbs)
             .enumerate()
-            .map(|(i, p)| PresetRow {
+            .map(|(i, (p, thumb))| PresetRow {
                 name: p.name().into(),
+                source: p.clip.source.default_name().into(),
                 kind: kind_tag(&p.clip.source).into(),
-                play_for: PLAY_CHOICES.iter().position(|s| *s == p.play_for).unwrap_or(3) as i32,
+                play_for: PLAY_CHOICES.iter().position(|s| *s == p.play_for).unwrap_or(4) as i32,
+                play_label: play_label(p.play_for).into(),
                 current: current == Some(i),
+                has_thumb: thumb.is_some(),
+                thumb: thumb.unwrap_or_default(),
             })
             .collect();
         ui.set_playlist_rows(ModelRc::new(VecModel::from(rows)));
+        let pl = ui.global::<Pl>();
+        let folder = &self.player.folder;
+        pl.set_playlists(strings(folder.iter().map(|e| e.name.clone())));
+        pl.set_counts(strings(folder.iter().map(|e| e.presets.to_string())));
+        let open = self.player.file.as_ref().and_then(|f| folder.iter().position(|e| &e.path == f));
+        pl.set_playlist(open.map_or(-1, |i| i as i32));
+        pl.set_hover(self.player.hover.map_or(-1, |i| i as i32));
         ui.set_playlist_name(list.name.clone().into());
         let n = list.presets.len();
         let info = match current {

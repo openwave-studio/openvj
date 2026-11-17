@@ -8,15 +8,36 @@ use crate::Clip;
 /// File extension of a saved playlist.
 pub const PLAYLIST_EXTENSION: &str = "ovjplaylist";
 
+/// The playlists folder: `~/Documents/openVJ/Playlists`, next to Presets and Effects.
+pub fn playlists_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(std::path::PathBuf::from(home).join("Documents").join("openVJ").join("Playlists"))
+}
+
 /// Beats in a bar (openVJ counts 4/4).
 const BEATS_PER_BAR: f64 = 4.0;
 
-/// How long something lasts: a number of bars at the current tempo, or seconds.
+/// The least a "Song" preset plays, in beats (16 bars), so a breakdown doesn't end it.
+pub const SONG_MIN_BEATS: f64 = 16.0 * BEATS_PER_BAR;
+
+/// The most a "Song" preset plays, in seconds, when no new song is heard.
+pub const SONG_MAX_SECS: f64 = 300.0;
+
+/// [`AutomixFrame::previous`] when the outgoing look came from another playlist.
+pub const OUTSIDE: usize = usize::MAX;
+
+/// Previous presets remembered for Previous.
+const HISTORY: usize = 64;
+
+/// How long something lasts: a number of bars at the current tempo, seconds, or (for how
+/// long a preset plays) until the song changes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Span {
     Bars(f32),
     Seconds(f32),
+    /// Until openVJ hears a new song, between [`SONG_MIN_BEATS`] and [`SONG_MAX_SECS`].
+    Song,
 }
 
 impl Span {
@@ -42,6 +63,7 @@ impl Span {
             Span::Seconds(s) => format!("{} seconds", trim(s)),
             Span::Bars(1.0) => "1 bar".into(),
             Span::Bars(b) => format!("{} bars", trim(b)),
+            Span::Song => "Until the song changes".into(),
         }
     }
 
@@ -50,6 +72,7 @@ impl Span {
         let (done, len) = match self {
             Span::Bars(b) => (elapsed.beats, b as f64 * BEATS_PER_BAR),
             Span::Seconds(s) => (elapsed.secs, s as f64),
+            Span::Song => (elapsed.secs, SONG_MAX_SECS),
         };
         if len <= 0.0 { 1.0 } else { (done / len).clamp(0.0, 1.0) }
     }
@@ -208,6 +231,7 @@ impl Moment {
                 let secs = s.max(0.0) as f64;
                 Moment { secs: self.secs + secs, beats: self.beats + secs / per_beat }
             }
+            Span::Song => Moment { secs: self.secs + SONG_MAX_SECS, beats: self.beats + SONG_MAX_SECS / per_beat },
         }
     }
 }
@@ -239,6 +263,8 @@ pub struct Automix {
     /// Position in `order`.
     pos: usize,
     previous: Option<usize>,
+    /// Presets played before the current one, oldest first, for Previous.
+    history: Vec<usize>,
     /// When the current preset started (its transition in starts here too).
     started: Moment,
     /// Bumped on each reshuffle, so every pass gets a new order.
@@ -259,6 +285,7 @@ impl Automix {
             order: Vec::new(),
             pos: 0,
             previous: None,
+            history: Vec::new(),
             started: Moment { secs: now_secs - back, beats: bar },
             pass: 0,
             seed,
@@ -279,6 +306,30 @@ impl Automix {
             }
         }
         order
+    }
+
+    /// Like [`Automix::start`], but from preset `index` (a click on a row while stopped).
+    pub fn start_at(list: &Playlist, index: usize, now_secs: f64, beats: f64, bpm: f32, seed: u64) -> Option<Self> {
+        let mut a = Self::start(list, now_secs, beats, bpm, seed)?;
+        if let Some(pos) = a.order.iter().position(|&i| i == index) {
+            a.pos = pos;
+        }
+        Some(a)
+    }
+
+    /// The first preset comes in over a look from another playlist, with the transition
+    /// (switching playlists while playing). [`AutomixFrame::previous`] is then [`OUTSIDE`].
+    pub fn handover(&mut self, now_secs: f64, beats: f64) {
+        self.previous = Some(OUTSIDE);
+        self.started = Moment { secs: now_secs, beats };
+    }
+
+    /// How far the current preset has played: (0..1 of its time, seconds played). A "Song"
+    /// preset counts towards its five-minute maximum.
+    pub fn played(&self, list: &Playlist, now_secs: f64, beats: f64) -> (f32, f64) {
+        let elapsed = self.started.since(Moment { secs: now_secs, beats });
+        let span = list.presets.get(self.current()).map_or(Span::DEFAULT_PLAY, |p| p.play_for);
+        (span.progress(elapsed) as f32, elapsed.secs.max(0.0))
     }
 
     /// The preset playing now, as an index into the playlist.
@@ -311,12 +362,63 @@ impl Automix {
         }
     }
 
+    /// Brings in preset `index` now, with the playlist's transition; the playlist then goes
+    /// on from there.
+    pub fn jump(&mut self, list: &Playlist, index: usize, now_secs: f64, beats: f64) {
+        self.fit(list);
+        if index >= list.presets.len() || index == self.current() {
+            return;
+        }
+        self.remember();
+        if let Some(pos) = self.order.iter().position(|&i| i == index) {
+            self.pos = pos;
+        }
+        self.started = Moment { secs: now_secs, beats };
+    }
+
+    /// Brings back the preset that played before the current one. False when there is none.
+    pub fn back(&mut self, list: &Playlist, now_secs: f64, beats: f64) -> bool {
+        self.fit(list);
+        while let Some(prev) = self.history.pop() {
+            if prev < list.presets.len() && prev != self.current() {
+                self.previous = Some(self.current());
+                if let Some(pos) = self.order.iter().position(|&i| i == prev) {
+                    self.pos = pos;
+                }
+                self.started = Moment { secs: now_secs, beats };
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The audio says a new song started: a preset set to play until the song changes moves
+    /// on, once it has played its minimum.
+    pub fn song_changed(&mut self, list: &Playlist, now_secs: f64, beats: f64) -> bool {
+        self.fit(list);
+        let now = Moment { secs: now_secs, beats };
+        let is_song = list.presets.get(self.current()).is_some_and(|p| p.play_for == Span::Song);
+        if is_song && self.started.since(now).beats >= SONG_MIN_BEATS && self.has_next(list) {
+            self.advance(list, now);
+            return true;
+        }
+        false
+    }
+
+    fn remember(&mut self) {
+        self.previous = Some(self.current());
+        self.history.push(self.current());
+        if self.history.len() > HISTORY {
+            self.history.remove(0);
+        }
+    }
+
     fn has_next(&self, list: &Playlist) -> bool {
         list.repeat || self.pos + 1 < self.order.len()
     }
 
     fn advance(&mut self, list: &Playlist, at: Moment) {
-        self.previous = Some(self.current());
+        self.remember();
         self.pos += 1;
         if self.pos >= self.order.len() {
             self.pass += 1;
@@ -344,7 +446,8 @@ impl Automix {
             let current = self.order.get(self.pos).copied();
             self.order = self.make_order(list);
             self.pos = current.and_then(|c| self.order.iter().position(|&i| i == c)).unwrap_or(0);
-            self.previous = self.previous.filter(|&p| p < list.presets.len());
+            self.previous = self.previous.filter(|&p| p < list.presets.len() || p == OUTSIDE);
+            self.history.retain(|&p| p < list.presets.len());
         }
     }
 }
@@ -451,6 +554,77 @@ mod tests {
     }
 
     #[test]
+    fn jump_and_back() {
+        let l = list(4, Span::Bars(32.0));
+        let mut a = Automix::start(&l, 0.0, 0.0, BPM, 1).unwrap();
+        let (s, b) = at(4.0);
+        a.jump(&l, 2, s, b);
+        let (s, b) = at(8.0);
+        let f = a.tick(&l, s, b, BPM);
+        assert_eq!((f.current, f.previous), (2, Some(0)), "crossfading from 0 into 2");
+        let (s, b) = at(20.0);
+        assert!(a.back(&l, s, b));
+        assert_eq!(a.current(), 0);
+        // After 0 comes 1 again in list order, and there's nothing more to go back to.
+        let (s, b) = at(24.0);
+        assert!(!a.back(&l, s, b));
+        let (s, b) = at(40.0);
+        a.next(&l, s, b);
+        assert_eq!(a.current(), 1);
+    }
+
+    #[test]
+    fn back_follows_what_played_with_shuffle() {
+        let mut l = list(6, Span::Bars(1.0));
+        l.shuffle = true;
+        l.transition = Span::Seconds(0.0);
+        let mut a = Automix::start(&l, 0.0, 0.0, BPM, 7).unwrap();
+        let mut played = vec![a.current()];
+        for bar in 1..4 {
+            let (s, b) = at(bar as f64 * 4.0);
+            played.push(a.tick(&l, s, b, BPM).current);
+        }
+        let (s, b) = at(14.0);
+        assert!(a.back(&l, s, b));
+        assert_eq!(a.current(), played[2]);
+    }
+
+    #[test]
+    fn song_presets_wait_for_the_song_to_change() {
+        let mut l = list(2, Span::Song);
+        l.transition = Span::Seconds(0.0);
+        let mut a = Automix::start(&l, 0.0, 0.0, BPM, 1).unwrap();
+        // A change heard before 16 bars (a breakdown) is ignored.
+        let (s, b) = at(32.0);
+        assert!(!a.song_changed(&l, s, b));
+        let (s, b) = at(200.0);
+        assert_eq!(a.tick(&l, s, b, BPM).current, 0, "no timer while waiting for the song");
+        assert!(a.song_changed(&l, s, b));
+        assert_eq!(a.current(), 1);
+        // Five minutes without a change: it moves on anyway.
+        let f = a.tick(&l, 100.0 + SONG_MAX_SECS, 200.0 + SONG_MAX_SECS * 2.0, BPM);
+        assert_eq!(f.current, 0);
+        // A bars preset ignores song changes.
+        let l = list(2, Span::Bars(32.0));
+        let mut a = Automix::start(&l, 0.0, 0.0, BPM, 1).unwrap();
+        let (s, b) = at(100.0);
+        assert!(!a.song_changed(&l, s, b));
+    }
+
+    #[test]
+    fn start_at_a_row_and_hand_over() {
+        let l = list(3, Span::Bars(32.0));
+        let mut a = Automix::start_at(&l, 2, 0.0, 0.0, BPM, 1).unwrap();
+        assert_eq!(a.current(), 2);
+        a.handover(0.0, 0.0);
+        let (s, b) = at(4.0);
+        let f = a.tick(&l, s, b, BPM);
+        assert_eq!((f.current, f.previous), (2, Some(OUTSIDE)));
+        let (s, b) = at(8.0);
+        assert_eq!(a.tick(&l, s, b, BPM).previous, None);
+    }
+
+    #[test]
     fn fade_through_black_goes_dark_in_the_middle() {
         let s = TransitionStyle::FadeThroughBlack;
         assert_eq!(s.weights(0.0), (1.0, 0.0));
@@ -496,5 +670,7 @@ mod tests {
         assert_eq!(Span::Bars(1.0).label(), "1 bar");
         assert_eq!(Span::Bars(32.0).label(), "32 bars");
         assert_eq!(Span::Seconds(2.5).label(), "2.5 seconds");
+        assert_eq!(Span::Song.label(), "Until the song changes");
+        assert_eq!(serde_json::to_string(&Span::Song).unwrap(), "\"song\"");
     }
 }

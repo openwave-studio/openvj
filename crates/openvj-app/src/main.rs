@@ -318,6 +318,7 @@ fn main() -> Result<()> {
         disc!(on_crate_clicked, |a, i: i32| a.disc_crate_clicked(i));
         disc!(on_add_crate, |a, t: slint::SharedString| a.disc_add_crate(&t));
         disc!(on_decide, |a, i: i32| a.disc_decide(i));
+        disc!(on_add_to_playlist, |a| a.disc_add_to_playlist());
         disc!(on_jump, |a, i: i32| a.disc_jump(i));
         let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
         g.on_key(move |text| {
@@ -593,17 +594,26 @@ fn main() -> Result<()> {
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
         ui.on_playlist_save(move || {
-            let current = app.try_borrow().ok().and_then(|a| a.playlist_file());
-            let path = current.or_else(|| {
-                playlist_dialog()
-                    .set_title("Save playlist")
-                    .set_file_name(format!("playlist.{}", openvj_core::PLAYLIST_EXTENSION))
-                    .save_file()
-            });
+            let name = app.try_borrow().map(|a| a.playlist_name()).unwrap_or_default();
+            let path = playlist_dialog()
+                .set_title("Save playlist as")
+                .set_file_name(format!("{name}.{}", openvj_core::PLAYLIST_EXTENSION))
+                .save_file();
             if let Some(path) = path {
                 with_app(&app, &w, &o, |a| a.playlist_save(&path));
             }
         });
+    }
+    {
+        let g = ui.global::<Pl>();
+        let (app, w, o) = (app.clone(), w.clone(), o.clone());
+        let (app2, w2, o2) = (app.clone(), w.clone(), o.clone());
+        let (app3, w3, o3) = (app.clone(), w.clone(), o.clone());
+        let (app4, w4, o4) = (app.clone(), w.clone(), o.clone());
+        g.on_pick(move |i| with_app(&app, &w, &o, |a| a.playlist_pick(i.max(0) as usize)));
+        g.on_prev(move || with_app(&app2, &w2, &o2, |a| a.automix_prev()));
+        g.on_jump(move |i| with_app(&app3, &w3, &o3, |a| a.automix_jump(i.max(0) as usize)));
+        g.on_hovered(move |i| with_app(&app4, &w4, &o4, |a| a.playlist_hover(i)));
     }
     {
         let (app, w, o) = (app.clone(), w.clone(), o.clone());
@@ -663,6 +673,10 @@ fn main() -> Result<()> {
     {
         let show = show_output.clone();
         ui.on_fullscreen_output(move || show(true, Some(true)));
+    }
+    {
+        let show = show_output.clone();
+        ui.global::<Pl>().on_fullscreen(move || show(true, Some(true)));
     }
     {
         let o = o.clone();

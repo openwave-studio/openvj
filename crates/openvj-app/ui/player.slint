@@ -1,0 +1,522 @@
+// The Player layout: a show-ready automix playlist beside a large output. Pick a playlist
+// by name, press play and let it run (full screen if you like); edit mode holds the
+// controls that change the playlist, so a click during a show only plays a row.
+import { Theme, CloseIcon } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Chevron, FlatButton, BlendPicker } from "controls.slint";
+import { LabeledPicker } from "layouts.slint";
+
+/// One preset row in the Player's playlist.
+export struct PresetRow {
+    name: string,
+    // The source it plays (generator or ISF name), shown under the name.
+    source: string,
+    // Source kind for the colour tag ("gen", "video", ...), see Theme.kind-color.
+    kind: string,
+    // Index into the play-for choices, and its label.
+    play-for: int,
+    play-label: string,
+    current: bool,
+    thumb: image,
+    has-thumb: bool,
+}
+
+/// The Player's state beyond the playlist rows.
+export global Pl {
+    // Playlists in the playlists folder, by name, and their preset counts.
+    in property <[string]> playlists;
+    in property <[string]> counts;
+    // The open playlist in `playlists`, or -1 while it isn't saved there yet.
+    in property <int> playlist: -1;
+    in-out property <bool> editing;
+    // How far the playing preset is (0..1) and its time ("1:20 left").
+    in property <float> progress;
+    in property <string> time;
+    // The row under the mouse, whose thumbnail plays live (-1 for none).
+    in-out property <int> hover: -1;
+    callback pick(int);
+    callback prev();
+    callback jump(int);
+    callback hovered(int);
+    callback fullscreen();
+}
+
+/// Transport icons on a 16×16 grid.
+component TransportIcon inherits Path {
+    in property <string> icon;
+    in property <color> color: Theme.text;
+    width: 16px;
+    height: 16px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    property <bool> filled: root.icon == "play" || root.icon == "stop" || root.icon == "prev" || root.icon == "next";
+    fill: root.filled ? root.color : transparent;
+    stroke: root.filled ? transparent : root.color;
+    stroke-width: 1.6px;
+    commands: root.icon == "play" ? "M 4 2 L 14 8 L 4 14 Z"
+        : root.icon == "stop" ? "M 3 3 L 13 3 L 13 13 L 3 13 Z"
+        : root.icon == "prev" ? "M 2 2 L 4 2 L 4 14 L 2 14 Z M 14 2 L 5 8 L 14 14 Z"
+        : root.icon == "next" ? "M 12 2 L 14 2 L 14 14 L 12 14 Z M 2 2 L 11 8 L 2 14 Z"
+        : root.icon == "shuffle" ? "M 1 4 L 4 4 C 8 4 8 12 12 12 L 15 12 M 1 12 L 4 12 C 8 12 8 4 12 4 L 15 4 M 13 2 L 15 4 L 13 6 M 13 10 L 15 12 L 13 14"
+        : "M 1 5 L 1 1 L 5 1 M 11 1 L 15 1 L 15 5 M 15 11 L 15 15 L 11 15 M 5 15 L 1 15 L 1 11";
+}
+
+/// A square transport button: Previous, Next, Shuffle, Full screen.
+component TransportButton inherits Rectangle {
+    in property <string> icon;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 40px;
+    height: 34px;
+    border-radius: Theme.radius;
+    background: !root.enabled ? Theme.panel-2 : root.active ? Theme.accent.with-alpha(0.14) : ta.pressed ? Theme.pressed : ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+    TransportIcon {
+        icon: root.icon;
+        color: root.active ? Theme.accent : Theme.text;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The playlist picker: the open playlist's name, opening the list of the folder's playlists.
+component PlaylistPicker inherits Rectangle {
+    in property <string> name;
+    height: 34px;
+    border-radius: Theme.radius;
+    background: ta.has-hover ? #1d1d20 : Theme.panel-2;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.name == "" ? "Untitled playlist" : root.name;
+            color: Theme.text;
+            font-size: Theme.font-normal;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Chevron {
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 240px);
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 10px;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #000000b0;
+            VerticalLayout {
+                padding: 6px;
+                if Pl.playlists.length == 0: Text {
+                    height: 30px;
+                    x: 10px;
+                    text: "No playlists yet: add a preset and it saves itself.";
+                    color: Theme.text-dim;
+                    font-size: Theme.font-body;
+                    vertical-alignment: center;
+                }
+                for item[i] in Pl.playlists: Rectangle {
+                    height: 30px;
+                    border-radius: Theme.radius;
+                    background: i == Pl.playlist ? Theme.accent.with-alpha(0.3) : item-ta.has-hover ? Theme.raised : transparent;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        Text {
+                            horizontal-stretch: 1;
+                            text: item;
+                            color: Theme.text;
+                            font-size: Theme.font-normal;
+                            font-weight: i == Pl.playlist ? 600 : 400;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: Pl.counts[i];
+                            color: Theme.text-dim;
+                            font-size: Theme.font-body;
+                            vertical-alignment: center;
+                        }
+                    }
+                    item-ta := TouchArea {
+                        clicked => { Pl.pick(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component RowIcon inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    width: 22px;
+    height: 22px;
+    border-radius: Theme.radius-small;
+    background: ta.has-hover ? Theme.raised : transparent;
+    Text {
+        text: root.text;
+        color: ta.has-hover ? Theme.text : Theme.text-dim;
+        font-size: Theme.font-body;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The Player layout: the output, large, beside the playlist.
+export component PlayerLayout inherits Rectangle {
+    in property <image> output-image;
+    // The Preview monitor, which plays the hovered row's preset.
+    in property <image> hover-image;
+    in property <string> playlist-name;
+    in property <string> info;
+    in property <[PresetRow]> rows;
+    in property <bool> live;
+    in property <[string]> length-names;
+    in property <[string]> length-headings;
+    in property <int> length;
+    in property <[string]> style-names;
+    in property <int> style;
+    in property <[string]> play-names;
+    in property <bool> shuffle;
+    in property <bool> repeat;
+    // The clip selected in the Mixer, which "Add" puts in the playlist ("" if none).
+    in property <string> selected-clip;
+    callback toggle();
+    callback next();
+    callback add-selected();
+    callback remove(int);
+    callback move(int, int);
+    callback play-for(int, int);
+    callback length-picked(int);
+    callback style-picked(int);
+    callback shuffle-toggled();
+    callback repeat-toggled();
+    callback open();
+    callback save();
+    callback new();
+
+    background: Theme.bg;
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.track;
+            border-radius: Theme.radius;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.output-image;
+                image-fit: contain;
+            }
+            if !root.live: Text {
+                y: parent.height - 40px;
+                text: root.rows.length == 0
+                    ? "Select a clip in Mixer or the library, then Add to playlist."
+                    : "Press play, or click a preset to start there.";
+                color: Theme.text-dim;
+                font-size: Theme.font-normal;
+            }
+        }
+
+        Rectangle {
+            width: 460px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.separator;
+            border-radius: Theme.radius;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+
+                // The playlist: pick one, see its size, start a new one, edit it.
+                HorizontalLayout {
+                    spacing: 8px;
+                    PlaylistPicker {
+                        horizontal-stretch: 1;
+                        name: root.playlist-name;
+                    }
+                    Text {
+                        text: root.rows.length == 1 ? "1 preset" : root.rows.length + " presets";
+                        color: Theme.text-dim;
+                        font-size: Theme.font-body;
+                        vertical-alignment: center;
+                    }
+                    FlatButton {
+                        height: 34px;
+                        text: "New";
+                        clicked => { root.new(); }
+                    }
+                    FlatButton {
+                        height: 34px;
+                        text: "Edit";
+                        active: Pl.editing;
+                        clicked => { Pl.editing = !Pl.editing; }
+                    }
+                }
+
+                // Transport, as in a media player.
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle {
+                        width: 46px;
+                        height: 46px;
+                        border-radius: 23px;
+                        background: root.live ? Theme.accent.with-alpha(0.2) : go-ta.has-hover ? Theme.raised : Theme.panel-2;
+                        border-width: 2px;
+                        border-color: root.rows.length > 0 ? Theme.accent : Theme.border;
+                        opacity: root.rows.length > 0 ? 1 : 0.5;
+                        TransportIcon {
+                            x: (parent.width - self.width) / 2 + (root.live ? 0 : 1px);
+                            icon: root.live ? "stop" : "play";
+                            color: root.rows.length > 0 ? Theme.accent : Theme.text-dim;
+                        }
+                        go-ta := TouchArea {
+                            enabled: root.rows.length > 0;
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle(); }
+                        }
+                    }
+                    TransportButton {
+                        y: (parent.height - self.height) / 2;
+                        icon: "prev";
+                        enabled: root.live;
+                        clicked => { Pl.prev(); }
+                    }
+                    TransportButton {
+                        y: (parent.height - self.height) / 2;
+                        icon: "next";
+                        enabled: root.live;
+                        clicked => { root.next(); }
+                    }
+                    TransportButton {
+                        y: (parent.height - self.height) / 2;
+                        icon: "shuffle";
+                        active: root.shuffle;
+                        clicked => { root.shuffle-toggled(); }
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.info;
+                        color: Theme.text-dim;
+                        font-size: Theme.font-body;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    TransportButton {
+                        y: (parent.height - self.height) / 2;
+                        icon: "fullscreen";
+                        clicked => { Pl.fullscreen(); }
+                    }
+                }
+
+                // Edit mode: what changes the playlist.
+                if Pl.editing: VerticalLayout {
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LabeledPicker {
+                            horizontal-stretch: 1;
+                            label: "LENGTH";
+                            items: root.length-names;
+                            headings: root.length-headings;
+                            current: root.length;
+                            picked(i) => { root.length-picked(i); }
+                        }
+                        LabeledPicker {
+                            horizontal-stretch: 1;
+                            label: "STYLE";
+                            items: root.style-names;
+                            headings: [];
+                            current: root.style;
+                            picked(i) => { root.style-picked(i); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FlatButton {
+                            horizontal-stretch: 1;
+                            text: root.selected-clip == "" ? "+ Add (select a clip first)" : "+ Add " + root.selected-clip;
+                            enabled: root.selected-clip != "";
+                            clicked => { root.add-selected(); }
+                        }
+                        FlatButton {
+                            text: "Repeat";
+                            active: root.repeat;
+                            clicked => { root.repeat-toggled(); }
+                        }
+                        FlatButton {
+                            text: "Open…";
+                            clicked => { root.open(); }
+                        }
+                        FlatButton {
+                            text: "Save as…";
+                            clicked => { root.save(); }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.separator;
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 2px;
+                        for row[i] in root.rows: Rectangle {
+                            height: 66px;
+                            border-radius: Theme.radius;
+                            background: row.current ? Theme.accent.with-alpha(0.12) : row-ta.has-hover ? Theme.raised : transparent;
+                            border-width: row.current ? 1px : 0;
+                            border-color: Theme.accent;
+                            clip: true;
+                            row-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Pl.jump(i); }
+                                changed has-hover => {
+                                    if self.has-hover {
+                                        Pl.hovered(i);
+                                    } else if Pl.hover == i {
+                                        Pl.hovered(-1);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding: 6px;
+                                padding-left: 4px;
+                                spacing: 10px;
+                                Text {
+                                    width: 22px;
+                                    text: i + 1;
+                                    color: row.current ? Theme.accent : Theme.text-faint;
+                                    font-size: Theme.font-body;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: 96px;
+                                    border-radius: Theme.radius-small;
+                                    background: #000;
+                                    clip: true;
+                                    if !row.has-thumb: Rectangle {
+                                        background: Theme.kind-color(row.kind).with-alpha(0.25);
+                                    }
+                                    if row.has-thumb && Pl.hover != i: Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: row.thumb;
+                                        image-fit: cover;
+                                    }
+                                    if Pl.hover == i: Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: root.hover-image;
+                                        image-fit: cover;
+                                    }
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: row.name;
+                                        color: row.current ? Theme.accent : Theme.text;
+                                        font-size: Theme.font-normal;
+                                        font-weight: 600;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: row.source;
+                                        color: Theme.text-dim;
+                                        font-size: Theme.font-body;
+                                        overflow: elide;
+                                    }
+                                }
+                                if !Pl.editing: Text {
+                                    text: row.current && Pl.time != "" ? Pl.time : row.play-label;
+                                    color: row.current ? Theme.accent : Theme.text-faint;
+                                    font-size: Theme.font-body;
+                                    vertical-alignment: center;
+                                }
+                                if Pl.editing: VerticalLayout {
+                                    alignment: center;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        BlendPicker {
+                                            width: 96px;
+                                            modes: root.play-names;
+                                            current: row.play-for;
+                                            menu-width: 170px;
+                                            picked(k) => { root.play-for(i, k); }
+                                        }
+                                        RowIcon {
+                                            text: "↑";
+                                            clicked => { root.move(i, i - 1); }
+                                        }
+                                        RowIcon {
+                                            text: "↓";
+                                            clicked => { root.move(i, i + 1); }
+                                        }
+                                        Rectangle {
+                                            width: 22px;
+                                            height: 22px;
+                                            border-radius: Theme.radius-small;
+                                            background: x-ta.has-hover ? Theme.raised : transparent;
+                                            CloseIcon {
+                                                size: 8px;
+                                            }
+                                            x-ta := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.remove(i); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Time played of the preset on air.
+                            if row.current: Rectangle {
+                                x: 0;
+                                y: parent.height - 3px;
+                                width: parent.width * clamp(Pl.progress, 0, 1);
+                                height: 3px;
+                                background: Theme.accent;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
