@@ -11,15 +11,17 @@ import { Disc, DiscoverLayout, DiscParam } from "discover.slint";
 import { Shadertoy, ShadertoyDialog } from "shadertoy.slint";
 import { SynthesisLayout, SynthLayer } from "synthesis.slint";
 import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
-export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam }
+import { Drag, DragSource } from "drag.slint";
+export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam, Drag }
 
 export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MidiLearn }
 
 component ClipCell inherits Rectangle {
     in property <CellData> data;
-    in property <bool> armed;
     in property <string> midi-id;
     callback clicked();
+    // Something from the browser or library was dropped here.
+    callback dropped(string);
     callback pressed();
     callback released();
     callback right-clicked();
@@ -27,9 +29,11 @@ component ClipCell inherits Rectangle {
     width: Theme.cell-w;
     height: Theme.cell-h;
     border-radius: Theme.radius-small;
-    background: root.data.filled ? Theme.panel-2 : (ta.has-hover && root.armed ? Theme.accent-dim : ta.has-hover ? #ffffff08 : Theme.track);
-    border-width: root.data.selected ? 2px : root.data.playing ? 2px : 1px;
-    border-color: root.data.playing ? Theme.playing : root.data.selected ? Theme.selected : (ta.has-hover ? Theme.border : Theme.separator);
+    // An effect only lands on a filled slot.
+    property <bool> accepts: Drag.kind == "source" || (Drag.kind == "effect" && root.data.filled);
+    background: root.data.filled ? Theme.panel-2 : drop.has-drag ? Theme.accent-dim : ta.has-hover ? #ffffff08 : Theme.track;
+    border-width: drop.has-drag || root.data.selected || root.data.playing ? 2px : 1px;
+    border-color: drop.has-drag ? Theme.accent : root.data.playing ? Theme.playing : root.data.selected ? Theme.selected : (ta.has-hover ? Theme.border : Theme.separator);
 
     if root.data.filled: VerticalLayout {
         padding: root.data.playing || root.data.selected ? 2px : 1px;
@@ -108,17 +112,28 @@ component ClipCell inherits Rectangle {
     }
 
     // Empty slots show a + like openDJ's empty pads.
-    if !root.data.filled && !root.armed: Text {
+    if !root.data.filled && !drop.has-drag: Text {
         text: "+";
         color: ta.has-hover || root.data.selected ? Theme.text-dim : Theme.tick;
         font-size: 16px;
         font-weight: 300;
     }
-    if !root.data.filled && root.armed && ta.has-hover: Text {
-        text: "place here";
-        color: Theme.accent;
-        font-size: Theme.font-small;
-        font-weight: 600;
+    if drop.has-drag: Rectangle {
+        x: 4px;
+        y: parent.height - self.height - 4px;
+        width: parent.width - 8px;
+        height: 16px;
+        border-radius: 3px;
+        background: Theme.accent;
+        Text {
+            width: parent.width - 8px;
+            text: (Drag.kind == "effect" ? "Add to clip: " : root.data.filled ? "Replace: " : "Place: ") + Drag.label;
+            color: Theme.on-accent;
+            font-size: Theme.font-small;
+            font-weight: 600;
+            overflow: elide;
+            horizontal-alignment: center;
+        }
     }
 
     ta := TouchArea {
@@ -134,6 +149,13 @@ component ClipCell inherits Rectangle {
             if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) {
                 root.released();
             }
+        }
+    }
+    drop := DropArea {
+        can-drop(e) => { return root.accepts ? DragAction.copy : DragAction.none; }
+        dropped(e) => {
+            root.dropped(Drag.item);
+            return DragAction.copy;
         }
     }
     MidiSpot {
@@ -154,16 +176,26 @@ component LayerStrip inherits Rectangle {
     callback bypass();
     callback solo();
     callback clear();
+    // Dropped from the browser or library: an effect goes on the layer, a source into
+    // the layer's first empty slot.
+    callback dropped(string);
 
     width: Theme.strip-w;
     height: Theme.cell-h;
     border-radius: Theme.radius-small;
-    background: root.data.selected ? Theme.raised : Theme.panel;
-    border-width: 1px;
-    border-color: root.data.selected ? Theme.accent : Theme.separator;
+    background: drop.has-drag ? Theme.accent-dim : root.data.selected ? Theme.raised : Theme.panel;
+    border-width: drop.has-drag ? 2px : 1px;
+    border-color: drop.has-drag || root.data.selected ? Theme.accent : Theme.separator;
 
     TouchArea {
         clicked => { root.select(); }
+    }
+    drop := DropArea {
+        can-drop(e) => { return Drag.kind != "" ? DragAction.copy : DragAction.none; }
+        dropped(e) => {
+            root.dropped(Drag.item);
+            return DragAction.copy;
+        }
     }
 
     // Layers in a group share a coloured edge and show the group's name.
@@ -263,6 +295,23 @@ component LayerStrip inherits Rectangle {
             modes: root.blend-modes;
             current: root.data.blend;
             picked(i) => { root.blend(i); }
+        }
+    }
+    if drop.has-drag: Rectangle {
+        x: 4px;
+        y: parent.height - self.height - 4px;
+        width: parent.width - 8px;
+        height: 18px;
+        border-radius: 3px;
+        background: Theme.accent;
+        Text {
+            width: parent.width - 8px;
+            text: Drag.kind == "effect" ? "Add to layer: " + Drag.label : "Into first empty slot";
+            color: Theme.on-accent;
+            font-size: Theme.font-small;
+            font-weight: 600;
+            overflow: elide;
+            horizontal-alignment: center;
         }
     }
 }
@@ -387,7 +436,6 @@ component ClipGrid inherits Rectangle {
     in property <[LayerData]> layers;
     in property <[ColumnData]> columns;
     in property <[string]> blend-modes;
-    in property <bool> armed;
     in property <float> master;
     callback cell-clicked(int, int);
     callback cell-pressed(int, int);
@@ -507,10 +555,11 @@ component ClipGrid inherits Rectangle {
                     bypass => { root.layer-bypass(layer.index); }
                     solo => { root.layer-solo(layer.index); }
                     clear => { root.layer-clear(layer.index); }
+                    dropped(item) => { Drag.dropped-on-layer(item, layer.index); }
                 }
                 for cell[c] in layer.cells: ClipCell {
                     data: cell;
-                    armed: root.armed;
+                    dropped(item) => { Drag.dropped-on-slot(item, layer.index, c); }
                     midi-id: cell.filled ? "clip:" + layer.index + ":" + c : "";
                     clicked => { root.cell-clicked(layer.index, c); }
                     pressed => { root.cell-pressed(layer.index, c); }
@@ -960,7 +1009,7 @@ component Browser inherits Rectangle {
                 clicked => { Lib.toggle-expanded(); }
             }
             Text {
-                text: root.tab == 2 ? "click = preview on the selected clip" : root.tab == 0 ? "click = preview · double-click = put in slot" : "click to pick · click a slot to place";
+                text: root.tab == 2 ? "click = preview · drag onto a clip or layer" : root.tab == 0 ? "click = preview · drag onto a slot or layer" : "drag a file onto a slot · double-click = selected slot";
                 color: Theme.text-faint;
                 font-size: 10px;
                 vertical-alignment: center;
@@ -992,12 +1041,21 @@ component Browser inherits Rectangle {
                 }
                 // The first input is always the Layer Router; the hint shows when there are
                 // no cameras or Syphon servers besides it.
-                for item[i] in root.inputs: FlatButton {
+                for item[i] in root.inputs: Rectangle {
                     max-width: 140px;
-                    text: item.name;
-                    active: item.armed;
-                    tint: Theme.kind-color(item.kind);
-                    clicked => { root.input-clicked(i); }
+                    min-width: input-btn.min-width;
+                    DragSource {
+                        item: "input:" + i;
+                        label: item.name;
+                        input-btn := FlatButton {
+                            width: parent.width;
+                            height: parent.height;
+                            text: item.name;
+                            active: item.picked;
+                            tint: Theme.kind-color(item.kind);
+                            clicked => { root.input-clicked(i); }
+                        }
+                    }
                 }
                 if root.inputs.length <= 1: Text {
                     horizontal-stretch: 1;
@@ -1098,7 +1156,7 @@ component Browser inherits Rectangle {
                 for item[i] in root.files: Rectangle {
                     height: 26px;
                     border-radius: Theme.radius-small;
-                    background: item.armed ? Theme.accent-dim : file-ta.has-hover ? Theme.raised : mod(i, 2) == 0 ? #161819 : transparent;
+                    background: item.picked ? Theme.accent-dim : file-ta.has-hover ? Theme.raised : mod(i, 2) == 0 ? #161819 : transparent;
                     HorizontalLayout {
                         padding-left: 6px;
                         padding-right: 8px;
@@ -1131,9 +1189,14 @@ component Browser inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
-                    file-ta := TouchArea {
-                        clicked => { root.file-clicked(i); }
-                        double-clicked => { root.file-double-clicked(i); }
+                    DragSource {
+                        enabled: item.kind != "dir";
+                        item: "file:" + i;
+                        label: item.name;
+                        file-ta := TouchArea {
+                            clicked => { root.file-clicked(i); }
+                            double-clicked => { root.file-double-clicked(i); }
+                        }
                     }
                 }
             }
@@ -1226,8 +1289,6 @@ export component MainWindow inherits Window {
     callback deck-renamed(int, string);
     callback deck-remove(int);
     in property <[string]> blend-modes;
-    in property <bool> armed;
-    in property <string> armed-label;
 
     // Monitors and transport.
     in property <image> output-image;
@@ -1609,21 +1670,20 @@ export component MainWindow inherits Window {
                 padding: 8px;
                 spacing: 8px;
 
-                if Lib.expanded: ExpandedLibrary {
-                    horizontal-stretch: 1;
-                    is-effects: root.browser-tab == 2;
-                    clip-selected: root.clip-valid;
-                    group-selected: root.group-valid;
-                }
-                if !Lib.expanded: VerticalLayout {
+                // The expanded library lies over the clip grid. While something is dragged out
+                // of it, it steps aside so the slots and layers underneath take the drop.
+                Rectangle {
                 horizontal-stretch: 1;
+                VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                visible: !Lib.expanded || Drag.kind != "";
                 spacing: 6px;
                 ClipGrid {
                     vertical-stretch: 1;
                     layers: root.layers;
                     columns: root.columns;
                     blend-modes: root.blend-modes;
-                    armed: root.armed;
                     cell-clicked(l, c) => { root.cell-clicked(l, c); keys.focus(); }
                     cell-pressed(l, c) => { root.cell-pressed(l, c); }
                     cell-released(l, c) => { root.cell-released(l, c); }
@@ -1645,6 +1705,15 @@ export component MainWindow inherits Window {
                     add => { root.deck-add(); keys.focus(); }
                     renamed(i, t) => { root.deck-renamed(i, t); keys.focus(); }
                     remove(i) => { root.deck-remove(i); keys.focus(); }
+                }
+                }
+                if Lib.expanded: ExpandedLibrary {
+                    width: parent.width;
+                    height: parent.height;
+                    visible: Drag.kind == "";
+                    is-effects: root.browser-tab == 2;
+                    clip-selected: root.clip-valid;
+                    group-selected: root.group-valid;
                 }
                 }
 
@@ -1830,8 +1899,10 @@ export component MainWindow inherits Window {
                     padding-right: 12px;
                     spacing: 16px;
                     Text {
-                        text: root.armed ? "● " + root.armed-label + " — click a slot to place it (Esc cancels)" : root.status;
-                        color: root.armed ? Theme.accent : Theme.text-dim;
+                        text: Drag.kind == "effect" ? "● " + Drag.label + ": drop it on a clip, a layer or an effect chain"
+                            : Drag.kind != "" ? "● " + Drag.label + ": drop it on a slot, or on a layer for its first empty slot"
+                            : root.status;
+                        color: Drag.kind != "" ? Theme.accent : Theme.text-dim;
                         font-size: 11px;
                         vertical-alignment: center;
                         overflow: elide;
