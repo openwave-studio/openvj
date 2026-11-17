@@ -8,7 +8,7 @@
 ## 2. META controls
 
 - [ ] 2.1 `effects/look.fs` hidden fixed effect: master, invert, brightness, gamma, contrast, hue, saturation, mirror v/h, limit colors + low/high, alpha, flips, fit/fill; no-op at defaults
-- [ ] 2.2 Store it (layer or visual, per open question 1); save/load with the composition
+- [ ] 2.2 Store it on the layer (decided); save/load with the composition
 - [ ] 2.3 Render: one pass after the effects, skipped when no-op
 - [ ] 2.4 META row in Synthesis: switches, knobs, colour swatches; group tools on each section and the row
 - [ ] 2.5 Render tests: defaults are identical; invert, limit colors and alpha give the expected pixels

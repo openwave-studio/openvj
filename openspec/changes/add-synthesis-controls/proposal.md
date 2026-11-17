@@ -6,7 +6,8 @@ The Synthesis layout (PR #18) has a preview, 8 macros and one knob section per s
 
 ## What Changes
 
-- **Group tools.** Every Synthesis section (SOURCE, each FX, META, MEDIA's transform and colour) gets **lock**, **undo**, **default** and **random** buttons. Each row of sections (SCENE and META) also gets the four as row-wide buttons: random and default skip locked sections, undo steps back the last row-wide change. Reuses the Discover layout's `Knobs` model (lock, undo stack, reset, seeded random).
+- **Two rows, as in Synesthesia.** SCENE CONTROLS holds the visual's own sections (SOURCE and one per effect); META CONTROLS holds the look every visual shares. MEDIA sits below.
+- **Group tools.** Every Synthesis section (SOURCE, each FX, META, MEDIA's transform and colour) gets **lock**, **undo**, **default** and **random** buttons. Each row of sections (SCENE and META) also gets the four as row-wide buttons: random and default skip locked sections, undo steps back the last row-wide change. Same behaviour and seeded random as the Discover layout's Randomize, Undo and Reset.
 - **META controls**, the same for every visual:
   - **Master** (the visual's intensity, fades it to black)
   - **Color**: Invert, Brightness, Gamma, Contrast, Hue, Saturation
@@ -22,7 +23,7 @@ The Synthesis layout (PR #18) has a preview, 8 macros and one knob section per s
 - **Media browser** in the MEDIA section: chips for All, Live sources (cameras), and each media folder the VJ adds; a thumbnail grid of images and videos; **refresh**, **add folder** and **lock** (while locked, clicks in the browser don't change the overlay, to avoid accidents during a show). Clicking a tile sets the overlay. It reuses the library's grid and thumbnail cache and the file browser's media listing; folders are saved in preferences.
 - Knobs only, as Synthesis already decided; on/off controls are small switches; colours use a swatch with a colour picker popup.
 
-Out of scope: per-generator custom sections, renaming macros, MIDI learn on the new controls (they become mappable when add-midi-learn grows clip targets), video audio, and the overlay in the Mixer's clip properties (it shows in Synthesis only for now; the data is shared, so the Mixer can follow).
+Out of scope: Synesthesia's row of preset slots above the scene controls (presets exist; a slot row can follow), an XY pad for 2D inputs, per-generator custom sections, renaming macros, MIDI learn on the new controls (they become mappable when add-midi-learn grows clip targets), video audio, and the overlay in the Mixer's clip properties (it shows in Synthesis only for now; the data is shared, so the Mixer can follow).
 
 ## Capabilities
 
@@ -31,7 +32,7 @@ Out of scope: per-generator custom sections, renaming macros, MIDI learn on the 
 
 ## Touches
 
-- crates/openvj-core: new `effects/look.fs` (hidden), `effect.rs` (register it), `composition.rs` (where META and the overlay are stored, see Open questions), `macros.rs` (ParamRef for META)
+- crates/openvj-core: new `effects/look.fs` (hidden), `effect.rs` (register it), `composition.rs` (Layer gets `look` and `overlay`)
 - crates/openvj-render: `src/lib.rs` (look pass, overlay render and blend)
 - crates/openvj-app: `src/app.rs` (Synthesis callbacks), new `src/synth_controls.rs`, `src/browser.rs` (media folders), `src/prefs.rs`, `ui/synthesis.slint`, `ui/controls.slint` (switch and colour swatch, if not already there)
 - Specs: layouts
@@ -45,5 +46,6 @@ Out of scope: per-generator custom sections, renaming macros, MIDI learn on the 
 
 ## Open questions
 
-1. Where META and the media overlay live: on the **layer** (they stay when you switch visuals, as in Synesthesia, where meta and media survive a scene change) or on each **visual** (they travel with presets and playlists, and macros can move them). Default: on the layer.
-2. Master: a separate intensity knob in META, or the layer's existing Opacity moved into META? Default: the layer's Opacity, shown as Master, so there is one control, not two.
+Decided (the maintainer, 2026-11-17): META and the media overlay live on the **layer**, so they stay when the VJ switches visuals, as in Synesthesia. Macros (per visual) don't move them.
+
+1. Master: a separate intensity knob in META, or the layer's existing Opacity moved into META? Default: the layer's Opacity, shown as Master, so there is one control, not two.
