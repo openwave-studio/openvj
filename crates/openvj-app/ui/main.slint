@@ -711,6 +711,16 @@ component Toolbar inherits Rectangle {
     callback new-comp();
     callback open-comp();
     callback save-comp();
+    // Undo and redo of composition edits, with what they would take back.
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> undo-label;
+    in property <string> redo-label;
+    callback undo();
+    callback redo();
+    /// What the hovered Undo or Redo button would do, for the status bar.
+    out property <string> hint: undo-btn.hovered ? (root.can-undo ? "Undo " + root.undo-label + " (Cmd+Z)" : "Nothing to undo")
+        : redo-btn.hovered ? (root.can-redo ? "Redo " + root.redo-label + " (Cmd+Shift+Z)" : "Nothing to redo") : "";
     callback relink-media();
     callback open-settings();
     /// Room on the left for the macOS window buttons, which sit on this bar.
@@ -951,6 +961,16 @@ component Toolbar inherits Rectangle {
             FlatButton {
                 text: "Save";
                 clicked => { root.save-comp(); }
+            }
+            undo-btn := FlatButton {
+                text: "Undo";
+                enabled: root.can-undo;
+                clicked => { root.undo(); }
+            }
+            redo-btn := FlatButton {
+                text: "Redo";
+                enabled: root.can-redo;
+                clicked => { root.redo(); }
             }
             if root.missing-media > 0: FlatButton {
                 text: "Find media (\{root.missing-media} missing)…";
@@ -1362,6 +1382,12 @@ export component MainWindow inherits Window {
     callback syphon-toggle();
     in property <int> missing-media;
     in property <string> status;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> undo-label;
+    in property <string> redo-label;
+    callback undo();
+    callback redo();
     in property <string> app-version;
     in property <string> fps;
 
@@ -1653,6 +1679,14 @@ export component MainWindow inherits Window {
                 root.settings-open = false;
                 return accept;
             }
+            if ((e.modifiers.control || e.modifiers.meta) && (e.text == "z" || e.text == "Z")) {
+                if (e.modifiers.shift) {
+                    root.redo();
+                } else {
+                    root.undo();
+                }
+                return accept;
+            }
             if ((e.modifiers.control || e.modifiers.meta) && (e.text == "m" || e.text == "M")) {
                 MidiLearn.toggle();
                 return accept;
@@ -1672,7 +1706,7 @@ export component MainWindow inherits Window {
         }
 
         VerticalLayout {
-            Toolbar {
+            toolbar := Toolbar {
                 comp-name: root.comp-name;
                 bpm: root.bpm;
                 beat: root.beat;
@@ -1706,6 +1740,12 @@ export component MainWindow inherits Window {
                 new-comp => { root.new-comp(); }
                 open-comp => { root.open-comp(); }
                 save-comp => { root.save-comp(); }
+                can-undo: root.can-undo;
+                can-redo: root.can-redo;
+                undo-label: root.undo-label;
+                redo-label: root.redo-label;
+                undo => { root.undo(); }
+                redo => { root.redo(); }
                 relink-media => { root.relink-media(); }
                 open-settings => { root.settings-open = true; }
                 titlebar-inset: root.titlebar-inset;
@@ -2048,6 +2088,7 @@ export component MainWindow inherits Window {
                         text: Drag.kind == "effect" ? "● " + Drag.label + ": drop it on a clip, a layer or an effect chain"
                             : Drag.kind == "clip" ? "● " + Drag.label + ": drop on a slot to move it (swaps with a clip there), hold Ctrl to copy"
                             : Drag.kind != "" ? "● " + Drag.label + ": drop it on a slot, or on a layer for its first empty slot"
+                            : toolbar.hint != "" ? toolbar.hint
                             : root.status;
                         color: Drag.kind != "" ? Theme.accent : Theme.text-dim;
                         font-size: 11px;

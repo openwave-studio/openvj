@@ -1340,6 +1340,48 @@ impl Composition {
         }
     }
 
+    /// Takes the saved part of `model` (as an undo step holds it) and keeps what is playing:
+    /// each layer keeps its playing clip, fade and held clips, and effects keep their GPU
+    /// state. A playing clip that `model` no longer has fades out with the layer's transition.
+    pub fn restore_model(&mut self, mut model: Composition) {
+        let now = self.clock.0;
+        model.clock = self.clock;
+        fn keep_uids(new: &mut [crate::Effect], old: &[crate::Effect]) {
+            for (fx, prev) in new.iter_mut().zip(old) {
+                if fx.kind == prev.kind {
+                    fx.uid = prev.uid;
+                }
+            }
+        }
+        keep_uids(&mut model.effects, &self.effects);
+        for (g, old) in model.groups.iter_mut().zip(&self.groups) {
+            keep_uids(&mut g.effects, &old.effects);
+        }
+        for (layer, old) in model.layers.iter_mut().zip(&mut self.layers) {
+            layer.active = old.active.take();
+            layer.fade = old.fade.take();
+            layer.held = std::mem::take(&mut old.held);
+            keep_uids(&mut layer.effects, &old.effects);
+            if let (Some(o), Some(prev)) = (layer.overlay.as_mut(), old.overlay.as_ref()) {
+                o.transport = prev.transport;
+            }
+            let live: Vec<ClipId> = layer.live_ids().collect();
+            let mut removed = false;
+            for id in live {
+                if layer.clip_by_id(id).is_none() {
+                    if let Some(c) = old.clips.iter().flatten().find(|c| c.id == id) {
+                        layer.held.push(c.clone());
+                    }
+                    removed |= layer.active.is_some_and(|p| p.clip_id == id);
+                }
+            }
+            if removed {
+                layer.clear(now);
+            }
+        }
+        *self = model;
+    }
+
     pub fn clear_all(&mut self, now: f64) {
         for l in &mut self.layers {
             l.clear(now);

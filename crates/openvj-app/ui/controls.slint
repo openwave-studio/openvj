@@ -219,6 +219,7 @@ export component FlatButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <color> tint: Theme.accent;
     in property <string> midi-id;
+    out property <bool> hovered: ta.has-hover;
     callback clicked();
 
     min-width: label.preferred-width + 20px;

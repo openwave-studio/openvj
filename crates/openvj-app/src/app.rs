@@ -343,6 +343,8 @@ pub struct App {
     layer_look: EffectModels,
     clip_tf: EffectModels,
 
+    /// Undo and redo of edits made in the UI (see [`openvj_core::history`]).
+    pub history: openvj_core::history::History,
     grid_dirty: bool,
     props_dirty: bool,
     /// [`EffectLibrary::generation`] the Effects tab shows.
@@ -484,6 +486,7 @@ impl App {
             layer_tf: EffectModels::default(),
             layer_look: EffectModels::default(),
             clip_tf: EffectModels { restartable: true, ..Default::default() },
+            history: openvj_core::history::History::new(),
             grid_dirty: true,
             props_dirty: true,
             effects_generation: None,
@@ -588,6 +591,7 @@ impl App {
         self.media.clear();
         self.comp = comp;
         self.file = file;
+        self.history.clear();
         self.resolume_refs = None;
         self.midi_dirty = true;
         self.selected = None;
@@ -607,6 +611,54 @@ impl App {
         }
         self.grid_dirty = true;
         self.props_dirty = true;
+        self.images_dirty = true;
+    }
+
+    /// Takes back the last edit (Cmd+Z). What is playing keeps playing.
+    pub fn undo(&mut self) {
+        match self.history.undo(&mut self.comp) {
+            Some(label) => {
+                self.after_restore();
+                self.set_status(format!("Undid {label}"));
+            }
+            None => self.set_status("Nothing to undo"),
+        }
+    }
+
+    /// Does the last undone edit again (Cmd+Shift+Z).
+    pub fn redo(&mut self) {
+        match self.history.redo(&mut self.comp) {
+            Some(label) => {
+                self.after_restore();
+                self.set_status(format!("Redid {label}"));
+            }
+            None => self.set_status("Nothing to redo"),
+        }
+    }
+
+    /// After undo or redo: loads media of clips that came back, keeps the selection in
+    /// range and redraws everything the composition feeds.
+    fn after_restore(&mut self) {
+        let missing: Vec<_> = self
+            .comp
+            .every_clip()
+            .filter(|c| !self.media.contains_key(&c.id))
+            .filter_map(|c| {
+                Some((c.id, c.source.media_path()?.to_owned(), matches!(c.source, ClipSource::Video { .. })))
+            })
+            .collect();
+        for (id, path, is_video) in missing {
+            self.start_load(id, path, is_video);
+        }
+        if self.selected.is_some_and(|(l, c)| self.comp.clip(l, c).is_none()) {
+            self.selected = None;
+        }
+        self.selected_layer = self.selected_layer.min(self.comp.layers.len().saturating_sub(1));
+        self.engine.resize(self.comp.width, self.comp.height);
+        self.midi_dirty = true;
+        self.grid_dirty = true;
+        self.props_dirty = true;
+        self.browser_dirty = true;
         self.images_dirty = true;
     }
 
@@ -1127,6 +1179,7 @@ impl App {
             self.sync_midi(ui);
         }
         self.sync_osc(ui);
+        self.sync_history(ui);
         if self.browser_dirty {
             self.browser_dirty = false;
             self.sync_browser(ui);
@@ -1650,6 +1703,14 @@ impl App {
             self.status.clone()
         };
         ui.set_status(status.into());
+    }
+
+    /// Whether Undo and Redo are enabled, and what they would take back.
+    fn sync_history(&self, ui: &MainWindow) {
+        ui.set_can_undo(self.history.can_undo());
+        ui.set_can_redo(self.history.can_redo());
+        ui.set_undo_label(self.history.undo_label().unwrap_or_default().into());
+        ui.set_redo_label(self.history.redo_label().unwrap_or_default().into());
     }
 
     fn sync_browser(&mut self, ui: &MainWindow) {
@@ -2512,7 +2573,10 @@ impl App {
         if self.comp.midi.osc_mapping_for(target).is_some_and(|m| m.address == address) {
             return;
         }
+        // Learning arrives from a controller, not a UI action, so it records its own step.
+        self.history.begin(&self.comp);
         self.comp.midi.learn_osc(address, target);
+        self.history.end(&self.comp);
         self.learn_rev += 1;
         let what = describe_target(&self.comp, target);
         self.set_status(format!("Mapped OSC {address} to {what}"));
@@ -2628,7 +2692,10 @@ impl App {
         if self.comp.midi.mapping_for(target).is_some_and(|m| m.control == control) {
             return;
         }
+        // Learning arrives from a controller, not a UI action, so it records its own step.
+        self.history.begin(&self.comp);
         self.comp.midi.learn(control, Some(port), target);
+        self.history.end(&self.comp);
         self.learn_rev += 1;
         let what = describe_target(&self.comp, target);
         self.set_status(format!("Mapped {} to {what}", control.label()));
