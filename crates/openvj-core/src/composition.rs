@@ -1363,7 +1363,7 @@ impl Composition {
             layer.held = std::mem::take(&mut old.held);
             keep_uids(&mut layer.effects, &old.effects);
             if let (Some(o), Some(prev)) = (layer.overlay.as_mut(), old.overlay.as_ref()) {
-                o.transport = prev.transport.clone();
+                o.transport = prev.transport;
             }
             let live: Vec<ClipId> = layer.live_ids().collect();
             let mut removed = false;
