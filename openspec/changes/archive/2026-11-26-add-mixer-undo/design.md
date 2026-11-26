@@ -13,3 +13,9 @@ A step is recorded when an edit starts. Consecutive changes to the same target w
 ## Keeping the show running
 
 Runtime state lives in serde-skipped fields of `Layer` (`active`, fading clips) and in the renderer. Restoring a snapshot copies the saved model fields onto the live composition and keeps runtime fields, matched by layer and clip id. A playing clip that no longer exists in the restored model is cleared with the layer's transition, never cut.
+
+## As built
+
+`with_app` in `main.rs`, which every UI callback goes through, calls `History::begin` before the callback and `History::end` after it. Both take the composition as a `serde_json::Value`, so the serde-skipped runtime fields are left out by construction. When they differ, the step keeps only the changed values, by JSON path, before and after (an array that changed length counts as one value). Undo writes the before values onto the composition as it is now and redo the after values, then goes through `restore_model`. So a fader moved from MIDI or OSC since the step, or the tempo following Link, stays where it is; whole snapshots would have put those back too.
+
+Launches and clears don't touch the saved part, and `bpm` is left out of the diff, so they are never steps. MIDI, OSC, audio and animation act in the frame loop, not in callbacks, so they never record; MIDI and OSC learn bracket their own change so a learned mapping is a step. Coalescing compares the changed paths: the same paths within 800 ms merge into the step before. Deck switches change `current_deck`, so they are steps too.

@@ -52,8 +52,9 @@ fn init_gpu() -> Result<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queu
     Ok((instance, adapter, device, queue))
 }
 
-/// Runs `f` with mutable app state, then pushes UI changes.
-/// Skips silently if the state is already borrowed (e.g. a modal dialog is open).
+/// Runs `f` with mutable app state, then pushes UI changes. An edit `f` makes to the
+/// composition becomes an undo step. Skips silently if the state is already borrowed
+/// (e.g. a modal dialog is open).
 fn with_app(
     app: &Rc<RefCell<App>>,
     ui: &slint::Weak<MainWindow>,
@@ -62,7 +63,10 @@ fn with_app(
 ) {
     let (Some(ui), Some(out)) = (ui.upgrade(), out.upgrade()) else { return };
     let Ok(mut app) = app.try_borrow_mut() else { return };
-    f(&mut app);
+    let app = &mut *app;
+    app.history.begin(&app.comp);
+    f(app);
+    app.history.end(&app.comp);
     app.sync(&ui, &out);
 }
 
@@ -198,6 +202,8 @@ fn main() -> Result<()> {
     on!(on_layer_solo, |a, l: i32| a.layer_solo(l));
     on!(on_layer_clear, |a, l: i32| a.layer_clear(l));
     on!(on_clear_all, |a| a.clear_all());
+    on!(on_undo, |a| a.undo());
+    on!(on_redo, |a| a.redo());
     on!(on_add_layer, |a| a.add_layer());
     on!(on_add_column, |a| a.add_column());
     on!(on_deck_clicked, |a, i: i32| a.deck_clicked(i.max(0) as usize));

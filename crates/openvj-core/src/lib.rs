@@ -8,6 +8,7 @@ pub mod discover;
 mod effect;
 pub mod effect_folders;
 mod generator;
+pub mod history;
 pub mod isf;
 pub mod library;
 mod macros;
