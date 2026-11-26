@@ -64,6 +64,15 @@ pub fn set_flag(key: &str, on: bool) {
 }
 
 /// Folders the Synthesis media browser shows, in the order they were added.
+/// A saved text preference, empty when unset.
+pub fn text(key: &str) -> String {
+    read().get(key).and_then(|v| v.as_str()).unwrap_or_default().to_owned()
+}
+
+pub fn set_text(key: &str, value: &str) {
+    set(key, serde_json::Value::String(value.to_owned()));
+}
+
 pub fn media_folders() -> Vec<PathBuf> {
     read()
         .get("media_folders")

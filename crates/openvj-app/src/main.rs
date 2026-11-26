@@ -433,6 +433,10 @@ fn main() -> Result<()> {
     on!(on_audio_pick, |a, i: i32| a.audio_pick(i.max(0) as usize));
     on!(on_link_toggle, |a| a.link_toggle());
     on!(on_opendj_toggle, |a| a.opendj_toggle());
+    on!(on_osc_in_toggle, |a| a.osc_in_toggle());
+    on!(on_osc_out_toggle, |a| a.osc_out_toggle());
+    on!(on_osc_in_port_edited, |a, t: slint::SharedString| a.osc_in_port_edited(&t));
+    on!(on_osc_out_edited, |a, t: slint::SharedString| a.osc_out_edited(&t));
     on!(on_clock_toggle, |a| a.clock_toggle());
     on!(on_syphon_toggle, |a| a.syphon_toggle());
     on!(on_midi_toggle, |a| a.midi_toggle());

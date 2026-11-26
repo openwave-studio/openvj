@@ -214,6 +214,12 @@ pub struct App {
     clock_port: Option<String>,
     /// The link to openDJ (its beat, phrase, track and cue events over OSC), while it's on.
     opendj: Option<crate::osc::OpenDj>,
+    /// OSC control input and output (Resolume's addresses, and learned ones).
+    osc: crate::osc::OscControl,
+    /// Settings › Control: the input port and the output's host:port, as typed.
+    osc_in_port: String,
+    osc_out_to: String,
+    osc_dirty: bool,
     /// What openVJ last heard from openDJ.
     dj: openvj_core::opendj::DjState,
     /// What the UI shows for openDJ, to push only changes.
@@ -383,6 +389,10 @@ impl App {
             midi_clock: MidiClock::new(),
             clock_port: None,
             opendj: None,
+            osc: crate::osc::OscControl::new(),
+            osc_in_port: crate::osc::CONTROL_PORT.to_string(),
+            osc_out_to: format!("127.0.0.1:{}", crate::osc::OUTPUT_PORT),
+            osc_dirty: true,
             dj: Default::default(),
             dj_shown: (false, false, "?".into(), String::new()),
             inputs: ModInputs::default(),
@@ -493,6 +503,7 @@ impl App {
         if crate::prefs::flag("midi_clock") {
             app.set_clock(true);
         }
+        app.restore_osc();
         if crate::prefs::flag("opendj") {
             app.set_opendj(true);
         }
@@ -997,6 +1008,7 @@ impl App {
         self.update_videos(now, beat);
         self.update_live(now);
         self.update_midi(now);
+        self.update_osc(now);
         self.update_opendj(ui);
         self.inputs = self.update_audio(beat, dt);
         let inputs = self.inputs;
@@ -1114,6 +1126,7 @@ impl App {
             self.midi_dirty = false;
             self.sync_midi(ui);
         }
+        self.sync_osc(ui);
         if self.browser_dirty {
             self.browser_dirty = false;
             self.sync_browser(ui);
@@ -2325,34 +2338,194 @@ impl App {
                 format!("{port}: {}{}", message_label(msg), if actions.is_empty() { " · not mapped" } else { "" });
             self.midi_dirty = true;
             for action in actions {
-                match apply_midi(&mut self.comp, action, now, self.selected_layer) {
-                    MidiEffect::Changed => {
-                        if matches!(action.target, openvj_core::MidiTarget::Tempo) {
-                            self.set_bpm(self.comp.bpm);
-                        }
-                        self.grid_dirty = true;
-                    }
-                    MidiEffect::SelectLayer(l) => self.select_layer(l as i32),
-                    MidiEffect::TapTempo => self.tap(),
-                    MidiEffect::OpenDeck(d) => self.deck_clicked(d),
-                    MidiEffect::StepColumn { forward } => {
-                        let n = self.comp.columns.len();
-                        let col = match self.last_column {
-                            Some(c) if forward => (c + 1) % n,
-                            Some(c) => (c + n - 1) % n,
-                            None => 0,
-                        };
-                        self.column_clicked(col);
-                    }
-                    MidiEffect::ResyncTempo => {
-                        if !self.link.is_enabled() && !self.clock_on {
-                            self.beat_clock.sync(now, 0.0, self.comp.bpm);
-                        }
-                    }
-                    MidiEffect::Ignored => {}
-                }
+                self.apply_control(action, now);
             }
         }
+    }
+
+    /// Applies one action from a controller (MIDI or OSC).
+    fn apply_control(&mut self, action: openvj_core::MidiAction, now: f64) {
+        match apply_midi(&mut self.comp, action, now, self.selected_layer) {
+            MidiEffect::Changed => {
+                if matches!(action.target, openvj_core::MidiTarget::Tempo) {
+                    self.set_bpm(self.comp.bpm);
+                }
+                self.grid_dirty = true;
+            }
+            MidiEffect::SelectLayer(l) => self.select_layer(l as i32),
+            MidiEffect::TapTempo => self.tap(),
+            MidiEffect::OpenDeck(d) => self.deck_clicked(d),
+            MidiEffect::StepColumn { forward } => {
+                let n = self.comp.columns.len();
+                let col = match self.last_column {
+                    Some(c) if forward => (c + 1) % n,
+                    Some(c) => (c + n - 1) % n,
+                    None => 0,
+                };
+                self.column_clicked(col);
+            }
+            MidiEffect::ResyncTempo => {
+                if !self.link.is_enabled() && !self.clock_on {
+                    self.beat_clock.sync(now, 0.0, self.comp.bpm);
+                }
+            }
+            MidiEffect::Ignored => {}
+        }
+    }
+
+    // ---------------------------------------------------------------- OSC control
+
+    /// Turns OSC input and output back on as they were last time.
+    fn restore_osc(&mut self) {
+        let port = crate::prefs::text("osc_in_port");
+        if !port.is_empty() {
+            self.osc_in_port = port;
+        }
+        let to = crate::prefs::text("osc_out_to");
+        if !to.is_empty() {
+            self.osc_out_to = to;
+        }
+        if crate::prefs::flag("osc_in") {
+            self.set_osc_input(true);
+        }
+        if crate::prefs::flag("osc_out") {
+            self.set_osc_output(true);
+        }
+    }
+
+    pub fn osc_in_toggle(&mut self) {
+        let on = self.osc.input.is_none();
+        self.set_osc_input(on);
+        crate::prefs::set_flag("osc_in", self.osc.input.is_some());
+    }
+
+    pub fn osc_out_toggle(&mut self) {
+        let on = self.osc.output.is_none();
+        self.set_osc_output(on);
+        crate::prefs::set_flag("osc_out", self.osc.output.is_some());
+    }
+
+    /// The input port as typed in Settings; takes effect at once when input is on.
+    pub fn osc_in_port_edited(&mut self, text: &str) {
+        self.osc_in_port = text.trim().to_owned();
+        crate::prefs::set_text("osc_in_port", &self.osc_in_port);
+        if self.osc.input.is_some() {
+            self.set_osc_input(true);
+        }
+    }
+
+    /// The output's host:port as typed in Settings.
+    pub fn osc_out_edited(&mut self, text: &str) {
+        self.osc_out_to = text.trim().to_owned();
+        crate::prefs::set_text("osc_out_to", &self.osc_out_to);
+        if self.osc.output.is_some() {
+            self.set_osc_output(true);
+        }
+    }
+
+    fn set_osc_input(&mut self, on: bool) {
+        self.osc_dirty = true;
+        if !on {
+            let _ = self.osc.set_input(None);
+            self.set_status("OSC input off");
+            return;
+        }
+        let Ok(port) = self.osc_in_port.parse::<u16>() else {
+            let _ = self.osc.set_input(None);
+            self.set_status(format!("OSC input: \"{}\" isn't a port number", self.osc_in_port));
+            return;
+        };
+        match self.osc.set_input(Some(port)) {
+            Ok(()) => self.set_status(format!("OSC input on port {port}, with Resolume's addresses")),
+            Err(e) => self.set_status(format!("OSC input couldn't use port {port} (another app has it?): {e}")),
+        }
+    }
+
+    fn set_osc_output(&mut self, on: bool) {
+        self.osc_dirty = true;
+        if !on {
+            self.osc.set_output(None);
+            self.set_status("OSC output off");
+            return;
+        }
+        let to = osc_target(&self.osc_out_to);
+        self.osc.set_output(to);
+        match to {
+            Some(to) => self.set_status(format!("OSC output to {to}")),
+            None => self.set_status(format!("OSC output: \"{}\" isn't host:port", self.osc_out_to)),
+        }
+    }
+
+    /// Applies incoming OSC and sends what changed. Runs once per frame.
+    fn update_osc(&mut self, now: f64) {
+        for (msg, from) in self.osc.drain() {
+            let address = msg.addr.clone();
+            if crate::osc::is_query(&msg) {
+                let target = openvj_core::osc::resolume_target(&address, &self.comp);
+                if let Some(v) =
+                    target.and_then(|t| openvj_core::osc::current_value(t, &self.comp, self.selected_layer))
+                {
+                    self.osc.reply(&address, v, from);
+                }
+                continue;
+            }
+            let value = crate::osc::osc_value(&msg);
+            let shown = value.map(|v| format!(" {}", (v * 1000.0).round() / 1000.0)).unwrap_or_default();
+            if self.learn_on {
+                self.midi_last = format!("OSC {address}{shown}");
+                self.midi_dirty = true;
+                self.learn_osc(&address, value);
+                continue;
+            }
+            let mut actions = self.comp.midi.handle_osc(&address, value);
+            if actions.is_empty() {
+                actions.extend(openvj_core::osc::resolume_action(&address, value, &self.comp));
+            }
+            self.midi_last = format!("OSC {address}{shown}{}", if actions.is_empty() { " · not mapped" } else { "" });
+            self.midi_dirty = true;
+            for action in actions {
+                self.apply_control(action, now);
+            }
+        }
+        if self.osc.output.is_some() {
+            let comp = &self.comp;
+            let values: Vec<(String, f32)> = openvj_core::osc::output_targets(comp)
+                .into_iter()
+                .filter_map(|t| {
+                    Some((
+                        openvj_core::osc::resolume_address(t, comp)?,
+                        openvj_core::osc::current_value(t, comp, self.selected_layer)?,
+                    ))
+                })
+                .collect();
+            self.osc.send_changes(values);
+        }
+    }
+
+    /// In map mode, an OSC address maps itself to the picked control.
+    fn learn_osc(&mut self, address: &str, value: Option<f32>) {
+        let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
+        // A button's release (0) doesn't learn, so letting go of a pad doesn't re-map.
+        if value == Some(0.0) && !target.is_ranged() {
+            return;
+        }
+        if self.comp.midi.osc_mapping_for(target).is_some_and(|m| m.address == address) {
+            return;
+        }
+        self.comp.midi.learn_osc(address, target);
+        self.learn_rev += 1;
+        let what = describe_target(&self.comp, target);
+        self.set_status(format!("Mapped OSC {address} to {what}"));
+    }
+
+    fn sync_osc(&mut self, ui: &MainWindow) {
+        if !std::mem::take(&mut self.osc_dirty) {
+            return;
+        }
+        ui.set_osc_in_on(self.osc.input.is_some());
+        ui.set_osc_out_on(self.osc.output.is_some());
+        ui.set_osc_in_port(self.osc_in_port.as_str().into());
+        ui.set_osc_out_to(self.osc_out_to.as_str().into());
     }
 
     /// Feeds a MIDI clock message that arrived at `t` (app seconds) from `port`.
@@ -2474,15 +2647,27 @@ impl App {
         const ALL: [MidiBehaviour; 4] =
             [MidiBehaviour::Fader, MidiBehaviour::Toggle, MidiBehaviour::Press, MidiBehaviour::Hold];
         let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
-        let (Some(m), Some(&b)) = (self.comp.midi.mapping_for_mut(target), ALL.get(i.max(0) as usize)) else { return };
-        m.behaviour = b;
+        let Some(&b) = ALL.get(i.max(0) as usize) else { return };
+        if let Some(m) = self.comp.midi.mapping_for_mut(target) {
+            m.behaviour = b;
+        } else if let Some(m) = self.comp.midi.osc_mapping_for_mut(target) {
+            m.behaviour = b;
+        } else {
+            return;
+        }
         self.midi_dirty = true;
     }
 
     pub fn learn_range(&mut self, min: f32, max: f32) {
         let Some(target) = self.learn_target(&self.learn_id.clone()) else { return };
-        let Some(m) = self.comp.midi.mapping_for_mut(target) else { return };
-        (m.min, m.max) = (min.clamp(0.0, 1.0), max.clamp(0.0, 1.0));
+        let range = (min.clamp(0.0, 1.0), max.clamp(0.0, 1.0));
+        if let Some(m) = self.comp.midi.mapping_for_mut(target) {
+            (m.min, m.max) = range;
+        } else if let Some(m) = self.comp.midi.osc_mapping_for_mut(target) {
+            (m.min, m.max) = range;
+        } else {
+            return;
+        }
         self.midi_dirty = true;
     }
 
@@ -2537,8 +2722,9 @@ impl App {
 
     /// The note or CC mapped to a map-mode control, shortened for its tag ("CC 21").
     pub fn learn_label(&self, id: &str) -> String {
-        let Some(m) = self.learn_target(id).and_then(|t| self.comp.midi.mapping_for(t)) else {
-            return String::new();
+        let Some(target) = self.learn_target(id) else { return String::new() };
+        let Some(m) = self.comp.midi.mapping_for(target) else {
+            return if self.comp.midi.osc_mapping_for(target).is_some() { "OSC".into() } else { String::new() };
         };
         let c = m.control;
         let kind = match c.kind {
@@ -2555,8 +2741,14 @@ impl App {
         g.set_revision(self.learn_rev);
         let target = self.learn_target(&self.learn_id);
         let mapping = target.and_then(|t| self.comp.midi.mapping_for(t));
+        let osc = target.and_then(|t| self.comp.midi.osc_mapping_for(t));
         let detail = match (target, mapping) {
             (None, _) => "Click a control, then move a knob or press a pad on your controller.".to_owned(),
+            (Some(t), None) if osc.is_some() => format!(
+                "{} ← OSC {}. Move another control to re-map it.",
+                describe_target(&self.comp, t),
+                osc.unwrap().address
+            ),
             (Some(t), None) => format!("{}: move a knob or press a pad to map it.", describe_target(&self.comp, t)),
             (Some(t), Some(m)) => {
                 let from = m.device.as_deref().map(|d| format!(" from {d}")).unwrap_or_default();
@@ -2568,14 +2760,16 @@ impl App {
             }
         };
         g.set_detail(detail.into());
-        g.set_has_mapping(mapping.is_some());
+        let mapped = mapping.is_some() || osc.is_some();
+        g.set_has_mapping(mapped);
         let shaped = target.is_some_and(|t| t.is_ranged() || t.is_switch());
-        g.set_has_behaviour(mapping.is_some() && shaped);
+        g.set_has_behaviour(mapped && shaped);
         g.set_ranged(target.is_some_and(|t| t.is_ranged()));
-        if let Some(m) = mapping {
-            g.set_behaviour(m.behaviour as i32);
-            g.set_min(m.min);
-            g.set_max(m.max);
+        let shape = mapping.map(|m| (m.behaviour, m.min, m.max)).or(osc.map(|m| (m.behaviour, m.min, m.max)));
+        if let Some((behaviour, min, max)) = shape {
+            g.set_behaviour(behaviour as i32);
+            g.set_min(min);
+            g.set_max(max);
         }
     }
 
@@ -5109,4 +5303,14 @@ fn kind_tag(source: &ClipSource) -> &'static str {
 /// Seconds since the Unix epoch, for the library's "last used".
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Parses Settings' OSC output field: `host:port`, or just a port for this computer.
+fn osc_target(text: &str) -> Option<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let text = text.trim();
+    if let Ok(port) = text.parse::<u16>() {
+        return Some(std::net::SocketAddr::from(([127, 0, 0, 1], port)));
+    }
+    text.to_socket_addrs().ok()?.find(std::net::SocketAddr::is_ipv4)
 }
