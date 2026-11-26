@@ -260,6 +260,15 @@ export component SettingsOverlay inherits Rectangle {
     in property <string> opendj-phrase;
     in property <string> opendj-track;
     callback opendj-toggle();
+    // OSC control.
+    in property <bool> osc-in-on;
+    in property <bool> osc-out-on;
+    in property <string> osc-in-port;
+    in property <string> osc-out-to;
+    callback osc-in-toggle();
+    callback osc-out-toggle();
+    callback osc-in-port-edited(string);
+    callback osc-out-edited(string);
     // Output.
     in property <bool> output-open;
     in property <string> mapping-status;
@@ -290,7 +299,7 @@ export component SettingsOverlay inherits Rectangle {
     // Page names, and the words a search finds each page by.
     property <[{name: string, words: string}]> pages: [
         { name: "Audio", words: "audio input device microphone line analyser fft bands gain smoothing" },
-        { name: "Tempo", words: "tempo bpm ableton link sync tap beat opendj osc phrase drop track key" },
+        { name: "Tempo", words: "tempo bpm ableton link sync tap beat opendj osc phrase drop track key control touchosc remote resolume port" },
         { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
         { name: "Media", words: "media folder files browser relink missing shadertoy api key import" },
         { name: "Keyboard", words: "keyboard shortcuts keys" },
@@ -481,6 +490,38 @@ export component SettingsOverlay inherits Rectangle {
                                     toggled => { root.opendj-toggle(); }
                                 }
                             }
+                            Rectangle { height: 14px; }
+                            PrefHeading { text: "OSC CONTROL"; }
+                            Rectangle { height: 6px; }
+                            PrefRow {
+                                title: "OSC input";
+                                detail: root.osc-in-on ? "Listening on port " + root.osc-in-port + " for Resolume's OSC addresses (/composition/…), and for addresses learned in map mode (Cmd+M)."
+                                    : "Control openVJ from TouchOSC, Lemur, Max or any OSC app, with Resolume's addresses. Resolume's port is 7000.";
+                                Switch {
+                                    on: root.osc-in-on;
+                                    toggled => { root.osc-in-toggle(); }
+                                }
+                            }
+                            LineEdit {
+                                placeholder-text: "Input port (7000)";
+                                text: root.osc-in-port;
+                                accepted(t) => { root.osc-in-port-edited(t); }
+                            }
+                            PrefRow {
+                                title: "OSC output";
+                                detail: root.osc-out-on ? "Sending every change to " + root.osc-out-to + ", so faders and buttons in your OSC app follow openVJ."
+                                    : "Send changes back to an OSC app (host:port). Resolume sends to port 7001.";
+                                Switch {
+                                    on: root.osc-out-on;
+                                    toggled => { root.osc-out-toggle(); }
+                                }
+                            }
+                            LineEdit {
+                                placeholder-text: "Host:port (127.0.0.1:7001)";
+                                text: root.osc-out-to;
+                                accepted(t) => { root.osc-out-edited(t); }
+                            }
+                            Rectangle { height: 14px; }
                             PrefRow {
                                 title: "Tempo";
                                 detail: "Set it in the toolbar with − and +, or tap it in with TAP.";

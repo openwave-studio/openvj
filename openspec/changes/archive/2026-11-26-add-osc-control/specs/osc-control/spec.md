@@ -8,7 +8,7 @@ Settings SHALL have an OSC input switch with a UDP port (default 7000) and an OS
 - **THEN** openVJ listens on UDP 7000 and announces itself over Bonjour as an OSC service
 
 ### Requirement: Resolume OSC addresses
-OSC input SHALL accept Resolume's addresses for the controls openVJ has: master, crossfader, tempo, tap and resync, column and clip connect, layer and group clear, opacity, bypass, solo and select, effect parameters, mix and bypass on layers, groups and the composition, deck select, disconnect all, and the selected-layer and selected-clip forms. Faders SHALL take 0–1 floats and buttons 1 for press and 0 for release, as in Resolume.
+OSC input SHALL accept Resolume's addresses for the controls openVJ has: master, crossfader, tempo, tap and resync, column and clip connect, layer clear, opacity, bypass, solo and select, effect parameters (named by the effect's and parameter's names, lowercase without spaces, or the Resolume names they import from), mix and bypass on layers and the composition, deck select, disconnect all, and the selected-layer form. Group controls follow when they become MIDI-mappable. Faders SHALL take 0–1 floats and buttons 1 for press and 0 for release, as in Resolume.
 
 #### Scenario: Launch a clip
 - **WHEN** openVJ receives `/composition/layers/2/clips/3/connect 1`

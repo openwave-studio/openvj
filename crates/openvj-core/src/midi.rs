@@ -345,6 +345,9 @@ pub struct MidiMap {
     /// The controller most of the mappings are for, for display. Each mapping keeps its own.
     pub device: Option<String>,
     pub mappings: Vec<MidiMapping>,
+    /// OSC addresses learned in map mode (see [`crate::osc`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub osc: Vec<crate::osc::OscMapping>,
 }
 
 /// What a single message asks for.
@@ -368,7 +371,7 @@ pub struct MidiAction {
 
 impl MidiMap {
     pub fn is_empty(&self) -> bool {
-        self.mappings.is_empty()
+        self.mappings.is_empty() && self.osc.is_empty()
     }
 
     /// Maps `control` (from `device`, when known) to `target`, as in map mode. It replaces
@@ -394,9 +397,10 @@ impl MidiMap {
 
     /// Removes every mapping of `target`. Returns true if there was one.
     pub fn forget(&mut self, target: MidiTarget) -> bool {
-        let before = self.mappings.len();
+        let before = self.mappings.len() + self.osc.len();
         self.mappings.retain(|m| m.target != target);
-        self.mappings.len() != before
+        self.osc.retain(|m| m.target != target);
+        self.mappings.len() + self.osc.len() != before
     }
 
     /// The first mapping of `target`, if any.
@@ -846,6 +850,7 @@ mod tests {
                 MidiTarget::EffectParam { effect: EffectRef { layer: None, index: 0 }, param: 2 },
                 MidiBehaviour::Fader,
             )],
+            osc: Vec::new(),
         };
         let json = serde_json::to_string(&map).unwrap();
         assert_eq!(serde_json::from_str::<MidiMap>(&json).unwrap(), map);

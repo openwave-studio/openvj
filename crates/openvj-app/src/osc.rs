@@ -6,8 +6,9 @@
 //! [`OpenDj`] finds openDJ (on this computer at its default port 9000, and over
 //! Bonjour as `openDJ._osc._udp`), subscribes to its beat, phrase, track and cue
 //! events, and keeps subscribing every few seconds so a restarted openDJ is
-//! picked up again. Nothing here runs on the render path: the app drains the
-//! decoded events once a frame.
+//! picked up again. [`OscControl`] is control input and output with Resolume's
+//! addresses (see [`openvj_core::osc`]). Nothing here runs on the render path: the
+//! app drains the decoded messages once a frame.
 
 use std::collections::HashMap;
 use std::io;
@@ -46,6 +47,15 @@ impl OscInput {
     pub fn open(port: u16) -> io::Result<Self> {
         let socket =
             UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).or_else(|_| UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)))?;
+        Self::with_socket(socket)
+    }
+
+    /// Listens on exactly `port`, failing when another app has it.
+    pub fn open_strict(port: u16) -> io::Result<Self> {
+        Self::with_socket(UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))?)
+    }
+
+    fn with_socket(socket: UdpSocket) -> io::Result<Self> {
         socket.set_read_timeout(Some(Duration::from_millis(200)))?;
         let reader = socket.try_clone()?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -351,5 +361,146 @@ mod tests {
         }
         assert_eq!(got, vec![DjEvent::Beat { beat: 2, bar: 3, bpm: 126.0 }]);
         assert!(link.connected().is_some());
+    }
+}
+
+/// Resolume's default OSC input port.
+pub const CONTROL_PORT: u16 = 7000;
+/// Resolume's default OSC output port.
+pub const OUTPUT_PORT: u16 = 7001;
+
+/// OSC control: input on a port (Resolume's 7000), announced over Bonjour, and output of
+/// every value that changes to one host and port.
+pub struct OscControl {
+    pub input: Option<OscInput>,
+    /// Sends output from a port of its own when input is off.
+    sender: Option<OscInput>,
+    pub output: Option<SocketAddr>,
+    /// What output last sent for each address, so only changes go out.
+    sent: HashMap<String, f32>,
+    _bonjour: Option<mdns_sd::ServiceDaemon>,
+}
+
+impl OscControl {
+    pub fn new() -> Self {
+        Self { input: None, sender: None, output: None, sent: HashMap::new(), _bonjour: None }
+    }
+
+    /// Starts or stops input on `port`. Errors when the port is taken.
+    pub fn set_input(&mut self, port: Option<u16>) -> io::Result<()> {
+        self.input = None;
+        self._bonjour = None;
+        let Some(port) = port else { return Ok(()) };
+        self.input = Some(OscInput::open_strict(port)?);
+        self._bonjour = advertise(port);
+        Ok(())
+    }
+
+    /// Starts or stops output to `to`. Everything is sent again on the next frame.
+    pub fn set_output(&mut self, to: Option<SocketAddr>) {
+        self.output = to;
+        self.sent.clear();
+        self.sender = None;
+        if to.is_some() && self.input.is_none() {
+            self.sender = OscInput::open(0).ok();
+        }
+    }
+
+    pub fn drain(&self) -> Vec<(OscMessage, SocketAddr)> {
+        self.input.as_ref().map(OscInput::drain).unwrap_or_default()
+    }
+
+    fn socket(&self) -> Option<&OscInput> {
+        self.input.as_ref().or(self.sender.as_ref())
+    }
+
+    /// Answers a `?` query.
+    pub fn reply(&self, address: &str, value: f32, to: SocketAddr) {
+        if let Some(s) = self.socket() {
+            s.send(message(address, vec![OscType::Float(value)]), to);
+        }
+    }
+
+    /// Sends the values that changed since the last call.
+    pub fn send_changes(&mut self, values: impl IntoIterator<Item = (String, f32)>) {
+        let Some(to) = self.output else { return };
+        if self.sender.is_none() && self.input.is_none() {
+            self.sender = OscInput::open(0).ok();
+        }
+        let Some(socket) = self.input.as_ref().or(self.sender.as_ref()) else { return };
+        for (address, value) in values {
+            if self.sent.get(&address).is_some_and(|v| (v - value).abs() < 1e-4) {
+                continue;
+            }
+            socket.send(message(&address, vec![OscType::Float(value)]), to);
+            self.sent.insert(address, value);
+        }
+    }
+}
+
+/// Announces OSC input as "openVJ" (`_osc._udp`), so TouchOSC and the like find it by name.
+fn advertise(port: u16) -> Option<mdns_sd::ServiceDaemon> {
+    let daemon = mdns_sd::ServiceDaemon::new().ok()?;
+    let host = format!("openvj-{port}.local.");
+    let info = mdns_sd::ServiceInfo::new("_osc._udp.local.", "openVJ", &host, "", port, None).ok()?.enable_addr_auto();
+    daemon.register(info).ok()?;
+    Some(daemon)
+}
+
+/// The first number in a message, as a float; `None` when it has none (a bare button).
+pub fn osc_value(m: &OscMessage) -> Option<f32> {
+    m.args.iter().find_map(|a| match a {
+        OscType::Float(v) => Some(*v),
+        OscType::Double(v) => Some(*v as f32),
+        OscType::Int(v) => Some(*v as f32),
+        OscType::Long(v) => Some(*v as f32),
+        OscType::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    })
+}
+
+/// True for a query: the argument `?`, as Resolume takes it.
+pub fn is_query(m: &OscMessage) -> bool {
+    matches!(m.args.first(), Some(OscType::String(s)) if s == "?")
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn values_and_queries() {
+        assert_eq!(osc_value(&message("/a", vec![OscType::Int(1)])), Some(1.0));
+        assert_eq!(osc_value(&message("/a", vec![OscType::String("x".into()), OscType::Float(0.5)])), Some(0.5));
+        assert_eq!(osc_value(&message("/a", vec![])), None);
+        assert!(is_query(&message("/a", vec![OscType::String("?".into())])));
+    }
+
+    #[test]
+    fn output_sends_only_changes() {
+        let rx = OscInput::open(0).unwrap();
+        let port = rx.socket.local_addr().unwrap().port();
+        let mut c = OscControl::new();
+        c.set_output(Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)));
+        let wait = || {
+            let until = Instant::now() + Duration::from_secs(2);
+            let mut got = Vec::new();
+            while Instant::now() < until {
+                got.extend(rx.drain());
+                if !got.is_empty() {
+                    std::thread::sleep(Duration::from_millis(50));
+                    got.extend(rx.drain());
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            got
+        };
+        c.send_changes([("/composition/master".to_owned(), 1.0), ("/composition/crossfader/phase".to_owned(), 0.5)]);
+        assert_eq!(wait().len(), 2);
+        c.send_changes([("/composition/master".to_owned(), 1.0), ("/composition/crossfader/phase".to_owned(), 0.25)]);
+        let got = wait();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.addr, "/composition/crossfader/phase");
     }
 }

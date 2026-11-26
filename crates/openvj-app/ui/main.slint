@@ -1381,6 +1381,14 @@ export component MainWindow inherits Window {
     in property <string> opendj-phrase;
     in property <string> opendj-track;
     callback opendj-toggle();
+    in property <bool> osc-in-on;
+    in property <bool> osc-out-on;
+    in property <string> osc-in-port;
+    in property <string> osc-out-to;
+    callback osc-in-toggle();
+    callback osc-out-toggle();
+    callback osc-in-port-edited(string);
+    callback osc-out-edited(string);
     in property <bool> midi-on;
     in property <string> midi-status;
     in property <string> midi-preset;
@@ -2081,6 +2089,14 @@ export component MainWindow inherits Window {
             opendj-phrase: root.opendj-phrase;
             opendj-track: root.opendj-track;
             opendj-toggle => { root.opendj-toggle(); }
+            osc-in-on: root.osc-in-on;
+            osc-out-on: root.osc-out-on;
+            osc-in-port: root.osc-in-port;
+            osc-out-to: root.osc-out-to;
+            osc-in-toggle => { root.osc-in-toggle(); }
+            osc-out-toggle => { root.osc-out-toggle(); }
+            osc-in-port-edited(t) => { root.osc-in-port-edited(t); }
+            osc-out-edited(t) => { root.osc-out-edited(t); }
             bpm: root.bpm;
             output-open: root.output-open;
             mapping-status: root.mapping-status;
