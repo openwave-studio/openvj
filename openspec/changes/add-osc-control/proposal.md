@@ -32,8 +32,11 @@ Out of scope: OSCQuery, wildcard addresses, clip and clip-effect parameters (the
 - add-midi-learn (open) owns map mode and the target ids. OSC learn reuses both.
 - add-keying-and-blend-modes and add-mixer-undo (this PR): undo should not record OSC-driven value changes, like MIDI. Build order: blend modes, OSC, undo.
 
+## Decisions
+
+- Ports are Resolume's: 7000 in, 7001 out, so existing layouts work (the maintainer, 2026-11-26). openDJ keeps its own port 9000 for what it sends.
+
 ## Open questions
 
-- Ports: keep Resolume's 7000 in and 7001 out, so existing layouts work, even though openDJ uses 9000?
 - Should OSC output send every change all the time, or only addresses that a client asked for with `?` (less traffic on a busy network)? Proposed: every change, as Resolume does, with a switch.
 - Is a bundled TouchOSC layout for openVJ worth making, or is Resolume-compatible enough?

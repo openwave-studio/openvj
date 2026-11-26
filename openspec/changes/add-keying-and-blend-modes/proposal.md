@@ -36,8 +36,11 @@ Out of scope: Resolume's transition-style blends (wipes, push, cube, zoom), the 
 - add-opendj-sync and add-gated-envelopes (PR #35, proposals only) touch `composition.rs` for mappings only. No overlap in blend or effect code; either order works.
 - add-osc-control and add-mixer-undo (this PR) don't touch blend or effects code. Suggested build order: this, then OSC, then undo.
 
+## Decisions
+
+- Resolume stores blend modes by name in .avc (`type="Alpha"`, `"Add"`…). The sample files only use Alpha and Add, and the maintainer chose to skip a test file for now (2026-11-26), so import matches the new modes by their menu names, normalised (`lumakey`, `mask`, `stencil`…; earlier files showed `Mask50`, which the existing "50" handling already covers), and still reports any name it doesn't recognise. Verify against a real file when one turns up.
+
 ## Open questions
 
-- Resolume stores blend modes by name in .avc (`type="Alpha"`, `"Add"`…). Seba's sample files only use Alpha and Add, so the exact names of Luma Key, Mask, Stencil and Silhouette need one test .avc (a layer set to each). Can Seba save one?
 - Should Mask and Stencil be able to reach below a group (the whole composition), or stay inside the group as proposed?
-- Are these the right ten effects, or is there one Seba uses in Resolume more than any of them?
+- Are these the right ten effects? Bloom and Trails are among the most-dropped effects in the sample files; Bendoscope and CubeTiles are too, and are left for later.

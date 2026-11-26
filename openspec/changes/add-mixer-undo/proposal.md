@@ -31,7 +31,10 @@ Out of scope: undo for the mapping window (Advanced Output), library changes (ta
 - Every open change that adds an edit to the Mixer needs to record it. Land this last of the three in this PR, after add-keying-and-blend-modes and add-osc-control, and after add-opendj-sync (PR #35), so their edits are covered from the start.
 - add-midi-learn (open): learned mappings become undoable; no code overlap beyond the record call.
 
+## Decisions
+
+- Mouse drags on faders and knobs are undoable, one step per drag, as in Resolume (the maintainer, 2026-11-26).
+
 ## Open questions
 
-- Should a fader drag with the mouse really be undoable during a show, or should only "building" edits be (clips, effects, layers), as proposed for MIDI-moved values? Proposed: mouse drags undoable, as in Resolume.
 - Is 100 steps enough?
