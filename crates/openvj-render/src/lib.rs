@@ -62,7 +62,10 @@ struct Uniforms {
     kind: u32,
     mode: u32,
     opacity: f32,
-    _pad: f32,
+    /// Blend passes: 1 when the base is the composition, which sits on opaque black, so
+    /// Mask, Stencil and Silhouette darken it; 0 when it can be transparent (a group), so
+    /// they take away coverage instead.
+    opaque_base: f32,
     uv_scale: [f32; 2],
     uv_offset: [f32; 2],
     /// Media passes: the part of tex_a (xy) and tex_b (zw) holding the picture.
@@ -977,6 +980,18 @@ impl Engine {
         Pass::builtin(Some(Pipeline::Blend), target, TRANSPARENT, u, Some(a.view.clone()), Some(b.view.clone()))
     }
 
+    /// A blend into the composition, whose base is opaque (it starts as black).
+    fn comp_blend_pass(target: &Target, a: &Target, b: &Target, mode: u32, opacity: f32) -> Pass {
+        let u = Uniforms {
+            res: [target.width as f32, target.height as f32],
+            mode,
+            opacity,
+            opaque_base: 1.0,
+            ..Default::default()
+        };
+        Pass::builtin(Some(Pipeline::Blend), target, TRANSPARENT, u, Some(a.view.clone()), Some(b.view.clone()))
+    }
+
     /// Runs `src` through the enabled effects of a chain and returns the target holding the
     /// result. Effects that are missing or don't compile pass their input through.
     fn effect_chain(
@@ -1243,7 +1258,7 @@ impl Engine {
         let Some(g) = comp.groups.get(group) else { return cur };
         let src = self.effect_chain(passes, &t.fx, t.group[slot].clone(), &g.effects, now, inputs);
         self.write_route(passes, RouterInput::Group(group), &src);
-        passes.push(Self::blend_pass(
+        passes.push(Self::comp_blend_pass(
             &t.comp[1 - cur],
             &t.comp[cur],
             &src,
@@ -1413,7 +1428,7 @@ impl Engine {
                     *slot = 1 - *slot;
                 }
                 None => {
-                    passes.push(Self::blend_pass(&t.comp[1 - cur], &t.comp[cur], src, mode, opacity));
+                    passes.push(Self::comp_blend_pass(&t.comp[1 - cur], &t.comp[cur], src, mode, opacity));
                     cur = 1 - cur;
                 }
             }
@@ -2026,6 +2041,46 @@ mod tests {
         for (got, want) in m.iter().zip([200.0, 100.0, 50.0]) {
             assert!((got - want).abs() < 3.0, "BC7: {m:?}");
         }
+    }
+
+    #[test]
+    fn keying_and_masking_blends() {
+        let Some(mut e) = engine(64, 36) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut comp = Composition::new(64, 36, 3, 1);
+        let red = comp.set_clip(0, 0, ClipSource::Image { path: "red.png".into() }).unwrap();
+        e.set_media_frame(red, 2, 2, &[255, 0, 0, 255].repeat(4));
+        // White on the left half, black on the right.
+        let shape = comp.set_clip(2, 0, ClipSource::Image { path: "shape.png".into() }).unwrap();
+        e.set_media_frame(shape, 2, 2, &[[255u8, 255, 255, 255], [0, 0, 0, 255]].concat().repeat(2));
+        comp.trigger(0, 0, 0.0);
+        comp.trigger(2, 0, 0.0);
+        let sides = |e: &mut Engine, comp: &Composition| {
+            e.render(comp, 0.1, &inputs(0.1), None);
+            let px = e.read_target(e.output());
+            let at = |x: usize| [px[(18 * 64 + x) * 4], px[(18 * 64 + x) * 4 + 1], px[(18 * 64 + x) * 4 + 2]];
+            (at(6), at(58))
+        };
+        comp.layers[2].blend = BlendMode::Mask;
+        assert_eq!(sides(&mut e, &comp), ([255, 0, 0], [0, 0, 0]), "Mask: red shows under white only");
+        comp.layers[2].blend = BlendMode::MaskInverted;
+        assert_eq!(sides(&mut e, &comp), ([0, 0, 0], [255, 0, 0]), "Mask Inverted");
+        comp.layers[2].blend = BlendMode::Stencil;
+        assert_eq!(sides(&mut e, &comp), ([255, 0, 0], [255, 0, 0]), "Stencil: opaque layer keeps all");
+        comp.layers[2].blend = BlendMode::Silhouette;
+        assert_eq!(sides(&mut e, &comp), ([0, 0, 0], [0, 0, 0]), "Silhouette: opaque layer cuts all");
+        comp.layers[2].blend = BlendMode::LumaKey;
+        assert_eq!(sides(&mut e, &comp), ([255, 255, 255], [255, 0, 0]), "Luma Key: black is transparent");
+
+        // Inside a group, Mask cuts only the group: layer 0 shows through.
+        let green = comp.set_clip(1, 0, ClipSource::Image { path: "green.png".into() }).unwrap();
+        e.set_media_frame(green, 2, 2, &[0, 255, 0, 255].repeat(4));
+        comp.trigger(1, 0, 0.0);
+        comp.layers[2].blend = BlendMode::Mask;
+        comp.group_layers(&[1, 2]).unwrap();
+        assert_eq!(sides(&mut e, &comp), ([0, 255, 0], [255, 0, 0]), "Mask in a group");
     }
 
     #[test]
@@ -2944,6 +2999,50 @@ mod tests {
                 assert!((m[0] - (255.0 - plain[0])).abs() < 2.0, "invert: {m:?} vs {plain:?}");
             }
         }
+    }
+
+    #[test]
+    fn key_effects_show_the_layer_below() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut comp = Composition::new(32, 32, 2, 1);
+        let red = comp.set_clip(0, 0, ClipSource::Image { path: "red.png".into() }).unwrap();
+        e.set_media_frame(red, 2, 2, &[255, 0, 0, 255].repeat(4));
+        let top = comp.set_clip(1, 0, ClipSource::Image { path: "top.png".into() }).unwrap();
+        comp.trigger_column(0, 0.0);
+        for (fx, rgba) in [("chroma_key", [0u8, 255, 0, 255]), ("luma_key", [0, 0, 0, 255])] {
+            e.set_media_frame(top, 2, 2, &rgba.repeat(4));
+            comp.layers[1].effects = vec![Effect::new(fx)];
+            e.render(&comp, 0.1, &inputs(0.1), None);
+            let m = mean(&e.read_target(e.output()));
+            assert!(m[0] > 250.0 && m[1] < 2.0 && m[2] < 2.0, "{fx}: red shows through: {m:?}");
+        }
+        // A colour the chroma key doesn't match stays.
+        e.set_media_frame(top, 2, 2, &[0, 0, 255, 255].repeat(4));
+        comp.layers[1].effects = vec![Effect::new("chroma_key")];
+        e.render(&comp, 0.1, &inputs(0.1), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!(m[2] > 250.0 && m[0] < 2.0, "blue stays: {m:?}");
+    }
+
+    #[test]
+    fn trails_fade_over_frames() {
+        let Some(mut e) = engine(32, 32) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut comp = Composition::new(32, 32, 1, 1);
+        let id = comp.set_clip(0, 0, ClipSource::Image { path: "w.png".into() }).unwrap();
+        e.set_media_frame(id, 1, 1, &[255, 255, 255, 255]);
+        comp.trigger(0, 0, 0.0);
+        comp.layers[0].effects.push(Effect::new("trails"));
+        e.render(&comp, 0.0, &inputs(0.0), None);
+        e.set_media_frame(id, 1, 1, &[0, 0, 0, 255]);
+        e.render(&comp, 1.0 / 60.0, &inputs(1.0 / 60.0), None);
+        let m = mean(&e.read_target(e.output()));
+        assert!((m[0] - 255.0 * 0.85).abs() < 6.0, "one frame later the trail is at 85%: {m:?}");
     }
 
     #[test]

@@ -32,9 +32,9 @@ use crate::midi::{self, MidiPorts};
 use crate::player::PlayerState;
 use crate::syphon_out::{self, SyphonOutput};
 use crate::{
-    AudioLevels, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData, Lib, LibChip,
-    LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, MilkPack, ModNames, OutputWindow, ParamData,
-    Pl, PresetRow, Shadertoy, SynthLayer,
+    AudioLevels, BlendHeadings, BrowserItem, CellData, ColumnData, DeckData, Disc, DiscParam, EffectData, LayerData,
+    Lib, LibChip, LibSideRow, LibTile, MainWindow, MappingWindow, MediaTile, MidiLearn, MilkPack, ModNames,
+    OutputWindow, ParamData, Pl, PresetRow, Shadertoy, SynthLayer,
 };
 
 // The output mapping window's side of the app.
@@ -519,6 +519,8 @@ impl App {
         ui.set_files(ModelRc::from(self.files_model.clone()));
         let modes: Vec<SharedString> = BlendMode::ALL.iter().map(|m| m.name().into()).collect();
         ui.set_blend_modes(ModelRc::new(VecModel::from(modes)));
+        let headings: Vec<SharedString> = BlendMode::ALL.iter().map(|m| m.menu_heading().into()).collect();
+        ui.global::<BlendHeadings>().set_list(ModelRc::new(VecModel::from(headings)));
         ui.set_comp_params(ModelRc::from(self.comp_params.clone()));
         ui.set_audio_params(ModelRc::from(self.audio_params.clone()));
         ui.set_layer_params(ModelRc::from(self.layer_params.clone()));

@@ -22,6 +22,11 @@ export global Scope {
 }
 
 /// Names for modulation menus, filled in from Rust.
+/// Section headings for blend-mode menus, one per mode in menu order (empty where none).
+export global BlendHeadings {
+    in property <[string]> list;
+}
+
 export global ModNames {
     // ModSource::ALL names.
     in property <[string]> sources;

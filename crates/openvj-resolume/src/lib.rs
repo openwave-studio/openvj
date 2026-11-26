@@ -569,6 +569,17 @@ fn blend_mode(resolume: &str) -> Option<BlendMode> {
         "lighten" => BlendMode::Lighten,
         "darken" => BlendMode::Darken,
         "subtract" => BlendMode::Subtract,
+        // Not seen in a real .avc yet: matched by their menu names.
+        "softlight" => BlendMode::SoftLight,
+        "hardlight" => BlendMode::HardLight,
+        "dodge" | "colordodge" => BlendMode::Dodge,
+        "burn" | "colorburn" => BlendMode::Burn,
+        "exclusion" => BlendMode::Exclusion,
+        "lumakey" | "luma" => BlendMode::LumaKey,
+        "mask" => BlendMode::Mask,
+        "maskinverted" | "invertedmask" | "maskinvert" => BlendMode::MaskInverted,
+        "stencil" => BlendMode::Stencil,
+        "silhouette" => BlendMode::Silhouette,
         _ => return None,
     })
 }

@@ -1041,6 +1041,7 @@ export component SynthesisLayout inherits Rectangle {
                                 y: 10px;
                                 width: 110px;
                                 modes: root.blend-modes;
+                                blend-sections: true;
                                 current: root.overlay-blend;
                                 picked(i) => { root.overlay-blend-picked(i); }
                             }

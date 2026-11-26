@@ -20,6 +20,7 @@ pub const VIDEO_EXTENSIONS: &[&str] = &["mov", "mp4", "m4v", "mkv", "webm", "avi
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ClipId(pub u64);
 
+/// How a layer or group is mixed over what is below it. Names follow Resolume's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlendMode {
@@ -33,19 +34,62 @@ pub enum BlendMode {
     Lighten,
     Darken,
     Subtract,
+    SoftLight,
+    HardLight,
+    Dodge,
+    Burn,
+    Exclusion,
+    /// Dark parts of the layer turn transparent.
+    LumaKey,
+    /// The layer's brightness decides how much of what is below shows (black hides it).
+    Mask,
+    MaskInverted,
+    /// What is below shows only where the layer is opaque.
+    Stencil,
+    /// What is below is cut out where the layer is opaque.
+    Silhouette,
+}
+
+/// The menu sections blend modes are listed under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendGroup {
+    Mix,
+    Light,
+    Key,
+}
+
+impl BlendGroup {
+    pub fn name(self) -> &'static str {
+        match self {
+            BlendGroup::Mix => "Mix",
+            BlendGroup::Light => "Light",
+            BlendGroup::Key => "Key",
+        }
+    }
 }
 
 impl BlendMode {
-    pub const ALL: [BlendMode; 9] = [
+    /// Every mode, in menu order (grouped by [`BlendMode::group`]).
+    pub const ALL: [BlendMode; 19] = [
         BlendMode::Normal,
         BlendMode::Add,
-        BlendMode::Screen,
+        BlendMode::Subtract,
         BlendMode::Multiply,
-        BlendMode::Overlay,
-        BlendMode::Difference,
+        BlendMode::Screen,
         BlendMode::Lighten,
         BlendMode::Darken,
-        BlendMode::Subtract,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Overlay,
+        BlendMode::SoftLight,
+        BlendMode::HardLight,
+        BlendMode::Dodge,
+        BlendMode::Burn,
+        BlendMode::LumaKey,
+        BlendMode::Mask,
+        BlendMode::MaskInverted,
+        BlendMode::Stencil,
+        BlendMode::Silhouette,
     ];
 
     pub fn name(self) -> &'static str {
@@ -59,12 +103,68 @@ impl BlendMode {
             BlendMode::Lighten => "Lighten",
             BlendMode::Darken => "Darken",
             BlendMode::Subtract => "Subtract",
+            BlendMode::SoftLight => "Soft Light",
+            BlendMode::HardLight => "Hard Light",
+            BlendMode::Dodge => "Dodge",
+            BlendMode::Burn => "Burn",
+            BlendMode::Exclusion => "Exclusion",
+            BlendMode::LumaKey => "Luma Key",
+            BlendMode::Mask => "Mask",
+            BlendMode::MaskInverted => "Mask Inverted",
+            BlendMode::Stencil => "Stencil",
+            BlendMode::Silhouette => "Silhouette",
         }
     }
 
-    /// Index the WGSL blend shader switches on. Must match `fs_blend`.
+    pub fn group(self) -> BlendGroup {
+        match self {
+            BlendMode::Overlay | BlendMode::SoftLight | BlendMode::HardLight | BlendMode::Dodge | BlendMode::Burn => {
+                BlendGroup::Light
+            }
+            BlendMode::LumaKey
+            | BlendMode::Mask
+            | BlendMode::MaskInverted
+            | BlendMode::Stencil
+            | BlendMode::Silhouette => BlendGroup::Key,
+            _ => BlendGroup::Mix,
+        }
+    }
+
+    /// The section heading shown above this mode in the menu: the group's name on the
+    /// first mode of each group, empty otherwise.
+    pub fn menu_heading(self) -> &'static str {
+        let i = self.index();
+        if i == 0 || Self::ALL[i - 1].group() != self.group() { self.group().name() } else { "" }
+    }
+
+    /// Index the WGSL blend shader switches on. Must match `fs_blend`; stable, unlike menu order.
     pub fn shader_id(self) -> u32 {
-        Self::ALL.iter().position(|m| *m == self).unwrap() as u32
+        match self {
+            BlendMode::Normal => 0,
+            BlendMode::Add => 1,
+            BlendMode::Screen => 2,
+            BlendMode::Multiply => 3,
+            BlendMode::Overlay => 4,
+            BlendMode::Difference => 5,
+            BlendMode::Lighten => 6,
+            BlendMode::Darken => 7,
+            BlendMode::Subtract => 8,
+            BlendMode::SoftLight => 9,
+            BlendMode::HardLight => 10,
+            BlendMode::Dodge => 11,
+            BlendMode::Burn => 12,
+            BlendMode::Exclusion => 13,
+            BlendMode::LumaKey => 14,
+            BlendMode::Mask => 15,
+            BlendMode::MaskInverted => 16,
+            BlendMode::Stencil => 17,
+            BlendMode::Silhouette => 18,
+        }
+    }
+
+    /// Position in [`BlendMode::ALL`] (the menu).
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|m| *m == self).unwrap()
     }
 
     pub fn from_index(i: usize) -> Self {
@@ -1355,6 +1455,26 @@ impl Composition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blend_modes_have_unique_shader_ids_and_names() {
+        let mut ids: Vec<u32> = BlendMode::ALL.iter().map(|m| m.shader_id()).collect();
+        ids.sort();
+        assert_eq!(ids, (0..BlendMode::ALL.len() as u32).collect::<Vec<_>>());
+        for (i, m) in BlendMode::ALL.iter().enumerate() {
+            assert_eq!(BlendMode::from_index(i), *m);
+            assert_eq!(m.index(), i);
+        }
+        let headings: Vec<&str> = BlendMode::ALL.iter().map(|m| m.menu_heading()).filter(|h| !h.is_empty()).collect();
+        assert_eq!(headings, ["Mix", "Light", "Key"], "each group is listed once, together");
+    }
+
+    #[test]
+    fn blend_modes_save_by_name() {
+        assert_eq!(serde_json::to_string(&BlendMode::MaskInverted).unwrap(), "\"mask_inverted\"");
+        let m: BlendMode = serde_json::from_str("\"subtract\"").unwrap();
+        assert_eq!(m, BlendMode::Subtract);
+    }
 
     #[test]
     fn isf_generator_clips_save_by_name() {
