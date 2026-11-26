@@ -212,6 +212,12 @@ pub struct App {
     midi_clock: MidiClock,
     /// The input the clock is following; another input's clock is ignored until it goes quiet.
     clock_port: Option<String>,
+    /// The link to openDJ (its beat, phrase, track and cue events over OSC), while it's on.
+    opendj: Option<crate::osc::OpenDj>,
+    /// What openVJ last heard from openDJ.
+    dj: openvj_core::opendj::DjState,
+    /// What the UI shows for openDJ, to push only changes.
+    dj_shown: (bool, bool, String, String),
     /// Beat and audio levels for this frame.
     inputs: ModInputs,
     last_frame: f64,
@@ -376,6 +382,9 @@ impl App {
             clock_on: false,
             midi_clock: MidiClock::new(),
             clock_port: None,
+            opendj: None,
+            dj: Default::default(),
+            dj_shown: (false, false, "?".into(), String::new()),
             inputs: ModInputs::default(),
             last_frame: 0.0,
             analyzer: Analyzer::new(48_000),
@@ -483,6 +492,9 @@ impl App {
         app.open_midi();
         if crate::prefs::flag("midi_clock") {
             app.set_clock(true);
+        }
+        if crate::prefs::flag("opendj") {
+            app.set_opendj(true);
         }
         app
     }
@@ -983,6 +995,7 @@ impl App {
         self.update_videos(now, beat);
         self.update_live(now);
         self.update_midi(now);
+        self.update_opendj(ui);
         self.inputs = self.update_audio(beat, dt);
         let inputs = self.inputs;
         self.player.listen(&inputs, self.comp.bpm, dt, now, beat);
@@ -2116,6 +2129,76 @@ impl App {
         } else {
             "Syphon output off"
         });
+    }
+
+    /// The openDJ switch in Settings › Tempo. Remembered, so openVJ connects by itself next time.
+    pub fn opendj_toggle(&mut self) {
+        let on = self.opendj.is_none();
+        self.set_opendj(on);
+        crate::prefs::set_flag("opendj", on);
+        self.set_status(if self.opendj.is_some() {
+            "openDJ on: following its phrases and tracks (turn on OSC in openDJ's Settings › Controllers)"
+        } else if on {
+            "openDJ couldn't start: no network port free for OSC"
+        } else {
+            "openDJ off"
+        });
+    }
+
+    fn set_opendj(&mut self, on: bool) {
+        self.dj = Default::default();
+        self.opendj = if on {
+            match crate::osc::OpenDj::start() {
+                Ok(link) => Some(link),
+                Err(e) => {
+                    eprintln!("openDJ link: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+    }
+
+    /// Takes in openDJ's events for this frame and shows the phrase and track.
+    fn update_opendj(&mut self, ui: &MainWindow) {
+        let connected = match &mut self.opendj {
+            Some(link) => {
+                for e in link.poll() {
+                    self.dj.apply(e);
+                }
+                link.connected().is_some()
+            }
+            None => false,
+        };
+        if !connected && self.dj.bar != 0 {
+            // openDJ went away: forget where it was.
+            let decks = std::mem::take(&mut self.dj.decks);
+            self.dj = openvj_core::opendj::DjState { decks, ..Default::default() };
+        }
+        let track = self
+            .dj
+            .master_track()
+            .map(|t| {
+                let mut s = match (t.artist.is_empty(), t.title.is_empty()) {
+                    (false, false) => format!("{} – {}", t.artist, t.title),
+                    (true, _) => t.title.clone(),
+                    (false, true) => t.artist.clone(),
+                };
+                if !t.key.is_empty() {
+                    s.push_str(&format!(" · {}", t.key));
+                }
+                s
+            })
+            .unwrap_or_default();
+        let shown = (self.opendj.is_some(), connected, self.dj.label(), track);
+        if shown != self.dj_shown {
+            ui.set_opendj_on(shown.0);
+            ui.set_opendj_connected(shown.1);
+            ui.set_opendj_phrase(shown.2.clone().into());
+            ui.set_opendj_track(shown.3.clone().into());
+            self.dj_shown = shown;
+        }
     }
 
     pub fn link_toggle(&mut self) {

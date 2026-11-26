@@ -39,8 +39,9 @@ Out of scope: sending OSC, controlling openVJ from OSC (Resolume's OSC addresses
 - add-midi-learn (open, export blocked) owns map mode. Phrase learn reuses it.
 - No open PRs right now.
 
-## Open questions
+## Decisions (the maintainer, 2026-11-26)
 
-- Should openVJ connect to openDJ automatically when it sees it, or only after the switch is turned on once? Proposed: switch on once, then automatic.
-- Phrase triggers: should openVJ also offer a fixed rule (Session scene N or phrase type launches column N) or only learned mappings? Proposed: learned only, as in Resolume.
-- Track key: drive a hue only, or also pick a colour palette for generators? Proposed: driver only for now.
+- openVJ connects to openDJ by itself once the switch has been turned on, and remembers it.
+- Phrase triggers come only from learned mappings, as in Resolume; no fixed phrase-to-column rule.
+- The track's key is only made available (shown, and as a driver) for now, to start making visuals key-aware.
+- OSC is the link, being the standard visuals and lighting apps already speak.

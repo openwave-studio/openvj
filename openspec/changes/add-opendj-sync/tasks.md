@@ -2,10 +2,10 @@
 
 ## 1. OSC input and openDJ connection
 
-- [ ] 1.1 OSC receiver thread (rosc), off the render thread; events into the app through a channel
-- [ ] 1.2 Find openDJ over Bonjour (`_osc._udp`, name openDJ), subscribe to `/beat`, `/phrase`, `/deck/*/track`, `/deck/*/cue`, re-subscribe after openDJ restarts
-- [ ] 1.3 openDJ switch in Settings, connection and phrase shown in the tempo area
-- [ ] 1.4 Tests with recorded OSC packets
+- [x] 1.1 OSC receiver thread (rosc), off the render thread; events into the app through a channel
+- [x] 1.2 Find openDJ over Bonjour (`_osc._udp`, name openDJ), subscribe to `/beat`, `/phrase`, `/deck/*/track`, `/deck/*/cue`, re-subscribe after openDJ restarts
+- [x] 1.3 openDJ switch in Settings, connection and phrase shown in the tempo area
+- [x] 1.4 Tests with OSC packets from a stand-in openDJ
 
 ## 2. Player
 

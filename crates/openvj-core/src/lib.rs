@@ -15,6 +15,7 @@ mod midi;
 mod midi_clock;
 pub mod milkdrop;
 mod modulation;
+pub mod opendj;
 mod output;
 mod overlay;
 mod playback;

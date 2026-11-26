@@ -254,6 +254,12 @@ export component SettingsOverlay inherits Rectangle {
     in property <bool> link-on;
     in property <int> link-peers;
     in property <float> bpm;
+    // openDJ.
+    in property <bool> opendj-on;
+    in property <bool> opendj-connected;
+    in property <string> opendj-phrase;
+    in property <string> opendj-track;
+    callback opendj-toggle();
     // Output.
     in property <bool> output-open;
     in property <string> mapping-status;
@@ -284,7 +290,7 @@ export component SettingsOverlay inherits Rectangle {
     // Page names, and the words a search finds each page by.
     property <[{name: string, words: string}]> pages: [
         { name: "Audio", words: "audio input device microphone line analyser fft bands gain smoothing" },
-        { name: "Tempo", words: "tempo bpm ableton link sync tap beat" },
+        { name: "Tempo", words: "tempo bpm ableton link sync tap beat opendj osc phrase drop track key" },
         { name: "Output", words: "output window fullscreen screen projector display syphon share apps mapping advanced slices masks warp resolume test card" },
         { name: "Media", words: "media folder files browser relink missing shadertoy api key import" },
         { name: "Keyboard", words: "keyboard shortcuts keys" },
@@ -463,6 +469,16 @@ export component SettingsOverlay inherits Rectangle {
                                     on: root.link-on;
                                     enabled: root.link-available;
                                     toggled => { root.link-toggle(); }
+                                }
+                            }
+                            PrefRow {
+                                title: "openDJ";
+                                detail: !root.opendj-on ? "Follow openDJ's phrases, tracks and hot cues over OSC. Keep LINK on for the tempo."
+                                    : !root.opendj-connected ? "Looking for openDJ. Turn on OSC in openDJ's Settings › Controllers."
+                                    : "Connected" + (root.opendj-phrase != "" ? ": " + root.opendj-phrase : "") + (root.opendj-track != "" ? ", " + root.opendj-track : "") + ".";
+                                Switch {
+                                    on: root.opendj-on;
+                                    toggled => { root.opendj-toggle(); }
                                 }
                             }
                             PrefRow {
