@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParamData, ModNames, AudioLevels, MidiLearn } from "state.slint";
+import { ParamData, ModNames, AudioLevels, MidiLearn, BlendHeadings } from "state.slint";
 
 /// Map-mode overlay for a mappable control: put it last inside the control so it covers it
 /// and takes the click. Outlined in cyan, filled when mapped, with the note or CC shown.
@@ -312,6 +312,8 @@ export component Chevron inherits Path {
 export component BlendPicker inherits Rectangle {
     in property <[string]> modes;
     in property <int> current;
+    /// Blend-mode menus: show the Mix, Light and Key section headings.
+    in property <bool> blend-sections;
     in property <length> menu-width: 160px;
     callback picked(int);
 
@@ -356,7 +358,17 @@ export component BlendPicker inherits Rectangle {
             drop-shadow-color: #000000a0;
             VerticalLayout {
                 padding: 6px;
-                for mode[i] in root.modes: Rectangle {
+                for mode[i] in root.modes: VerticalLayout {
+                  if root.blend-sections && BlendHeadings.list[i] != "": Text {
+                    height: 20px;
+                    x: 8px;
+                    text: BlendHeadings.list[i];
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    font-weight: 600;
+                    vertical-alignment: bottom;
+                  }
+                  Rectangle {
                     height: 24px;
                     border-radius: Theme.radius-small;
                     background: i == root.current ? Theme.accent.with-alpha(0.35) : item-ta.has-hover ? Theme.chosen : transparent;
@@ -373,6 +385,7 @@ export component BlendPicker inherits Rectangle {
                     item-ta := TouchArea {
                         clicked => { root.picked(i); }
                     }
+                  }
                 }
             }
         }

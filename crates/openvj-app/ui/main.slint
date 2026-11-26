@@ -1,6 +1,6 @@
 import { LineEdit, ScrollView, ListView } from "std-widgets.slint";
 import { Theme, CloseIcon } from "theme.slint";
-import { Scope, ModNames, AudioLevels, MidiLearn, ParamData, EffectData, CellData, LayerData, ColumnData, DeckData, BrowserItem } from "state.slint";
+import { Scope, BlendHeadings, ModNames, AudioLevels, MidiLearn, ParamData, EffectData, CellData, LayerData, ColumnData, DeckData, BrowserItem } from "state.slint";
 import { Fader, ToggleButton, FlatButton, BlendPicker, PanelTitle, Monitor, BandMeters, MidiSpot } from "controls.slint";
 import { PropertiesPanel } from "properties.slint";
 import { TabButton } from "controls.slint";
@@ -16,7 +16,7 @@ import { Lib, LibraryPanel, ExpandedLibrary } from "library.slint";
 import { Drag, DragSource } from "drag.slint";
 export { MappingWindow, MapLayer, MapHandle, MapCorner, Lib, Disc, DiscParam, Drag }
 
-export { Theme, Scope, ModNames, AudioLevels, Shadertoy, MilkPack, MidiLearn, Pl }
+export { Theme, Scope, BlendHeadings, ModNames, AudioLevels, Shadertoy, MilkPack, MidiLearn, Pl }
 
 component ClipCell inherits Rectangle {
     in property <CellData> data;
@@ -319,6 +319,7 @@ component LayerStrip inherits Rectangle {
         }
         BlendPicker {
             modes: root.blend-modes;
+            blend-sections: true;
             current: root.data.blend;
             picked(i) => { root.blend(i); }
         }

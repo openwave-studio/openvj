@@ -197,8 +197,8 @@ fn reads_composition_and_layer_settings() {
     assert_eq!(base.transition_secs, 1.5);
     assert_eq!(base.blend, BlendMode::Multiply);
     assert_eq!(c.layers[1].name, "Layer 2");
-    assert_eq!(c.layers[1].blend, BlendMode::Normal);
-    assert!(report.notes.iter().any(|n| n.contains("\"LumaKey\" isn't available")));
+    assert_eq!(c.layers[1].blend, BlendMode::LumaKey);
+    assert!(!report.notes.iter().any(|n| n.contains("LumaKey")));
 }
 
 #[test]
@@ -537,4 +537,23 @@ fn imports_clip_transforms_effects_and_their_settings() {
 
     assert!(close(real(&c.layers[0].transform, "rotation_x"), 30.0));
     assert!(c.layers[0].effects.is_empty(), "the layer's Transform isn't an effect in its chain");
+}
+
+#[test]
+fn keying_and_light_blend_names() {
+    assert_eq!(blend_mode("Mask50"), Some(BlendMode::Mask), "Resolume's 50 variants keep the mode");
+    assert_eq!(blend_mode("Luma Key"), Some(BlendMode::LumaKey));
+    assert_eq!(blend_mode("Mask Inverted"), Some(BlendMode::MaskInverted));
+    assert_eq!(blend_mode("Stencil"), Some(BlendMode::Stencil));
+    assert_eq!(blend_mode("Silhouette"), Some(BlendMode::Silhouette));
+    assert_eq!(blend_mode("Soft Light"), Some(BlendMode::SoftLight));
+    assert_eq!(blend_mode("Wipe Ellipse"), None);
+}
+
+#[test]
+fn reports_blend_modes_without_an_equivalent() {
+    let xml = SYNTHETIC.replace(r#"type="LumaKey""#, r#"type="Wipe Ellipse""#);
+    let Imported { composition: c, report, .. } = import_str(&xml).unwrap();
+    assert_eq!(c.layers[1].blend, BlendMode::Normal);
+    assert!(report.notes.iter().any(|n| n.contains("\"Wipe Ellipse\" isn't available")));
 }

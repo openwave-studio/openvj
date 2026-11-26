@@ -29,6 +29,16 @@ const BUILTIN: &[(&str, &str)] = &[
     ("blur", include_str!("../effects/blur.fs")),
     ("edges", include_str!("../effects/edges.fs")),
     ("acuarela", include_str!("../effects/acuarela.fs")),
+    ("luma_key", include_str!("../effects/luma_key.fs")),
+    ("chroma_key", include_str!("../effects/chroma_key.fs")),
+    ("trails", include_str!("../effects/trails.fs")),
+    ("strobe", include_str!("../effects/strobe.fs")),
+    ("threshold", include_str!("../effects/threshold.fs")),
+    ("tile", include_str!("../effects/tile.fs")),
+    ("slide", include_str!("../effects/slide.fs")),
+    ("bloom", include_str!("../effects/bloom.fs")),
+    ("vignette", include_str!("../effects/vignette.fs")),
+    ("infinite_zoom", include_str!("../effects/infinite_zoom.fs")),
 ];
 
 /// Built-in effects that aren't listed in the Effects tab: they're fixed in a card.

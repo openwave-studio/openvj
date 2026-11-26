@@ -13,7 +13,7 @@ struct Uniforms {
     kind: u32,
     mode: u32,
     opacity: f32,
-    _pad: f32,
+    opaque_base: f32,
     uv_scale: vec2f,
     uv_offset: vec2f,
     crop: vec4f,
@@ -246,7 +246,29 @@ fn fs_blend(in: VOut) -> @location(0) vec4f {
         return mix(base, layer, u.opacity);
     }
 
+    // Keying and masking (Resolume's Luma Key, Mask, Stencil, Silhouette).
+    let luma = dot(l, vec3f(0.2126, 0.7152, 0.0722));
+    var keep = -1.0;
+    switch u.mode {
+        case 15u: { keep = luma * layer.a; }
+        case 16u: { keep = 1.0 - luma * layer.a; }
+        case 17u: { keep = layer.a; }
+        case 18u: { keep = 1.0 - layer.a; }
+        default: {}
+    }
+    if keep >= 0.0 {
+        // How much of the base survives; the layer itself isn't drawn. On the composition
+        // (opaque, over black) the base darkens; in a group it loses coverage instead, so
+        // the layers below the group show through.
+        let k = mix(1.0, clamp(keep, 0.0, 1.0), u.opacity);
+        if u.opaque_base > 0.5 {
+            return vec4f(b * k, base.a);
+        }
+        return vec4f(b, base.a * k);
+    }
+
     var c = l;
+    var la = layer.a;
     switch u.mode {
         case 1u: { c = b + l; }
         case 2u: { c = 1.0 - (1.0 - b) * (1.0 - l); }
@@ -256,12 +278,24 @@ fn fs_blend(in: VOut) -> @location(0) vec4f {
         case 6u: { c = max(b, l); }
         case 7u: { c = min(b, l); }
         case 8u: { c = b - l; }
+        // Soft Light (W3C).
+        case 9u: {
+            let d = select(sqrt(b), ((16.0 * b - 12.0) * b + 4.0) * b, b <= vec3f(0.25));
+            c = select(b + (2.0 * l - 1.0) * (d - b), b - (1.0 - 2.0 * l) * b * (1.0 - b), l <= vec3f(0.5));
+        }
+        // Hard Light: Overlay with the layers swapped.
+        case 10u: { c = select(1.0 - 2.0 * (1.0 - b) * (1.0 - l), 2.0 * b * l, l < vec3f(0.5)); }
+        case 11u: { c = select(min(vec3f(1.0), b / max(1.0 - l, vec3f(1e-4))), vec3f(1.0), l >= vec3f(1.0)); }
+        case 12u: { c = select(1.0 - min(vec3f(1.0), (1.0 - b) / max(l, vec3f(1e-4))), vec3f(0.0), l <= vec3f(0.0)); }
+        case 13u: { c = b + l - 2.0 * b * l; }
+        // Luma Key: dark parts of the layer turn transparent, the rest mixes normally.
+        case 14u: { la = layer.a * smoothstep(0.0, 1.0, luma); }
         default: {}
     }
     // Straight-alpha "source over" with the blend mode applied where the base has coverage
     // (W3C compositing). Over an opaque base this is mix(b, c, a); over a transparent one
     // (the first layer of a group) it is just the layer.
-    let a = layer.a * u.opacity;
+    let a = la * u.opacity;
     let out_a = a + base.a * (1.0 - a);
     if out_a <= 0.0 {
         return vec4f(0.0);
