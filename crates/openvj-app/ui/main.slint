@@ -687,6 +687,11 @@ component Toolbar inherits Rectangle {
     in property <bool> clock-on;
     in property <bool> clock-waiting;
     in property <string> clock-port;
+    // openDJ: on, connected, and the phrase it's in ("DROP 5/16") with its track.
+    in property <bool> opendj-on;
+    in property <bool> opendj-connected;
+    in property <string> opendj-phrase;
+    in property <string> opendj-track;
     in property <bool> midi-on;
     in property <int> layout;
     callback layout-picked(int);
@@ -864,6 +869,24 @@ component Toolbar inherits Rectangle {
                 active: root.clock-on;
                 opacity: root.clock-on && root.clock-waiting ? 0.6 : 1;
                 clicked => { root.clock-toggle(); }
+            }
+            // openDJ's phrase and bar, while the link is on. Dimmed while openDJ isn't heard.
+            if root.opendj-on: Rectangle {
+                width: dj-label.preferred-width + 16px;
+                border-radius: Theme.radius;
+                background: root.opendj-connected ? Theme.accent.with-alpha(0.14) : Theme.panel-2;
+                border-width: 1px;
+                border-color: root.opendj-connected ? Theme.accent : Theme.border;
+                opacity: root.opendj-connected ? 1 : 0.6;
+                dj-label := Text {
+                    text: !root.opendj-connected ? "openDJ …" : root.opendj-phrase != "" ? root.opendj-phrase : "openDJ";
+                    color: root.opendj-connected ? Theme.accent : Theme.text;
+                    font-size: Theme.font-body;
+                    font-weight: 700;
+                }
+                TouchArea {
+                    clicked => { root.open-settings(); }
+                }
             }
             FlatButton {
                 text: "−";
@@ -1352,6 +1375,11 @@ export component MainWindow inherits Window {
     in property <bool> clock-on;
     in property <bool> clock-waiting;
     in property <string> clock-port;
+    in property <bool> opendj-on;
+    in property <bool> opendj-connected;
+    in property <string> opendj-phrase;
+    in property <string> opendj-track;
+    callback opendj-toggle();
     in property <bool> midi-on;
     in property <string> midi-status;
     in property <string> midi-preset;
@@ -1648,6 +1676,10 @@ export component MainWindow inherits Window {
                 clock-on: root.clock-on;
                 clock-waiting: root.clock-waiting;
                 clock-port: root.clock-port;
+                opendj-on: root.opendj-on;
+                opendj-connected: root.opendj-connected;
+                opendj-phrase: root.opendj-phrase;
+                opendj-track: root.opendj-track;
                 midi-on: root.midi-on;
                 layout: root.layout;
                 layout-picked(i) => { root.set-layout(i); keys.focus(); }
@@ -2043,6 +2075,11 @@ export component MainWindow inherits Window {
             link-available: root.link-available;
             link-on: root.link-on;
             link-peers: root.link-peers;
+            opendj-on: root.opendj-on;
+            opendj-connected: root.opendj-connected;
+            opendj-phrase: root.opendj-phrase;
+            opendj-track: root.opendj-track;
+            opendj-toggle => { root.opendj-toggle(); }
             bpm: root.bpm;
             output-open: root.output-open;
             mapping-status: root.mapping-status;

@@ -10,6 +10,7 @@ mod mapping;
 mod media_browser;
 mod midi;
 mod milk_pack;
+mod osc;
 mod player;
 mod prefs;
 mod shadertoy_import;
@@ -431,6 +432,7 @@ fn main() -> Result<()> {
     on!(on_audio_toggle, |a| a.audio_toggle());
     on!(on_audio_pick, |a, i: i32| a.audio_pick(i.max(0) as usize));
     on!(on_link_toggle, |a| a.link_toggle());
+    on!(on_opendj_toggle, |a| a.opendj_toggle());
     on!(on_clock_toggle, |a| a.clock_toggle());
     on!(on_syphon_toggle, |a| a.syphon_toggle());
     on!(on_midi_toggle, |a| a.midi_toggle());

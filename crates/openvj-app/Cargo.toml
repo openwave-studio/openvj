@@ -34,6 +34,10 @@ i-slint-core = "=1.18.1"
 pollster = "0.4"
 rfd = "0.17"
 midir = "0.11"
+# OSC input: openDJ's beat, phrase, track and cue events (src/osc.rs).
+rosc = "0.11"
+# Bonjour: finds openDJ's OSC service on the network (src/osc.rs).
+mdns-sd = "0.21"
 rusty_link = { version = "0.4.9", optional = true }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Unpacks the MilkDrop community pack (src/milk_pack.rs).
