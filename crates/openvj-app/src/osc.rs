@@ -1,7 +1,8 @@
 //! OSC input, and the link to openDJ that uses it.
 //!
-//! [`OscInput`] is one UDP socket with a reader thread; it also sends replies
-//! from the same port, so apps that answer to the sender (openDJ does) reach it.
+//! [`OscInput`] is one UDP socket on a given port with a reader thread; it also
+//! sends from that port, so apps that answer to the sender (openDJ does) reach it.
+//! Other OSC users (control input on Resolume's port 7000) open their own.
 //! [`OpenDj`] finds openDJ (on this computer at its default port 9000, and over
 //! Bonjour as `openDJ._osc._udp`), subscribes to its beat, phrase, track and cue
 //! events, and keeps subscribing every few seconds so a restarted openDJ is
@@ -19,9 +20,9 @@ use std::time::{Duration, Instant};
 use openvj_core::opendj::DjEvent;
 use rosc::{OscMessage, OscPacket, OscType};
 
-/// Resolume's OSC input port, tried first so the same port can later take control
-/// messages too; any free port is used when it's taken.
-const PREFERRED_PORT: u16 = 7000;
+/// openDJ answers to the port a subscription came from, so the link uses a port of
+/// its own picked by the system, and Resolume's 7000 stays free for control input.
+const LINK_PORT: u16 = 0;
 /// openDJ's OSC port when nothing else was set.
 const OPENDJ_PORT: u16 = 9000;
 /// The events openVJ follows.
@@ -156,7 +157,7 @@ pub struct OpenDj {
 
 impl OpenDj {
     pub fn start() -> io::Result<Self> {
-        let input = OscInput::open(PREFERRED_PORT)?;
+        let input = OscInput::open(LINK_PORT)?;
         let bonjour = mdns_sd::ServiceDaemon::new().ok().and_then(|d| {
             let rx = d.browse("_osc._udp.local.").ok()?;
             Some((d, rx))
