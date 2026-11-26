@@ -20,7 +20,7 @@ A separate preset library (presets saved one by one and browsed) is left for lat
 
 ## Reactivity default
 
-Seba was unsure whether the Player should add its own audio reactivity. Default: no hidden modulation. Each preset carries its own audio and tempo mappings (as Synesthesia scenes do), and the existing Reactivity control scales them all. This keeps a preset looking the same in the Player as where it was made. An "auto-react" option for presets without mappings can be added later if playlists feel static.
+The maintainer was unsure whether the Player should add its own audio reactivity. Default: no hidden modulation. Each preset carries its own audio and tempo mappings (as Synesthesia scenes do), and the existing Reactivity control scales them all. This keeps a preset looking the same in the Player as where it was made. An "auto-react" option for presets without mappings can be added later if playlists feel static.
 
 ## Timing
 

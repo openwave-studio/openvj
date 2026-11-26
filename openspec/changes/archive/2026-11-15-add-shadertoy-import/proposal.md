@@ -40,7 +40,7 @@ Out of scope: browsing or searching Shadertoy inside openVJ, bundling any Shader
 - PR #12 (hide the macOS title bar): touches main.slint only at the top bar. Trivial rebase.
 - add-parameter-animation (no PR yet): no overlap.
 
-## Decided (Seba, 2026-11-15)
+## Decided (the maintainer, 2026-11-15)
 
 - Imports go in the `Shadertoy` subfolder of the Effects folder.
 - The clip panel shows an "Open on Shadertoy" link for imported shaders.

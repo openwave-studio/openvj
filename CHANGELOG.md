@@ -4,6 +4,59 @@ All notable changes to openVJ are listed here. Versions follow [Semantic Version
 
 Each version's section is also its GitHub release notes: `scripts/release-notes.sh <version>` prints them, and the release workflow sets them, with the title "openVJ v<version>", when a release is published. Add a section here before tagging a version.
 
+## [0.2.0] - 2026-11-27
+
+Four layouts to perform with, a library to sort hundreds of visuals, MilkDrop and Shadertoy, MIDI learn, OSC, undo, and more of Resolume's blend modes, effects and mapping.
+
+### Layouts
+
+- A layout menu at the top left (Cmd+1 to 4) switches between **Mixer**, **Player**, **Synthesis** and **Discover**, as in openDJ. Switching never interrupts the output.
+- **Player**: an automix player that plays named playlists of presets (a generator with its values, mappings, Transform and effects), each for some bars, seconds or until the song changes, with openDJ's LENGTH and STYLE transitions, Previous, Next, Shuffle, thumbnails with hover previews and an Edit mode.
+- **Synthesis**: perform one visual laid out like a synth, with knobs for the source, each clip effect and the output, 8 macros per visual, META controls on the layer (colour, mirror, limit colours, alpha), lock, undo, default and random per section, and a media overlay with its own browser.
+- **Discover**: sort new sources before a show without touching the output. Randomize the unlocked parameters, set intensity, crates and tags, then keep, save as a preset, skip or mark unwanted, all from the keyboard.
+
+### Library and sources
+
+- One library for generators, effects, MilkDrop presets, Shadertoy imports and presets, with kept, not reviewed and unwanted, favorites, intensity, tags and crates.
+- The Sources and Effects tabs show it as a thumbnail grid (thumbnails render in the background and are cached), with search, filters and click to preview. **Tab** opens an expanded library over the grid.
+- Drag and drop: sources onto slots and layers, effects onto clips, layers and chains, clips between slots (Ctrl copies), and files straight from the Finder.
+- **MilkDrop presets** play as generator clips, and on first launch openVJ offers to download projectM's Cream of the Crop pack.
+- **Import from Shadertoy**: paste a link or code and it becomes an ISF generator or effect, with its buffers, sound and textures.
+- **Layer Router**: a source that shows another layer, a group or the composition, as in Resolume.
+- Saved presets (`.ovjpreset`) and playlists (`.ovjplaylist`).
+
+### Mixing and effects
+
+- 10 more blend modes, as in Resolume: Soft Light, Hard Light, Dodge, Burn, Exclusion, Luma Key, Mask, Mask Inverted, Stencil and Silhouette, imported from `.avc` by name.
+- 10 more effects: Luma Key, Chroma Key, Trails, Strobe, Threshold, Tile, Slide, Bloom, Vignette and Infinite Zoom.
+- Clip **Autopilot** (next, previous, random, first or last clip when a clip ends) and **trigger styles** Normal, Toggle and Piano, with MIDI velocity.
+- **Undo and redo** (Cmd+Z, Cmd+Shift+Z) for every edit to the composition, without restarting what is playing.
+
+### Control and sync
+
+- **MIDI learn**: Cmd+M or MAP, click a control, move a knob. Min, max and Fader, Toggle, Press or Hold behaviour.
+- **OSC control** with Resolume's addresses (input on port 7000, output on 7001), so TouchOSC layouts made for Resolume work. OSC addresses can be learned too.
+- **openDJ link**: follows openDJ's beat, phrases, tracks and key over OSC, shown in the toolbar.
+- **MIDI clock**: CLOCK next to LINK follows the tempo and Start/Stop of a groovebox, drum machine or DAW.
+- Synesthesia-style audio reactivity: hits, presence and audio clocks per band, a spectrum, Synesthesia's `syn_*` names in ISF files, and a Reactivity control.
+- More tempo shapes (Triangle, Ramp down, Random, Smooth random), with phase and restart on launch.
+
+### Output
+
+- One output window per screen, each sent to its own display.
+- Edit warp grids in the mapping window (linear or bezier), with outlines on the output while editing.
+- Soft edge between overlapping slices for blended projectors, and brightness, contrast and colour per screen and slice, imported from Resolume presets.
+
+### Mac app
+
+- The window has no title bar: the top bar moves it.
+
+### Known limits
+
+- Video clips still play without their audio track, and there are no image sequences yet.
+- Learned MIDI mappings can't be exported as a Resolume preset, and there's no controller LED feedback. Clip parameters, clip effects and group controls can't be mapped to MIDI or OSC yet.
+- Only DXV and HAP decode on the GPU.
+
 ## [0.1.0] - 2026-11-09
 
 The first release of openVJ: an open-source, layer-based VJ mixer for macOS, modelled on Resolume.

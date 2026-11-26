@@ -2,7 +2,7 @@
 - [x] 1.1 `BlendMode` variants, display names, menu groups (Mix, Light, Key); saved by name; tests for old files
 - [x] 1.2 `fs_blend`: Soft Light, Hard Light, Dodge, Burn, Exclusion; Luma Key; Mask, Mask Inverted, Stencil, Silhouette against the base (group or composition so far)
 - [x] 1.3 Grouped blend menu on layers and groups; MIDI blend-mode shortcuts cover the new modes
-- [x] 1.4 .avc import names (matched by menu name; Seba skipped the test file); importer tests
+- [x] 1.4 .avc import names (matched by menu name; the maintainer skipped the test file); importer tests
 
 ## 2. Keying effects
 - [x] 2.1 Luma Key and Chroma Key ISF files with Resolume names and parameter mapping

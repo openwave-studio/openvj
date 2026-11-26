@@ -2,7 +2,7 @@
 
 ## Why
 
-Placing something from the library took two clicks: click a tile (which also armed it), then click a slot. Seba found it awkward ("that is weird now with double clicking things", 2026-11-17). It was done that way because Slint had no drag and drop when the library browser was built (PR #20). Slint 1.18, which openVJ already uses, has `DragArea` and `DropArea`, so the library can work like Resolume's browser: drag a thing where it should go.
+Placing something from the library took two clicks: click a tile (which also armed it), then click a slot. The maintainer found it awkward ("that is weird now with double clicking things", 2026-11-17). It was done that way because Slint had no drag and drop when the library browser was built (PR #20). Slint 1.18, which openVJ already uses, has `DragArea` and `DropArea`, so the library can work like Resolume's browser: drag a thing where it should go.
 
 ## What Changes
 

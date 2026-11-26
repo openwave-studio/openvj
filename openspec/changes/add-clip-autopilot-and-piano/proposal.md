@@ -33,4 +33,4 @@ Out of scope: layer- or deck-wide autopilot, Fader Start, Beat Snap, Ignore Colu
 
 ## Open questions
 
-- The AutoPilot `Target` value is base64 of a 64-bit number. The samples have 1 and 7. Seba, could you save a small .avc with one clip per Autopilot option (Off, Next, Previous, Random, First, Last) and one per trigger style, so the codes can be decoded exactly?
+- The AutoPilot `Target` value is base64 of a 64-bit number. The samples have 1 and 7. Could the maintainer save a small .avc with one clip per Autopilot option (Off, Next, Previous, Random, First, Last) and one per trigger style, so the codes can be decoded exactly?

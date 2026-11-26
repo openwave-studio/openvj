@@ -47,7 +47,7 @@ The selector and Mixer are UI only, plus a small saved preference. The Player ad
 
 For the maintainer:
 
-Answered 2026-11-15: playlists hold presets (generator + settings + effects, clips maybe), several presets of the same generator allowed; timing and transitions use openDJ's LENGTH and STYLE; playlists save as their own files. Reactivity: Seba unsure, so the default in design.md applies (each preset keeps its own audio mappings; the existing Reactivity control scales them all).
+Answered 2026-11-15: playlists hold presets (generator + settings + effects, clips maybe), several presets of the same generator allowed; timing and transitions use openDJ's LENGTH and STYLE; playlists save as their own files. Reactivity: the maintainer was unsure, so the default in design.md applies (each preset keeps its own audio mappings; the existing Reactivity control scales them all).
 
 Synthesis answered 2026-11-15: like a synthesizer, common sections and maybe custom ones per generator; macros that control generator and FX parameters, animated by LFOs or played with mouse and MIDI; layout of the rest open to ideas (proposed: zoomed-in view of one layer, clip grid hidden). Q8 unanswered, default: Synthesis is where presets are saved and added to a playlist.
 
