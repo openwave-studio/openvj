@@ -1,6 +1,6 @@
 ## Why
 
-Seba shared Synesthesia's automix playlist (2026-11-17): a picker of named playlists with a scene count, play / previous / next / shuffle, a Playlist Editor, and a numbered list where each row shows a thumbnail, the scene name and the preset name. openVJ's Player layout (PR #14) already plays a playlist of presets by itself with bar-synced transitions, but it is one playlist at a time opened through a file dialog, rows are text only, there is no Previous, and you can't jump to a row. It is built for editing, not for glancing at during a show.
+The maintainer shared Synesthesia's automix playlist (2026-11-17): a picker of named playlists with a scene count, play / previous / next / shuffle, a Playlist Editor, and a numbered list where each row shows a thumbnail, the scene name and the preset name. openVJ's Player layout (PR #14) already plays a playlist of presets by itself with bar-synced transitions, but it is one playlist at a time opened through a file dialog, rows are text only, there is no Previous, and you can't jump to a row. It is built for editing, not for glancing at during a show.
 
 This change makes the Player feel like that: pick a playlist by name, see what is coming with thumbnails, jump around, and edit in a separate mode. It extends the Player and its `.ovjplaylist` format; it does not add a second playlist system. In openVJ's own style (openDJ look, cyan accent), not Synesthesia's.
 
@@ -31,13 +31,13 @@ Out of scope: videos and images in presets (already deferred), advance on drops 
 
 No open PRs right now. Parallel threads: library drag and drop (`library.slint`, `library.rs`) and Synthesis controls plus a media image browser (`synthesis.slint`, maybe `layouts.slint`/`main.slint`). Suggested order: whichever lands first; this change keeps its `library.slint` edit to one menu item and its `main.slint` edit to wiring, so rebasing is small. No other change in openspec/changes/ touches the Player.
 
-## Decisions (Seba, 2026-11-17)
+## Decisions (the maintainer, 2026-11-17)
 
 1. Edit mode is a toggle inside the Player; go full screen and let it run.
 2. Advance options: at the end of each song, or bars, or seconds.
 3. Still thumbnails that animate on hover.
 4. Switching playlists while playing transitions in.
 
-## Open questions for Seba
+## Open questions for the maintainer
 
 1. Song-change detection is a heuristic. Default chosen: silence gap OR tempo jump OR lasting change in sound, within 16 bars to 5 min. Does that fit how you play (continuous DJ mixes with long blends)?

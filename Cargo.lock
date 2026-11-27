@@ -4023,7 +4023,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "i-slint-core",
@@ -4053,7 +4053,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4062,7 +4062,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4070,7 +4070,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-media"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "image",
@@ -4096,7 +4096,7 @@ dependencies = [
 
 [[package]]
 name = "openvj-resolume"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "openvj-core",
  "roxmltree",

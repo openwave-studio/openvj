@@ -2,7 +2,7 @@
 
 An open-source, layer-based VJ mixer: a clip grid, stacked layers with blend modes, live shader generators and video loops, all mixed on the GPU. Think Resolume, but open. Written in Rust with [wgpu](https://wgpu.rs) and [Slint](https://slint.dev).
 
-> **Version 0.1.0**, the first release. It's young: expect rough edges, and file formats may still change before 1.0. See [what's new](CHANGELOG.md) and the [known limits](#known-limits).
+> **Version 0.2.0**. It's young: expect rough edges, and file formats may still change before 1.0. See [what's new](CHANGELOG.md) and the [known limits](#known-limits).
 
 ## Download
 
@@ -72,7 +72,6 @@ Linux and Windows have no download yet: [build from source](#building-from-sourc
 - Only DXV and HAP decode on the GPU. Everything else (H.264, HEVC, ProRes, NotchLC…) is decoded by FFmpeg on the CPU, so many layers of HD H.264 cost more than the same in DXV or HAP.
 - MIDI: learned mappings can't be exported as a Resolume preset yet (Resolume keys each shortcut by a controller hash we can't reproduce), and there's no controller LED feedback. Clip parameters, clip effects and group controls can't be mapped yet.
 - Resolume Wire patches (other than Acuarela), text generators and NDI inputs don't import.
-- Bezier and linear grid warps from Resolume presets show but can't be edited yet.
 
 ## Building from source
 
@@ -170,13 +169,13 @@ Early research (written when this was planned as an OBS plugin) is in [docs/rese
 
 ## Roadmap
 
-Rough order after 0.1:
+Rough order after 0.2:
 
-1. **0.2**: MIDI learn with controller LED feedback, clip audio, image sequences.
-2. **Parameter animation**: Resolume-style envelopes, ranges and dashboard dials (planned in [openspec/changes/add-parameter-animation](openspec/changes/add-parameter-animation)).
-3. **Polish**: clip/column context menus, undo for structural edits, editable grid warps.
-4. **Effects and generators**: more effects (Bloom, Trails, Fish Eye, Bendoscope, Cube Tiles, Colorize, ChromaKey) and hand-written generators (Waveform, Line Scape, Metaballs, text).
-5. **Performance**: launch quantisation (beat/bar), OSC (`rosc`), hardware decode for H.264/HEVC/ProRes.
+1. **0.3**: clip audio, image sequences, MIDI controller LED feedback, and the rest of openDJ sync (phrase-aware Player, phrase triggers).
+2. **Parameter animation**: Resolume-style envelopes, ranges and dashboard dials, and envelopes gated by MIDI notes and beats (planned in [openspec/changes/add-parameter-animation](openspec/changes/add-parameter-animation) and [add-gated-envelopes](openspec/changes/add-gated-envelopes)).
+3. **Polish**: clip/column context menus.
+4. **Effects and generators**: more effects (Fish Eye, Bendoscope, Cube Tiles, Colorize) and hand-written generators (Waveform, Line Scape, Metaballs, text).
+5. **Performance**: launch quantisation (beat/bar), hardware decode for H.264/HEVC/ProRes.
 6. **Outputs**: per-layer and per-screen Syphon outputs, Spout (Windows), multiple outputs.
 
 ## Licence and credits
